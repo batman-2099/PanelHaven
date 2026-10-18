@@ -1,7 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public static class DeploymentSecurity
 {

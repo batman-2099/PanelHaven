@@ -6,7 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record Book(string Id, string Title, string Series, string Number, string Publisher,
     string Summary, int PageCount, int CurrentPage, bool Completed, bool Started,

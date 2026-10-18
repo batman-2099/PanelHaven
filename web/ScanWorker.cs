@@ -1,4 +1,4 @@
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record ScanStatus(string State, int Scanned, int Added, int Updated, int Skipped,
     int ErrorCount, IReadOnlyList<string> Errors, long Revision = 0);

@@ -1,4 +1,4 @@
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;

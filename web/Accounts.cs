@@ -5,7 +5,7 @@ using System.Security.Claims;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record Account(string Id, string Username, string Role,
     [property: JsonIgnore] long SessionVersion = 0, [property: JsonIgnore] bool MustChangePassword = false);
@@ -125,7 +125,7 @@ public sealed class Accounts
         if ((long)command.ExecuteScalar()! != 0) return;
         var error = Validate(username, password, "admin");
         if (error is not null)
-            throw new InvalidOperationException("Set COMICRACK_ADMIN_USERNAME and COMICRACK_ADMIN_PASSWORD for first startup. " + error);
+            throw new InvalidOperationException("Set PANELHAVEN_ADMIN_USERNAME and PANELHAVEN_ADMIN_PASSWORD for first startup. " + error);
         Create(username!, password!, "admin");
     }
 

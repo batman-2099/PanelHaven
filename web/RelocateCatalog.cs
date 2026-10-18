@@ -3,7 +3,7 @@ using System.Text;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public static class RelocateCatalog
 {
@@ -19,7 +19,7 @@ public static class RelocateCatalog
         var apply = false;
         if (applyText is not null && !bool.TryParse(applyText, out apply))
             throw new ArgumentException("--apply-relocation must be true or false; omit it for a preview.");
-        LibraryStore.Relocate(Path.Combine(dataPath, "comicrack.sqlite"), roots, from, to, apply);
+        LibraryStore.Relocate(Path.Combine(dataPath, "panelhaven.sqlite"), roots, from, to, apply);
         return true;
     }
 }

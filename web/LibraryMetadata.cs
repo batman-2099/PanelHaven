@@ -6,7 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record MetadataEdit(Dictionary<string, string?>? Fields = null, Dictionary<string, string?>? Custom = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -18,7 +18,7 @@ public sealed record BookMetadata(Dictionary<string, string> Fields, Dictionary<
 public sealed record MetadataChange(string Field, bool Custom, string? Before, string? After);
 public sealed record MetadataPreviewBook(string Id, string Title, IReadOnlyList<MetadataChange> Changes);
 public sealed record MetadataPreview(string Revision, IReadOnlyList<MetadataPreviewBook> Books);
-public sealed class MetadataRevisionException() : Exception("Metadata changed or the preview is missing. Preview the changes again before applying.");
+public sealed class MetadataRevisionException() : Exception("Metadata changed or the preview is missing. Preview the changes again before applying.") { }
 
 public sealed partial class LibraryStore
 {
@@ -104,18 +104,17 @@ public sealed partial class LibraryStore
         using var reader = command.ExecuteReader();
         if (!reader.Read()) throw new KeyNotFoundException();
         return ReadMetadata(ParseXml(reader.GetString(0), "ComicInfo").Root!,
-            reader.IsDBNull(1) ? null : reader.GetString(1));
+            reader.IsDBNull(1) ? null : ParseXml(reader.GetString(1), "ComicBook").Root);
     }
 
-    private static BookMetadata ReadMetadata(XElement root, string? bookXml)
+    private static BookMetadata ReadMetadata(XElement root, XElement? book)
     {
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var field in MetadataFields)
             if (root.Element(root.Name.Namespace + field.Name) is { } element) fields[field.Name] = element.Value;
         var custom = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (bookXml is not null)
+        if (book is not null)
         {
-            var book = ParseXml(bookXml, "ComicBook").Root!;
             foreach (var token in (book.Element(book.Name.Namespace + "CustomValuesStore")?.Value ?? "").Split(','))
             {
                 var pair = token.Split('=');
@@ -145,9 +144,7 @@ public sealed partial class LibraryStore
         using var db = Open();
         // SQLite's immediate transaction holds the write reservation through revision checking and apply.
         using var transaction = db.BeginTransaction(deferred: false);
-        var updates = StageMetadata(db, transaction, edit, out var revision);
-        if (requirePreview && !string.Equals(edit.ExpectedRevision, revision, StringComparison.Ordinal))
-            throw new MetadataRevisionException();
+        var updates = StageMetadata(db, transaction, edit, out _, requirePreview);
         foreach (var update in updates)
         {
             if (update.Preview.Changes.Count == 0) continue;
@@ -173,7 +170,7 @@ public sealed partial class LibraryStore
     }
 
     private static List<MetadataUpdate> StageMetadata(SqliteConnection db, SqliteTransaction transaction,
-        BulkMetadataEdit edit, out string revision)
+        BulkMetadataEdit edit, out string revision, bool requirePreview = false)
     {
         var ids = MetadataSelection(edit.BookIds);
         var fields = edit.Fields ?? [];
@@ -225,8 +222,7 @@ public sealed partial class LibraryStore
             }
         }
         binding.Write(ids.Length);
-        // ponytail: at most 100 edits; stage every result before writing, no partial bulk updates.
-        var updates = new List<MetadataUpdate>(ids.Length);
+        var originals = new List<(string Id, string Path, string Title, string Xml, string? BookXml)>(ids.Length);
         foreach (var id in ids)
         {
             string path, xml, originalTitle;
@@ -246,9 +242,22 @@ public sealed partial class LibraryStore
             Bind(originalTitle);
             Bind(xml);
             Bind(bookXml);
+            originals.Add((id, path, originalTitle, xml, bookXml));
+        }
+        binding.Flush();
+        hashing.FlushFinalBlock();
+        revision = Convert.ToHexString(hash.Hash!);
+        if (requirePreview && !string.Equals(edit.ExpectedRevision, revision, StringComparison.Ordinal))
+            throw new MetadataRevisionException();
+        // ponytail: at most 100 edits; stage every result before writing, no partial bulk updates.
+        var updates = new List<MetadataUpdate>(ids.Length);
+        foreach (var (id, path, originalTitle, xml, originalBookXml) in originals)
+        {
+            var bookXml = originalBookXml;
             var info = ParseXml(xml, "ComicInfo");
             var root = info.Root!;
-            var before = ReadMetadata(root, bookXml);
+            var book = bookXml is null ? null : ParseXml(bookXml, "ComicBook");
+            var before = ReadMetadata(root, book?.Root);
             var changes = new List<MetadataChange>();
             foreach (var (name, value) in fields)
             {
@@ -274,7 +283,7 @@ public sealed partial class LibraryStore
             }
             if (changes.Any(change => change.Custom))
             {
-                var book = bookXml is null ? new XDocument(new XElement("ComicBook")) : ParseXml(bookXml, "ComicBook");
+                book ??= new XDocument(new XElement("ComicBook"));
                 var bookRoot = book.Root!;
                 var tokens = (bookRoot.Element(bookRoot.Name.Namespace + "CustomValuesStore")?.Value ?? "").Split(',').ToList();
                 foreach (var change in changes.Where(change => change.Custom))
@@ -294,9 +303,6 @@ public sealed partial class LibraryStore
             updates.Add(new(id, title, root, changes.Count == 0 ? xml : SerializeMetadata(info), bookXml,
                 new(id, originalTitle, changes)));
         }
-        binding.Flush();
-        hashing.FlushFinalBlock();
-        revision = Convert.ToHexString(hash.Hash!);
         return updates;
     }
 
@@ -313,6 +319,7 @@ public sealed partial class LibraryStore
         var elements = root.Elements(root.Name.Namespace + name).ToArray();
         if (elements.Length > 1 || elements.Any(e => e.HasElements))
             throw new ArgumentException($"Cannot edit non-scalar or duplicate {name} metadata without losing data.");
+        if (elements.FirstOrDefault()?.Value == value) return;
         if (value is null) elements.FirstOrDefault()?.Remove();
         else if (elements.Length == 1)
         {

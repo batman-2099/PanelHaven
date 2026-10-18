@@ -1,5 +1,5 @@
 using System.IO.Compression;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class ReaderDataChecks
@@ -16,7 +16,7 @@ public static class ReaderDataChecks
             catch (T) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-reader-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-reader-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -32,7 +32,7 @@ public static class WatchChecks
             writer.Write($"<ComicInfo><Title>{title}</Title></ComicInfo>");
         }
 
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-watch-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-watch-" + Guid.NewGuid().ToString("N"));
         var root = Path.Combine(directory, "library");
         var data = Path.Combine(root, "state");
         var recovery = Path.Combine(directory, "disconnected");

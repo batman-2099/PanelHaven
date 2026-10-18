@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Xml.Linq;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class GroupChecks
@@ -17,7 +17,7 @@ public static class GroupChecks
             catch (T) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-groups-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-groups-" + Guid.NewGuid().ToString("N"));
         var firstRoot = Path.Combine(directory, "first");
         var secondRoot = Path.Combine(directory, "second");
         Directory.CreateDirectory(firstRoot);

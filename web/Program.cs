@@ -1,4 +1,4 @@
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
@@ -16,7 +16,7 @@ var requireHttps = DeploymentSecurity.Configure(builder.Services, builder.Config
 var dataPath = Path.GetFullPath(builder.Configuration["DataPath"] ?? "data", builder.Environment.ContentRootPath);
 if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dataPath);
 else Directory.CreateDirectory(dataPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-var databasePath = Path.Combine(dataPath, "comicrack.sqlite");
+var databasePath = Path.Combine(dataPath, "panelhaven.sqlite");
 var roots = builder.Configuration.GetSection("Libraries").Get<string[]>() ?? [];
 roots = roots.Select(path => Path.GetFullPath(path, builder.Environment.ContentRootPath)).ToArray();
 using var stateLock = StateMaintenance.Acquire(dataPath);
@@ -34,16 +34,16 @@ catch (Exception exception) when (exception is ArgumentException or IOException 
 }
 var library = new LibraryStore(databasePath, roots);
 var accounts = new Accounts(databasePath);
-accounts.Bootstrap(Environment.GetEnvironmentVariable("COMICRACK_ADMIN_USERNAME"), Environment.GetEnvironmentVariable("COMICRACK_ADMIN_PASSWORD"));
+accounts.Bootstrap(Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_USERNAME"), Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_PASSWORD"));
 builder.Services.AddSingleton(accounts);
 builder.Services.AddSingleton(library);
 builder.Services.AddSingleton(provider => new ThumbnailStore(provider.GetRequiredService<LibraryStore>(), Path.Combine(dataPath, "thumbnails")));
 builder.Services.AddSingleton<ScanWorker>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ScanWorker>());
-builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "keys"))).SetApplicationName("ComicRack.Web");
+builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "keys"))).SetApplicationName("PanelHaven.Web");
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
 {
-    options.Cookie.Name = "ComicRack.Session";
+    options.Cookie.Name = "PanelHaven.Session";
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Strict;
     options.Cookie.SecurePolicy = requireHttps ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
@@ -113,7 +113,7 @@ app.Use(async (context, next) =>
         context.Response.Headers.CacheControl = "no-store";
         // Custom headers cannot be sent by cross-origin forms; CORS is deliberately not enabled.
         if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method)
-            && context.Request.Headers["X-ComicRack-Request"] != "1")
+            && context.Request.Headers["X-PanelHaven-Request"] != "1")
         {
             context.Response.StatusCode = 403;
             await context.Response.WriteAsJsonAsync(new { error = "Missing request protection header." });

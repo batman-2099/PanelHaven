@@ -2,11 +2,11 @@ using Microsoft.Data.Sqlite;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public static class StateMaintenance
 {
-    private const string Database = "comicrack.sqlite";
+    private const string Database = "panelhaven.sqlite";
     private const UnixFileMode DirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     private const UnixFileMode FileModePrivate = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
@@ -28,7 +28,7 @@ public static class StateMaintenance
         }
         catch (IOException exception)
         {
-            throw new IOException("Cannot acquire the state lease. Stop the ComicRack service before maintenance; another process may be using this DataPath.", exception);
+            throw new IOException("Cannot acquire the state lease. Stop the Panel Haven service before maintenance; another process may be using this DataPath.", exception);
         }
     }
 
@@ -92,7 +92,7 @@ public static class StateMaintenance
     {
         var parent = Path.GetDirectoryName(destination) ?? throw new ArgumentException("A filesystem root is not a destination.");
         if (!Directory.Exists(parent)) throw new DirectoryNotFoundException("The destination parent directory must already exist.");
-        var stage = Path.Combine(parent, ".comicrack-state-" + Guid.NewGuid().ToString("N"));
+        var stage = Path.Combine(parent, ".panelhaven-state-" + Guid.NewGuid().ToString("N"));
         CreatePrivateDirectory(stage);
         return stage;
     }
@@ -104,12 +104,12 @@ public static class StateMaintenance
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(source))
                 if (Path.GetFileName(entry) is not (Database or "keys"))
-                    throw new InvalidDataException("A backup must contain only comicrack.sqlite and keys.");
+                    throw new InvalidDataException("A backup must contain only panelhaven.sqlite and keys.");
         }
         var database = SafePath(Path.Combine(source, Database));
         var keys = SafePath(Path.Combine(source, "keys"));
         if (!File.Exists(database) || !Directory.Exists(keys))
-            throw new InvalidDataException("State must contain comicrack.sqlite and its complete keys directory.");
+            throw new InvalidDataException("State must contain panelhaven.sqlite and its complete keys directory.");
         // Reject sidecar links before SQLite can follow them, even for a read-only connection.
         foreach (var suffix in new[] { "-wal", "-shm", "-journal" }) SafePath(database + suffix);
         var targetKeys = Path.Combine(stage, "keys");

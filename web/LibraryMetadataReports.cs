@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record MetadataExportSelection([property: JsonRequired] string[] BookIds);
@@ -95,7 +95,7 @@ public sealed partial class LibraryStore
     }
 
     private static IEnumerable<string> NameValues(string field, string value) =>
-        field == "Publisher" ? [value] : value.Split(',');
+        field == "Publisher" ? [value] : value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
     private static string NormalizeName(string value) =>
         string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
@@ -143,7 +143,8 @@ public sealed partial class LibraryStore
             if (!reader.Read()) throw new KeyNotFoundException();
             var xml = reader.GetString(1);
             var bookXml = reader.IsDBNull(2) ? null : reader.GetString(2);
-            var metadata = ReadMetadata(ParseXml(xml, "ComicInfo").Root!, bookXml);
+            var metadata = ReadMetadata(ParseXml(xml, "ComicInfo").Root!,
+                bookXml is null ? null : ParseXml(bookXml, "ComicBook").Root);
             books.Add(new(id, reader.GetString(0), metadata.Fields, metadata.Custom, xml, bookXml));
         }
         return books;
@@ -152,11 +153,12 @@ public sealed partial class LibraryStore
     public static async Task WriteMetadataCsv(Stream output, IReadOnlyList<MetadataExportBook> books,
         CancellationToken cancellationToken = default)
     {
-        using var writer = new StreamWriter(output, new UTF8Encoding(false), leaveOpen: true);
+        await using var writer = new StreamWriter(output, new UTF8Encoding(false), leaveOpen: true);
         async Task Cell(string value, bool last = false)
         {
             // A leading apostrophe neutralizes formulas even behind whitespace/control prefixes in spreadsheet imports.
-            var first = value.FirstOrDefault(c => !char.IsWhiteSpace(c) && !char.IsControl(c));
+            var first = value.FirstOrDefault(c => !char.IsWhiteSpace(c) && !char.IsControl(c)
+                && char.GetUnicodeCategory(c) != UnicodeCategory.Format);
             if (first is '=' or '+' or '-' or '@') value = "'" + value;
             await writer.WriteAsync(("\"" + value.Replace("\"", "\"\"") + "\"" + (last ? "\r\n" : ",")).AsMemory(), cancellationToken);
         }

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../web/ComicRack.Web.csproj" />
+    <ProjectReference Include="../web/PanelHaven.Web.csproj" />
     <None Update="fixtures/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

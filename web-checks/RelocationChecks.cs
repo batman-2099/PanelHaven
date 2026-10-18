@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 
@@ -18,14 +18,14 @@ public static class RelocationChecks
             catch (ArgumentException) { return; }
             throw new Exception("Unsafe relocation arguments were accepted.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-relocation-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-relocation-" + Guid.NewGuid().ToString("N"));
         var from = Path.Combine(directory, "old");
         var to = Path.Combine(directory, "new");
         var sibling = from + "-sibling";
         Directory.CreateDirectory(from);
         Directory.CreateDirectory(to);
         Directory.CreateDirectory(sibling);
-        var database = Path.Combine(directory, "comicrack.sqlite");
+        var database = Path.Combine(directory, "panelhaven.sqlite");
         static string Key(string path) => OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
         try
         {

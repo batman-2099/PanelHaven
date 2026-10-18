@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ListRule([property: JsonRequired] string Field,

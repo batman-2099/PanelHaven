@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class MaintenanceChecks
@@ -17,7 +17,7 @@ public static class MaintenanceChecks
             catch (T) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-maintenance-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-maintenance-" + Guid.NewGuid().ToString("N"));
         var root = Path.Combine(directory, "library");
         Directory.CreateDirectory(Path.Combine(root, "Series"));
         try

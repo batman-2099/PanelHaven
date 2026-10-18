@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record ReaderBookmark(int Page, string Name);
 public sealed record BookmarkEdit([property: JsonRequired] string Name);

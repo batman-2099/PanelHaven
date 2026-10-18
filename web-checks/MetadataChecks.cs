@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Xml.Linq;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class MetadataChecks
@@ -17,7 +17,7 @@ public static class MetadataChecks
             catch (T) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-metadata-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-metadata-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

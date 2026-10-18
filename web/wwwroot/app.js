@@ -214,7 +214,7 @@ async function api(path, options = {}) {
     throw new DOMException("Password change required.", "AbortError");
   const epoch = authEpoch;
   const headers = new Headers(options.headers);
-  if (options.method && options.method !== "GET") headers.set("X-ComicRack-Request", "1");
+  if (options.method && options.method !== "GET") headers.set("X-PanelHaven-Request", "1");
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
   if (!response.ok) {
@@ -936,7 +936,7 @@ async function exportMetadata(format) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `comicrack-metadata.${format}`;
+    link.download = `panelhaven-metadata.${format}`;
     document.body.append(link);
     try { link.click(); }
     finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }

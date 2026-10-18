@@ -5,7 +5,7 @@ using System.Xml;
 using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 public sealed record ListBooksSelection([property: JsonRequired] string[] BookIds);
 public sealed record ListMove([property: JsonRequired] string BookId, [property: JsonRequired] string? BeforeId);
 
@@ -138,8 +138,8 @@ public static class LibraryEndpoints
             context.Response.Headers.XContentTypeOptions = "nosniff";
             if (format == "csv")
                 return Results.Stream(stream => LibraryStore.WriteMetadataCsv(stream, books, context.RequestAborted),
-                    "text/csv; charset=utf-8", fileDownloadName: "comicrack-metadata.csv");
-            context.Response.Headers.ContentDisposition = "attachment; filename=\"comicrack-metadata.json\"";
+                    "text/csv; charset=utf-8", fileDownloadName: "panelhaven-metadata.csv");
+            context.Response.Headers.ContentDisposition = "attachment; filename=\"panelhaven-metadata.json\"";
             return Results.Json(books);
         });
         api.MapPost("/books/metadata", (LibraryStore store, BulkMetadataEdit edit) =>

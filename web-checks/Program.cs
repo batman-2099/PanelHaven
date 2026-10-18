@@ -1,4 +1,4 @@
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -33,7 +33,7 @@ await DeploymentChecks.RunAsync();
 Console.WriteLine("PASS: HTTPS requirements, host validation and trusted proxy boundaries.");
 await WatchChecks.RunAsync();
 Console.WriteLine("PASS: watched-folder changes, debounce, startup recovery and scan lifecycle.");
-var directory = Path.Combine(Path.GetTempPath(), "comicrack-accounts-check-" + Guid.NewGuid().ToString("N"));
+var directory = Path.Combine(Path.GetTempPath(), "panelhaven-accounts-check-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(directory);
 try
 {

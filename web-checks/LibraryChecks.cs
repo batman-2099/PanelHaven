@@ -1,5 +1,5 @@
 using System.IO.Compression;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class LibraryChecks
@@ -18,7 +18,7 @@ public static class LibraryChecks
         }
         var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=");
         var gif = Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-check-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-check-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

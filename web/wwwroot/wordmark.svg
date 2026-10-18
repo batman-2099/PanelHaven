@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 352 56" fill="none">
+  <title>Panel Haven</title>
+  <desc>Custom slanted block lettering, with Panel in light blue and Haven in deep blue.</desc>
+  <g transform="translate(12 8) skewX(-8)" stroke-width="6" stroke-linejoin="round" stroke-linecap="square">
+    <g stroke="#79a8ed">
+      <path d="M0 40V0h16l6 6v10l-6 6H0"/>
+      <path d="M34 40V10L45 0l11 10v30M34 24h22"/>
+      <path d="M68 40V0l22 40V0"/>
+      <path d="M124 0h-22v40h22M102 20h17"/>
+      <path d="M136 0v40h22"/>
+    </g>
+    <g stroke="#4777bf">
+      <path d="M176 0v40M198 0v40M176 20h22"/>
+      <path d="M210 40V10l11-10 11 10v30M210 24h22"/>
+      <path d="m244 0 11 40 11-40"/>
+      <path d="M300 0h-22v40h22M278 20h17"/>
+      <path d="M312 40V0l22 40V0"/>
+    </g>
+  </g>
+</svg>

@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record BookGroup(string Key, string Label, int Count, string? CoverId,
     int Unread, int InProgress, int Completed, int CompletionPercent);

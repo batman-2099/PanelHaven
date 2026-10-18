@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Panel Haven</title>
+  <desc>A comic speech bubble divided into three panels.</desc>
+  <g fill="#79a8ed">
+    <path d="M14 8h36a8 8 0 0 1 8 8v28a8 8 0 0 1-8 8H30L14 62V52a8 8 0 0 1-8-8V16a8 8 0 0 1 8-8Zm0 6a2 2 0 0 0-2 2v28a2 2 0 0 0 2 2h6v5l8-5h22a2 2 0 0 0 2-2V16a2 2 0 0 0-2-2H14Z" fill-rule="evenodd"/>
+    <path d="M18 20h12v20H18zM36 20h10v8H36zM36 34h10v6H36z"/>
+  </g>
+</svg>

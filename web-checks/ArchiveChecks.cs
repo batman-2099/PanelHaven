@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Formats.Tar;
 using System.Text;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 using SkiaSharp;
 
@@ -36,7 +36,7 @@ public static class ArchiveChecks
             if (!condition) throw new Exception(message);
         }
         var fixtures = Path.Combine(AppContext.BaseDirectory, "fixtures");
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-archive-check-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-archive-check-" + Guid.NewGuid().ToString("N"));
         var root = Path.Combine(directory, "books");
         Directory.CreateDirectory(root);
         try

@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed record MaintenanceBook(string Id, string Title, string Location, string Availability, string? DuplicateKey);
 public sealed record MaintenancePage(List<MaintenanceBook> Items, int Total, int Page, int PageSize);

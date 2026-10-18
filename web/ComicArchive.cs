@@ -8,7 +8,7 @@ using SharpCompress.Archives.Tar;
 using SharpCompress.Compressors.LZMA;
 using SharpCompress.Readers;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed partial class LibraryStore
 {

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 using SkiaSharp;
 
@@ -48,7 +48,7 @@ public static class ThumbnailChecks
                 && Math.Abs(pixel.Blue - color.Blue) < 15, "Thumbnail did not preserve cover colors.");
         }
 
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-thumbnail-check-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-thumbnail-check-" + Guid.NewGuid().ToString("N"));
         var root = Path.Combine(directory, "books");
         var cache = Path.Combine(directory, "thumbnails");
         Directory.CreateDirectory(root);

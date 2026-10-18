@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class ListChecks
@@ -17,7 +17,7 @@ public static class ListChecks
             catch (T) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-lists-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-lists-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

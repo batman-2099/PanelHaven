@@ -1,7 +1,7 @@
 using System.Text;
 using SkiaSharp;
 
-namespace ComicRack.Web;
+namespace PanelHaven.Web;
 
 public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) : IDisposable
 {

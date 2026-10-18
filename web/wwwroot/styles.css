@@ -21,8 +21,8 @@ h1 { font-size: clamp(1.8rem, 4vw, 2.8rem); line-height: 1.15; letter-spacing: -
 h2 { font-size: 1.45rem; line-height: 1.3; }
 .site-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem clamp(1rem, 4vw, 3.5rem); border-bottom: 1px solid var(--line); background: #101722; }
 .brand { display: inline-flex; align-items: center; gap: .7rem; color: #eff5ff; text-decoration: none; font-size: 1.2rem; font-weight: 750; white-space: nowrap; }
-.brand-mark { display: grid; place-items: center; width: 36px; height: 39px; border-radius: 6px 10px 10px 6px; border-left: 4px solid #c8ddff; background: #365782; font-size: .8rem; }
-.web-label { color: var(--muted); font-size: .6rem; letter-spacing: .18em; padding-top: .2rem; }
+.brand-mark { display: block; width: 40px; height: 40px; flex-shrink: 0; }
+.brand-wordmark { display: block; width: 176px; height: 28px; }
 .account, .actions { display: flex; align-items: center; gap: .8rem; }
 #username { color: var(--muted); overflow-wrap: anywhere; }
 .account { flex-wrap: wrap; justify-content: flex-end; }
@@ -98,6 +98,7 @@ summary { padding: .5rem 0; font-weight: 600; }
 #metadata-preview h4, #metadata-preview h5 { margin: .5rem 0; font-size: 1rem; }
 #metadata-preview dl { grid-template-columns: minmax(60px, 1fr) minmax(0, 4fr); }
 #metadata-report-dialog label { display: grid; gap: .35rem; min-width: 0; }
+#metadata-report-dialog .dialog-heading button { flex-shrink: 0; }
 #metadata-report-kind { width: 100%; min-width: 0; }
 #list-dialog { width: min(800px, calc(100% - 2rem)); }
 #metadata-controls, #list-controls, #smart-list-controls, #folder-controls { min-width: 0; margin: 0; padding: .8rem; border: 1px solid var(--line); border-radius: 8px; }

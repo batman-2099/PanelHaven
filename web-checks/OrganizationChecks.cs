@@ -1,7 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Xml.Linq;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
 public static class OrganizationChecks
@@ -18,7 +18,7 @@ public static class OrganizationChecks
             catch (T exception) when (exception is not SqliteException sqlite || sqlite.SqliteErrorCode == 19) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-organization-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-organization-" + Guid.NewGuid().ToString("N"));
         var root = Path.Combine(directory, "library");
         Directory.CreateDirectory(root);
         try

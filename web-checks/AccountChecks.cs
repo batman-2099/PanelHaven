@@ -1,6 +1,6 @@
 using System.IO.Compression;
 using System.Security.Claims;
-using ComicRack.Web;
+using PanelHaven.Web;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
@@ -19,7 +19,7 @@ public static class AccountChecks
             catch (T exception) when (exception is not SqliteException sqlite || sqlite.SqliteErrorCode == 19) { return; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
-        var directory = Path.Combine(Path.GetTempPath(), "comicrack-account-lifecycle-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-account-lifecycle-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {

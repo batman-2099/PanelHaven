@@ -1,0 +1,6 @@
+**/bin/
+**/obj/
+web/data/
+web/data.state.lock
+.env
+/upstream/

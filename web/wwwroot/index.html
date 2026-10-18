@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>ComicRack · Your library</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#library" aria-label="ComicRack library"><span class="brand-mark" aria-hidden="true">CR</span> ComicRack <span class="web-label">WEB</span></a>
+    <div id="account" class="account" hidden><span id="username"></span><button id="change-password" class="quiet" type="button">Change password</button><button id="logout" class="quiet" type="button">Sign out</button></div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div id="error" class="notice error" role="alert" hidden></div>
+    <p id="startup" class="empty" role="status">Connecting to your library…</p>
+    <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
+      <div class="eyebrow">YOUR COLLECTION. ANYWHERE.</div>
+      <h1 id="login-title">A home for your stories.</h1>
+      <p class="muted">Sign in to browse your collection and pick up where you left off.</p>
+      <p id="login-message" role="status"></p>
+      <form id="login-form" class="panel form-stack">
+        <label>Username<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
+    </section>
+    <section id="password-view" class="login-view" aria-labelledby="password-title" hidden>
+      <h1 id="password-title">Change password</h1>
+      <p id="password-explanation">Choose a different password of 12–256 characters. All your sessions will end after this change.</p>
+      <form id="password-form" class="panel form-stack">
+        <label>Current password<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <label>New password<input name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <label>Confirm new password<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <p id="password-status" role="alert"></p>
+        <button type="submit" class="primary">Change password and sign out</button>
+        <button id="cancel-password" type="button" class="quiet">Cancel</button>
+      </form>
+    </section>
+    <section id="scan-panel" class="notice" aria-label="Library scan" hidden>
+      <p id="scan-result" role="status"></p>
+      <p id="scan-error" class="scan-error" role="alert" hidden></p>
+      <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button></div>
+      <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
+    </section>
+    <section id="library-view" aria-labelledby="library-title" hidden>
+      <div class="section-heading"><div><div class="eyebrow">THE NEXT STORY IS WAITING</div><h1 id="library-title">Your library</h1></div><div class="actions" id="admin-actions" hidden><button id="scan" type="button">Scan libraries</button><button id="maintenance" type="button">Library maintenance</button><button id="metadata-report" type="button">Validate metadata</button><button id="manage-users" type="button" class="quiet">Manage accounts</button></div></div>
+      <p id="watch-status" class="muted" role="status" hidden></p>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search your library</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button></form>
+      <div class="library-filters" role="group" aria-label="Sort and filter books">
+        <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number">Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
+        <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+        <label>Reading status<select id="book-status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In progress</option><option value="completed">Completed</option></select></label>
+        <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+        <label>Availability<select id="book-availability"><option value="all">All locations</option><option value="available">Available</option><option value="missing">Missing</option><option value="unavailable">Unavailable</option></select></label>
+        <label>Group by<select id="group-by"><option value="none">Flat books</option><option value="series">Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Publisher<select id="publisher"><option value="">All publishers</option></select></label>
+        <label>Items per page<select id="page-size"><option value="24">24</option><option value="48" selected>48</option><option value="96">96</option></select></label>
+        <label>Reading list<select id="reading-list"><option value="">All books</option></select></label>
+      </div>
+      <div id="group-navigation" class="actions list-actions" hidden><button id="back-to-groups" type="button">Back to groups</button><span id="group-label"></span></div>
+      <div class="actions list-actions" aria-label="Manage reading lists"><button id="create-list" type="button">New list</button><button id="edit-list" type="button" disabled>Edit list</button><button id="delete-list" type="button" disabled>Delete list</button><button id="manage-list-folders" type="button">Manage list folders</button></div>
+      <div class="selection-toolbar" role="group" aria-label="Selected books">
+        <span id="selection-count" role="status">0 of 100 selected</span><button id="select-page" type="button">Select this page</button><button id="clear-selection" type="button" disabled>Clear selection</button><button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
+        <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
+        <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" hidden disabled>Remove selected from this list</button>
+      </div>
+      <p id="management-status" role="status"></p>
+      <p id="library-status" class="muted" role="status"></p>
+      <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+      <div id="books" class="book-grid" aria-label="Books"></div>
+    </section>
+    <section id="reader-view" aria-labelledby="reader-title" hidden>
+      <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet">← Library</button><h1 id="reader-title"></h1><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button></div>
+      <div id="reader-error" class="notice error" role="alert" hidden></div>
+      <div class="reader-controls">
+        <div class="page-controls"><button id="previous-page" type="button" aria-label="Previous page">← Previous</button><form id="page-form"><label for="page-number">Page</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" aria-label="Next page">Next →</button></div>
+        <div class="display-controls">
+          <label for="reader-mode">Mode</label><select id="reader-mode"><option value="single">Single page</option><option value="continuous">Continuous</option><option value="spread">Two-page spread</option></select>
+          <label for="fit">Fit</label><select id="fit"><option value="page">Page</option><option value="width">Width</option></select>
+          <label for="zoom">Zoom %</label><input id="zoom" type="number" min="50" max="300" step="1" value="100" inputmode="numeric"><button id="reset-zoom" type="button">100%</button>
+          <label class="checkbox"><input id="rtl" type="checkbox">Right to left</label><label class="checkbox"><input id="cover-alone" type="checkbox" checked>Cover alone</label>
+          <label for="rotation">Rotation</label><select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
+          <label for="brightness">Brightness %</label><input id="brightness" type="number" min="50" max="200" step="1" value="100" inputmode="numeric">
+          <label for="contrast">Contrast %</label><input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"><button id="reset-visuals" type="button">Reset visuals</button>
+        </div>
+        <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
+      </div>
+      <details class="reader-options"><summary>Bookmarks and page types</summary>
+        <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
+          <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit">Add / update bookmark</button></form>
+          <p id="bookmark-status" role="status"></p><button id="retry-bookmark" type="button" hidden>Retry bookmark save</button>
+          <ul id="personal-bookmarks" aria-label="Personal bookmarks"></ul>
+        </section>
+        <section id="embedded-bookmarks-section" aria-labelledby="embedded-bookmarks-title" hidden><h2 id="embedded-bookmarks-title">Embedded bookmarks (read-only)</h2><ul id="embedded-bookmarks" aria-label="Embedded bookmarks"></ul></section>
+        <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original archive. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
+      </details>
+      <p id="current-page-type" class="reader-hint" role="status"></p>
+      <p id="skip-status" class="reader-hint" role="status" hidden></p>
+      <p id="page-status" role="status">Loading book…</p>
+      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages" aria-describedby="reader-hint"><div id="reader-pages" class="reader-pages"></div></div>
+      <p id="reader-hint" class="reader-hint muted">Scroll or pan natively; pinch to zoom on touch screens. In paged modes, Page Up/Down turn pages; left/right arrows or horizontal swipes also turn pages at 100%. Progress saves after a page is visible.</p>
+      <p id="spread-hint" class="reader-hint muted" hidden>Spreads use fixed pairs after the optional cover; skipped members do not regroup later pages. A pair containing a landscape page after rotation is shown as two separate pages.</p>
+    </section>
+  </main>
+  <dialog id="details-dialog" aria-labelledby="details-title">
+    <div class="dialog-heading"><h2 id="details-title">Book details</h2><button type="button" data-close="details-dialog" class="quiet" aria-label="Close book details">Close</button></div>
+    <div id="details-content"></div>
+    <div id="details-bookmarks"></div>
+    <form id="rating-form" class="actions list-actions" hidden>
+      <label>My private rating<select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+      <button id="save-rating" type="submit">Save rating</button>
+    </form>
+    <p id="rating-status" role="status"></p>
+    <button id="read-book" class="primary" type="button">Read book</button>
+    <button id="edit-metadata" type="button" hidden>Edit metadata</button>
+    <p id="details-status" role="status"></p>
+  </dialog>
+  <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">
+    <div class="dialog-heading"><h2 id="maintenance-title">Library maintenance</h2><button type="button" data-close="maintenance-dialog" class="quiet">Close</button></div>
+    <p class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
+    <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
+    <p id="maintenance-status" role="status"></p>
+    <p id="maintenance-error" class="scan-error" role="alert" hidden></p>
+    <p id="duplicate-note" class="muted" hidden>Exact duplicates share the SHA-256 of their file contents, not just a title or cover. Groups can continue across pages. Present duplicates cannot be removed here.</p>
+    <nav class="library-pagination" aria-label="Maintenance pages"><button id="previous-maintenance" type="button" disabled>Previous</button><span id="maintenance-page" role="status">Page 1 of 1</span><button id="next-maintenance" type="button" disabled>Next</button></nav>
+    <div id="maintenance-items"></div>
+  </dialog>
+  <dialog id="metadata-report-dialog" aria-labelledby="metadata-report-title">
+    <div class="dialog-heading"><h2 id="metadata-report-title">Metadata validation</h2><button type="button" data-close="metadata-report-dialog" class="quiet">Close</button></div>
+    <p class="muted">Read-only checks for missing Series or Number, invalid dates, and potential publisher or creator name variations. Name comparisons use case and whitespace only, not spelling guesses. Nothing is corrected automatically.</p>
+    <div class="actions list-actions"><label>Show <select id="metadata-report-kind"><option value="all">All issues</option><option value="missing">Missing fields</option><option value="dates">Invalid dates</option><option value="names">Potential name variations</option></select></label><button id="refresh-metadata-report" type="button">Refresh</button></div>
+    <p id="metadata-report-status" role="status"></p>
+    <nav class="library-pagination" aria-label="Metadata validation pages"><button id="previous-metadata-report" type="button" disabled>Previous</button><span id="metadata-report-page" role="status">Page 1 of 1</span><button id="next-metadata-report" type="button" disabled>Next</button></nav>
+    <div id="metadata-report-items"></div>
+  </dialog>
+  <dialog id="metadata-dialog" aria-labelledby="metadata-title">
+    <div class="dialog-heading"><h2 id="metadata-title">Edit metadata</h2><button type="button" data-close="metadata-dialog" class="quiet">Close</button></div>
+    <p class="muted">Changes are stored only in this library database, never written to source archives. Only checked fields and custom values are applied. Blank means an explicit empty value; Remove resets a field.</p>
+    <form id="metadata-form" class="form-stack">
+      <fieldset id="metadata-controls"><legend>Metadata changes</legend><div id="metadata-fields" class="metadata-grid"></div><h3>Custom values</h3><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></fieldset>
+      <button id="save-metadata" type="submit">Save checked changes</button>
+      <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
+      <button id="apply-metadata" type="submit" class="primary" hidden disabled>Apply reviewed changes</button>
+    </form>
+    <p id="metadata-status" role="status"></p>
+  </dialog>
+  <dialog id="list-dialog" aria-labelledby="list-title">
+    <div class="dialog-heading"><h2 id="list-title">New reading list</h2><button type="button" data-close="list-dialog" class="quiet">Close</button></div>
+    <form id="list-form" class="form-stack">
+      <fieldset id="list-controls"><legend>Private reading list</legend><label>Name<input id="list-name" required maxlength="200"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
+        <label>Folder<select id="list-folder"><option value="">Unfiled</option></select></label>
+        <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules</option><option value="any">Any rule</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><p class="muted">Smart lists update automatically as metadata, your reading progress, and your private ratings change. Use 1–20 rules. Year uses 0–9999; unknown years do not match. My rating uses 0–5 (0 means unrated).</p></fieldset>
+      </fieldset>
+      <button id="save-list" type="submit">Save list</button>
+    </form><p id="list-status" role="status"></p>
+  </dialog>
+  <dialog id="folder-dialog" aria-labelledby="folder-title">
+    <div class="dialog-heading"><h2 id="folder-title">Private list folders</h2><button type="button" data-close="folder-dialog" class="quiet">Close</button></div>
+    <p class="muted">Organize your reading lists in one level of private folders. Deleting a folder only unfiles its lists.</p>
+    <form id="folder-form" class="form-stack">
+      <fieldset id="folder-controls"><legend>Folder</legend>
+        <label>Choose folder<select id="folder-choice"><option value="">New folder</option></select></label>
+        <label>Name<input id="folder-name" required maxlength="200"></label>
+      </fieldset>
+      <div class="actions list-actions"><button id="save-folder" type="submit">Create folder</button><button id="delete-folder" type="button" disabled>Delete folder</button></div>
+    </form>
+    <p id="folder-status" role="status"></p>
+  </dialog>
+  <dialog id="user-dialog" aria-labelledby="user-title">
+    <div class="dialog-heading"><h2 id="user-title">Manage accounts</h2><button type="button" data-close="user-dialog" class="quiet">Close</button></div>
+    <p>Role changes and password resets end that account's sessions. The last administrator cannot be demoted or deleted.</p>
+    <p id="user-status" role="status"></p>
+    <fieldset id="user-controls"><legend>Library accounts</legend><div id="user-list"></div>
+      <h3>Create account</h3>
+      <form id="user-form" class="form-stack">
+        <label>Username<input name="username" autocomplete="off" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens."></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <label>Role<select name="role"><option value="reader">Reader</option><option value="admin">Administrator</option></select></label>
+        <p class="muted">Administrators can scan libraries, edit metadata, and manage accounts. New accounts can sign in normally.</p>
+        <button type="submit" class="primary">Create account</button>
+      </form>
+    </fieldset>
+  </dialog>
+</body>
+</html>

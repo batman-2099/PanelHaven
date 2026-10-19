@@ -88,6 +88,41 @@ public static class PageOrderChecks
             var saved = store.SavePageOrder(id, new(initial.Revision, [2, 0, 1]));
             Check(saved.Custom && saved.Pages.SequenceEqual([2, 0, 1]) && saved.Revision != initial.Revision,
                 "Shared order was not saved with a new revision.");
+            // A custom GET hashes source bytes without waiting for an unrelated SQLite writer.
+            using (var writer = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString()))
+            {
+                writer.Open();
+                using var reservation = writer.BeginTransaction(deferred: false);
+                var reading = Task.Run(() => store.GetPageOrder(id));
+                try
+                {
+                    Check(reading.Wait(TimeSpan.FromSeconds(5)) && reading.Result.Revision == saved.Revision,
+                        "Page-order GET waited for the SQLite writer.");
+                }
+                finally
+                {
+                    reservation.Rollback();
+                    reading.GetAwaiter().GetResult();
+                }
+            }
+            // Separate stores have separate scan locks: the database snapshot must guard competing saves.
+            var concurrentStore = new LibraryStore(database, [root]);
+            using (var barrier = new Barrier(2))
+            {
+                var expected = saved.Revision;
+                Task<BookPageOrder?> Save(LibraryStore target, int[] pages) => Task.Run(() =>
+                {
+                    barrier.SignalAndWait();
+                    try { return target.SavePageOrder(id, new(expected, pages)); }
+                    catch (MetadataRevisionException) { return null; }
+                });
+                var first = Save(store, [1, 2, 0]);
+                var second = Save(concurrentStore, [2, 1, 0]);
+                Task.WaitAll(first, second);
+                Check((first.Result is null) != (second.Result is null), "Competing page-order saves both committed.");
+                saved = first.Result ?? second.Result!;
+                Check(store.GetPageOrder(id).Revision == saved.Revision, "A stale page-order save overwrote the winner.");
+            }
             Reject<MetadataRevisionException>(() => store.SavePageOrder(id, new(initial.Revision, [1, 2, 0])));
             var reset = store.SavePageOrder(id, new(saved.Revision, [0, 1, 2]));
             Check(!reset.Custom && reset.Revision != initial.Revision && Sql("SELECT pages_json FROM page_orders") is DBNull,

@@ -3,6 +3,9 @@
 web/data/
 web/data.state.lock
 web/data.backup.lock
+web/data.settings.json
+web/data.settings.json.previous
+web/data.settings.json.*.tmp
 __pycache__/
 .env
 /upstream/

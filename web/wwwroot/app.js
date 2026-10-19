@@ -263,6 +263,7 @@ let scanRequest = null;
 let scanBusy = false;
 let libraryItems = [];
 const selectedBooks = new Set();
+let readingStatusBusy = false;
 let comicExport = null;
 let readingLists = [];
 let listFolders = [];
@@ -337,6 +338,10 @@ function clearError() {
 }
 
 function showView(name) {
+  if (name !== "library") {
+    searchGeneration++;
+    finishLibraryLoading();
+  }
   $("account-menu").open = false;
   $("account-menu").hidden = !session || session.mustChangePassword || name === "password";
   $("admin-actions").hidden = session?.role !== "admin" || !!session?.mustChangePassword;
@@ -349,10 +354,9 @@ function showView(name) {
 
 $("account-menu").addEventListener("click", (event) => {
   if (!event.target.closest("button")) return;
-  const restoreFocus = $("account-menu").contains(document.activeElement);
   $("account-menu").open = false;
-  if (restoreFocus) $("account-menu").querySelector("summary").focus();
-});
+  $("account-menu").querySelector("summary").focus();
+}, true);
 $("account-menu").addEventListener("keydown", (event) => {
   if (event.key !== "Escape" || !$("account-menu").open) return;
   event.preventDefault();
@@ -366,6 +370,7 @@ document.addEventListener("click", (event) => {
 
 function clearReader() {
   stopReaderView();
+  for (const entry of pages) releasePage(entry);
   pages = [];
   readingOrder = [];
   readingPositions = [];
@@ -395,6 +400,7 @@ function showLogin() {
   authEpoch++;
   session = null;
   accountBusy = false;
+  readingStatusBusy = false;
   resetComicExport();
   resetPageOrder();
   resetServerSettings();
@@ -497,7 +503,6 @@ function showLogin() {
   for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
   $("account").hidden = true;
   $("books").replaceChildren();
-  $("books").removeAttribute("aria-busy");
   history.replaceState(null, "", ["#settings", "#unsorted"].includes(location.hash) ? location.hash : "#library");
   showView("login");
   $("login-form").elements.username.focus();
@@ -600,6 +605,7 @@ function textElement(tag, text, className) {
 function setCatalogLocation(value) {
   if (value !== catalogLocation) {
     searchGeneration++;
+    finishLibraryLoading();
     publisherGeneration++;
     catalogLocation = value;
     libraryPage = 1;
@@ -629,6 +635,12 @@ function setCatalogLocation(value) {
   $("close-reader").textContent = `← ${label}`;
 }
 
+function finishLibraryLoading() {
+  $("books").inert = false;
+  $("books").removeAttribute("aria-busy");
+  $("refresh-library").disabled = false;
+}
+
 
 async function loadLibrary(focusResults = false) {
   if (!session) return;
@@ -641,6 +653,8 @@ async function loadLibrary(focusResults = false) {
   updateSelection();
   $("library-status").textContent = `Loading ${catalogLocation === "unsorted" ? "Unsorted intake" : catalogLocation === "archived" ? "Archived comicbooks" : "your library"}…`;
   $("books").setAttribute("aria-busy", "true");
+  if ($("books").contains(document.activeElement)) $("library-status").focus({ preventScroll: true });
+  $("books").inert = true;
   for (const id of ["previous-books", "next-books", "previous-books-bottom", "next-books-bottom", "refresh-library"]) $(id).disabled = true;
   const query = new URLSearchParams({
     location: catalogLocation, q: libraryQuery, page: libraryPage, pageSize: $("page-size").value,
@@ -772,11 +786,10 @@ async function loadLibrary(focusResults = false) {
     showError(error);
   } finally {
     if (generation === searchGeneration) {
-      $("books").removeAttribute("aria-busy");
-      $("refresh-library").disabled = false;
+      finishLibraryLoading();
       if (focusResults && !$("library-view").hidden) {
-        $("library-title").focus();
-        $("library-title").scrollIntoView({ block: "start" });
+        $("library-status").focus({ preventScroll: true });
+        $("library-status").scrollIntoView({ block: "start" });
       }
     }
   }
@@ -808,6 +821,8 @@ function resetScan() {
   } catch { /* Keep scan controls usable when browser storage is blocked. */ }
   scanBusy = false;
   $("scan-panel").hidden = true;
+  $("scan-panel").open = false;
+  $("scan-summary").textContent = "Library scan";
   $("scan-error").hidden = true;
   $("scan-errors").hidden = true;
   $("scan-errors").open = false;
@@ -837,6 +852,11 @@ function renderScan() {
   $("retry-scan-status").disabled = scanBusy;
   const dismissible = scanStatus && ["completed", "cancelled"].includes(scanStatus.state) && scanStatus.errorCount === 0 && $("scan-error").hidden;
   $("dismiss-scan").hidden = !dismissible;
+  const summary = !$("scan-error").hidden ? "Scan status needs attention" : {
+    running: "Scanning libraries…", cancelling: "Cancelling scan…", completed: "Scan completed",
+    cancelled: "Scan cancelled", failed: "Scan failed"
+  }[scanStatus?.state] || "Library scan";
+  $("scan-summary").textContent = `${summary}${scanStatus?.errorCount ? ` · ${scanStatus.errorCount} error(s)` : ""}`;
   if (!scanStatus) return;
   $("scan-panel").hidden = (scanStatus.state === "idle" && $("scan-error").hidden) || (dismissible && ($("library-view").hidden || dismissedScanResult === scanResultSignature()));
   const label = {
@@ -866,6 +886,9 @@ async function requestScan(action = "status") {
     if (epoch !== authEpoch) return;
     const previous = scanStatus;
     scanStatus = result;
+    if ((result.errorCount > 0 && result.errorCount !== previous?.errorCount)
+      || (result.state === "failed" && (previous?.state !== result.state || previous?.revision !== result.revision)))
+      $("scan-panel").open = true;
     $("scan-error").hidden = true;
     $("retry-scan-status").hidden = true;
     renderScan();
@@ -883,14 +906,21 @@ async function requestScan(action = "status") {
     try {
       const watch = await api("/api/watch-status", { signal: AbortSignal.any([scanRequest.signal, AbortSignal.timeout(15000)]) });
       if (epoch !== authEpoch) return;
-      $("watch-status").textContent = `Folder watching: ${watch.watchingRoots} active · ${watch.unavailableRoots} unavailable${watch.pending ? " · Scan pending" : ""}.`;
+      const message = `Folder watching: ${watch.watchingRoots} active · ${watch.unavailableRoots} unavailable${watch.pending ? " · Scan pending" : ""}.`;
+      if (watch.unavailableRoots > 0 && $("watch-status").textContent !== message) $("watch-status").closest("details").open = true;
+      $("watch-status").textContent = message;
     } catch (error) {
-      if (epoch === authEpoch) $("watch-status").textContent = `Could not check folder watching: ${error.message}. Retrying with scan status.`;
+      if (epoch === authEpoch) {
+        const message = `Could not check folder watching: ${error.message}. Retrying with scan status.`;
+        if ($("watch-status").textContent !== message) $("watch-status").closest("details").open = true;
+        $("watch-status").textContent = message;
+      }
     }
   } catch (error) {
     if (epoch !== authEpoch) return;
     retry = true;
     $("scan-panel").hidden = false;
+    if ($("scan-error").hidden) $("scan-panel").open = true;
     if (!scanStatus) $("scan-result").textContent = "Scan status is unknown.";
     $("scan-error").textContent = `${action === "status" ? "Could not check scan status" : action === "cancel" ? "Could not confirm cancellation" : "Could not confirm scan start"}: ${error.message} Checking status again shortly; you can also use Check scan status.`;
     $("scan-error").hidden = false;
@@ -1150,6 +1180,7 @@ function updateSelection() {
   $("select-page").textContent = pageSelectionFull() ? "Unselect all" : "Select page";
   $("bulk-metadata").disabled = !count;
   $("export-selected-comics").disabled = !session || session.mustChangePassword || !count || count > 100;
+  $("mark-selected-read").disabled = $("mark-selected-unread").disabled = readingStatusBusy || !session || session.mustChangePassword || !count || count > 100;
   if (comicExport?.selection && !comicExportCurrent(comicExport)) resetComicExport();
   $("organize-selected").disabled = session?.role !== "admin" || !count || count > 100;
   if ($("organization-dialog").open && (organizationBookIds.length !== count || organizationBookIds.some((id) => !selectedBooks.has(id)))) {
@@ -1174,9 +1205,13 @@ function updateSelection() {
   for (const button of $("books").querySelectorAll(".book-order button")) button.disabled = managementBusy;
 }
 
-function clearSelection() {
+function clearSelection(announce = false) {
   selectedBooks.clear();
   updateSelection();
+  if (announce) {
+    $("management-status").textContent = "All selections cleared.";
+    $("library-status").focus();
+  }
 }
 function folderPath(folder) {
   const names = [];
@@ -1193,7 +1228,15 @@ function folderOptions(excludedId = "") {
     .sort((a, b) => a.path.localeCompare(b.path))
     .map((folder) => new Option(folder.path, folder.id));
 }
-
+const mobileReadingLists = window.matchMedia("(max-width: 900px)");
+function updateReadingListsLayout() {
+  if (mobileReadingLists.matches && $("reading-lists-disclosure").contains(document.activeElement))
+    $("reading-lists-disclosure").querySelector("summary").focus();
+  $("reading-list").size = mobileReadingLists.matches ? 1 : 8;
+  $("reading-lists-disclosure").open = !mobileReadingLists.matches;
+}
+mobileReadingLists.addEventListener("change", updateReadingListsLayout);
+updateReadingListsLayout();
 
 async function loadLists() {
   const generation = ++listsGeneration;
@@ -1396,6 +1439,8 @@ function updateServerSettingsControls() {
   $("settings-backup-destination").required = $("settings-backup-enabled").checked;
   $("settings-allowed-hosts").required = $("settings-require-https").checked;
   $("settings-view").setAttribute("aria-busy", String(serverSettingsBusy));
+  $("server-settings-draft").classList.toggle("notice", dirty || serverSettingsStale);
+  $("server-settings-draft").classList.toggle("muted", !dirty && !serverSettingsStale);
   $("server-settings-draft").textContent = !serverSettings ? "" : serverSettingsStale
     ? "Reload saved settings before another action. Your unsaved draft has been retained; copy it before reloading."
     : dirty ? "Unsaved changes. Save or reload before using service or relocation actions." : "No unsaved configuration changes.";
@@ -1423,6 +1468,8 @@ function renderServerSettings(snapshot) {
   $("server-settings-restart").textContent = snapshot.restartRequired
     ? "Restart required: saved application settings or a queued relocation differ from the running server. Saving alone does not apply them."
     : "No application restart is currently required.";
+  $("server-settings-restart").classList.toggle("notice", snapshot.restartRequired);
+  $("server-settings-restart").classList.toggle("muted", !snapshot.restartRequired);
   const active = snapshot.activeSettings;
   const rows = [["Settings file", snapshot.settingsPath], ["Prior settings recovery file", snapshot.recoveryPath],
     ["Revision", snapshot.revision]];
@@ -1563,8 +1610,8 @@ function canCloseDialog(id) {
   if (id === "list-dialog") return !listBusy && !listPreviewBusy && (!listDirty || confirm("Discard unsaved reading list changes?"));
   if (id === "duplicate-dialog") return !duplicateBusy;
   if (id === "archive-dialog") return !archiveBusy && (!$("confirm-archive").checked || confirm("Discard this comicbook confirmation? Nothing is applied by closing."));
-  if (id === "file-operation-dialog") return !fileOperationBusy && (JSON.stringify(fileOperationDraft()) === fileOperationInitialDraft || confirm("Discard this move draft? Nothing is applied by closing."));
-  if (id === "organization-dialog") return !organizationBusy && (!(organizationDraft() !== organizationInitialDraft || $("confirm-organization").checked) || confirm("Discard this batch organization draft? Nothing is applied by closing."));
+  if (id === "file-operation-dialog") return !fileOperationBusy && (!fileOperationDirty() || confirm("Discard this move draft? Nothing is applied by closing."));
+  if (id === "organization-dialog") return !organizationBusy && (!organizationDirty() || confirm("Discard this batch organization draft? Nothing is applied by closing."));
   if ((rating && ratingBusy) || (folder && folderBusy)) return false;
   return !((rating && ratingDirty) || (folder && folderDirty)) || confirm(`Discard unsaved ${rating ? "rating" : "folder"} changes?`);
 }
@@ -1645,7 +1692,11 @@ function filterMetadataFields() {
     const checked = row.querySelector(".apply-change").checked;
     const label = row.querySelector(".custom-name")?.value || row.dataset.label;
     if (checked) selected.push(label);
-    row.hidden = (checkedOnly && !checked) || !label.toLocaleLowerCase().includes(query);
+    const hidden = (checkedOnly && !checked) || !label.toLocaleLowerCase().includes(query);
+    const active = row.contains(document.activeElement);
+    if (hidden && active && document.activeElement.matches(".custom-name") && checked) continue;
+    if (hidden && active) $(checkedOnly && !checked ? "metadata-changed-only" : "metadata-field-search").focus();
+    row.hidden = hidden;
   }
   for (const group of $("metadata-controls").querySelectorAll(".metadata-field-group, .custom-values-group")) {
     const visible = [...group.querySelectorAll(".metadata-change")].some((row) => !row.hidden);
@@ -2405,6 +2456,14 @@ function organizationDraft() {
     name: $("organization-name").value, rows: organizationRows });
 }
 
+function fileOperationDirty() {
+  return JSON.stringify(fileOperationDraft()) !== fileOperationInitialDraft;
+}
+
+function organizationDirty() {
+  return organizationDraft() !== organizationInitialDraft || $("confirm-organization").checked;
+}
+
 async function refreshFileOperationHistory() {
   if (session?.role !== "admin" || !fileOperationBookId || fileOperationBusy) return;
   const generation = fileOperationGeneration;
@@ -2756,7 +2815,7 @@ async function openFileOperation(book) {
   $("file-operation-name").value = name;
   $("file-operation-extension").textContent = `Keep the source extension${fileOperationExtension ? `: ${fileOperationExtension}` : ""}. This is a rename / move, not a comicbook conversion.`;
   $("file-operation-book").textContent = `${bookTitle(book)} · ${location || "Open history below; source availability is not required."}`;
-  $("file-operation-status").textContent = "Loading configured destination roots…";
+  $("file-operation-status").textContent = "Loading destinations…";
   fileOperationBusy = true;
   updateFileOperationControls();
   $("file-operation-dialog").showModal();
@@ -2768,7 +2827,7 @@ async function openFileOperation(book) {
     $("file-operation-root").replaceChildren(...roots.map((root) => new Option(root.label, root.index)));
     const sourceRoot = roots.find((root) => location.startsWith(`${root.label}/`));
     if (sourceRoot) $("file-operation-root").value = String(sourceRoot.index);
-    $("file-operation-status").textContent = roots.length ? "Choose the destination, then preview. Draft defaults come from the catalog display; the preview shows authoritative exact paths." : "No configured roots are available for a new move. Recorded history is still available below.";
+    $("file-operation-status").textContent = roots.length ? "Choose a destination, then preview the exact paths before moving." : "No destinations are configured. Move history is available below.";
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration)
       $("file-operation-status").textContent = `Could not load destination roots: ${error.message}. Close and reopen to try again. History and pending recovery remain available below.`;
@@ -2897,8 +2956,8 @@ function resetPageMetadata() {
 function selectPageMetadata() {
   const row = pageMetadataDraft[Number($("page-metadata-page").value)];
   $("page-metadata-type").replaceChildren(new Option("Default (Story)", ""),
-    ...pageMetadata.types.map((type) => new Option(type, type)));
-  if (row?.type && !pageMetadata.types.includes(row.type)) $("page-metadata-type").append(new Option(row.type, row.type));
+    ...pageMetadata.types.map((type) => new Option(pageTypeLabel(type), type)));
+  if (row?.type && !pageMetadata.types.includes(row.type)) $("page-metadata-type").append(new Option(pageTypeLabel(row.type), row.type));
   $("page-metadata-type").value = row?.type ?? "";
   $("page-metadata-bookmark").value = row?.bookmark ?? "";
 }
@@ -3289,11 +3348,34 @@ async function moveListBook(bookId, direction) {
   finally { if (epoch === authEpoch) { managementBusy = false; updateSelection(); } }
 }
 
+async function changeReadingStatus(completed) {
+  if (readingStatusBusy || !session || session.mustChangePassword || !selectedBooks.size || selectedBooks.size > 100) return;
+  const bookIds = [...selectedBooks];
+  const epoch = authEpoch;
+  const generation = searchGeneration;
+  readingStatusBusy = true;
+  updateSelection();
+  $("management-status").textContent = `Marking ${bookIds.length} selected comicbooks ${completed ? "read" : "unread"}…`;
+  try {
+    await api("/api/reading-status", { method: "POST", body: JSON.stringify({ bookIds, completed }) });
+    if (epoch !== authEpoch) return;
+    if (generation === searchGeneration)
+      $("management-status").textContent = `${bookIds.length} selected comicbooks marked ${completed ? "100% read" : "unread (0%)"} for your account.`;
+    await loadLibrary();
+  } catch (error) {
+    if (epoch === authEpoch && generation === searchGeneration && error.name !== "AbortError")
+      $("management-status").textContent = `Could not confirm reading status: ${error.message} Refresh to check before trying again.`;
+  } finally {
+    if (epoch === authEpoch) { readingStatusBusy = false; updateSelection(); }
+  }
+}
+
+$("mark-selected-read").addEventListener("click", () => changeReadingStatus(true));
+$("mark-selected-unread").addEventListener("click", () => changeReadingStatus(false));
+
 $("select-page").addEventListener("click", () => {
   if (pageSelectionFull()) {
-    clearSelection();
-    $("management-status").textContent = "All selections cleared.";
-    $("library-title").focus();
+    clearSelection(true);
     return;
   }
   for (const book of libraryItems) {
@@ -3303,7 +3385,7 @@ $("select-page").addEventListener("click", () => {
   $("management-status").textContent = selectedBooks.size === 100 ? "Selection limit reached (100 books)." : "This page selected. Selections remain when changing pages.";
   updateSelection();
 });
-$("clear-selection").addEventListener("click", clearSelection);
+$("clear-selection").addEventListener("click", () => clearSelection(true));
 $("add-to-list").addEventListener("change", updateSelection);
 $("reading-list").addEventListener("change", () => {
   if (activeList()?.kind === "manual") $("book-sort").value = "list";
@@ -3333,6 +3415,9 @@ $("metadata-form").addEventListener("invalid", (event) => {
 }, true);
 $("metadata-controls").addEventListener("input", metadataChanged);
 $("metadata-controls").addEventListener("change", metadataChanged);
+$("custom-values").addEventListener("focusout", (event) => {
+  if (event.target.matches(".custom-name")) queueMicrotask(filterMetadataFields);
+});
 $("metadata-dialog").addEventListener("close", () => {
   metadataGeneration++;
   metadataDirty = false;
@@ -3647,9 +3732,12 @@ function isPageWide(page) {
   const [width, height] = rotatedDimensions(entry.width, entry.height, readerPreferences.rotation);
   return width > height;
 }
+function pageTypeLabel(type) {
+  return (type || "Unclassified").replace(/([a-z])([A-Z])/g, (_, before, after) => `${before} ${after.toLowerCase()}`);
+}
 
 function pageLabel(page) {
-  return `Position ${readingPositions[page] + 1} · Physical page ${page + 1} · ${pages[page]?.type || "Unclassified"}`;
+  return `Position ${readingPositions[page] + 1} · Physical page ${page + 1} · ${pageTypeLabel(pages[page]?.type)}`;
 }
 
 function renderBookmarks() {
@@ -3779,7 +3867,7 @@ function createReaderPage(page, info) {
   const node = textElement("div", "", "reader-page");
   node.dataset.page = String(page);
   node.setAttribute("role", "group");
-  node.setAttribute("aria-label", `Physical page ${page + 1} · ${info?.type || "Unclassified"}`);
+  node.setAttribute("aria-label", `Physical page ${page + 1} · ${pageTypeLabel(info?.type)}`);
   const message = textElement("div", "", "page-message");
   node.append(message);
   const entry = { page, type: info?.type || "", typeMask: info?.typeMask || 0, bookmark: info?.bookmark || "", node, message, width: 0, height: 0, state: "idle", url: null, image: null, controller: null };
@@ -3830,7 +3918,6 @@ function stopReaderView() {
   viewAnchor = null;
   swipe = null;
   touchPointers.clear();
-  for (const entry of pages) releasePage(entry);
 }
 
 function captureViewAnchor() {
@@ -3905,6 +3992,12 @@ function renderReader(anchor = { page: currentPage, offset: 0, x: readerPreferen
   currentPage = isPageIncluded(anchor.page) ? anchor.page
     : nextPage(anchor.page, pages.length, 1, isPageIncluded, readingOrder) ?? nextPage(anchor.page, pages.length, -1, isPageIncluded, readingOrder) ?? anchor.page;
   if (currentPage !== anchor.page) anchor = { ...anchor, page: currentPage, offset: 0 };
+  if (activePages.length) nearPages = new Set(readerPreferences.mode === "spread" ? spreadCandidates() : [currentPage]);
+  for (const entry of pages) {
+    if (readerPreferences.mode === "continuous" ? !isPageIncluded(entry.page) : !nearPages.has(entry.page)) releasePage(entry);
+    entry.node.setAttribute("aria-label", `Physical page ${entry.page + 1} · ${pageTypeLabel(entry.type)}`);
+    if (entry.image) entry.image.alt = `${bookTitle(currentBook)}, ${pageLabel(entry.page)} of ${currentBook.pageCount}`;
+  }
   viewAnchor = activePages.length ? anchor : null;
   displayedPages = [];
   applyReaderControls();
@@ -3937,10 +4030,7 @@ function renderReader(anchor = { page: currentPage, offset: 0, x: readerPreferen
       scheduleVisibleProgress();
     }, { root: $("page-stage"), rootMargin: "100% 100%" });
     for (const page of activePages) pageObserver.observe(pages[page].node);
-    nearPages.add(currentPage);
   } else {
-    displayedPages = [];
-    nearPages = new Set(readerPreferences.mode === "spread" ? spreadCandidates() : [currentPage]);
     refreshPagedView();
   }
   pumpPageLoads();
@@ -3970,11 +4060,11 @@ async function loadReaderImage(entry) {
     if (entry.controller !== controller || book !== currentBook) return;
     url = URL.createObjectURL(blob);
     const image = new Image();
-    image.alt = `${bookTitle(book)}, ${pageLabel(entry.page)} of ${book.pageCount}`;
     image.draggable = false;
     image.src = url;
     await image.decode();
     if (epoch !== authEpoch || entry.controller !== controller || book !== currentBook) return;
+    image.alt = `${bookTitle(book)}, ${pageLabel(entry.page)} of ${book.pageCount}`;
     const anchor = viewAnchor || captureViewAnchor();
     entry.width = image.naturalWidth;
     entry.height = image.naturalHeight;
@@ -4200,6 +4290,7 @@ function scheduleRoute() {
   const generation = ++routeGeneration;
   const epoch = authEpoch;
   searchGeneration++;
+  finishLibraryLoading();
   publisherGeneration++;
   route(location.hash, generation).catch((error) => {
     if (epoch === authEpoch && generation === routeGeneration) showError(error);
@@ -4245,16 +4336,18 @@ $("logout").addEventListener("click", async () => {
   finally { $("logout").disabled = false; }
 });
 
-function changeLibrary() {
+function changeLibrary(resetGroup = true, focusResults = false) {
   clearSelection();
-  groupKey = null;
-  groupLabel = "";
+  if (resetGroup || libraryQuery !== $("search").value.trim()) {
+    groupKey = null;
+    groupLabel = "";
+  }
   $("sort-direction").disabled = $("book-sort").value === "list";
   if ($("book-sort").value === "list") $("sort-direction").value = "asc";
   libraryPage = 1;
   libraryQuery = $("search").value.trim();
   clearError();
-  loadLibrary();
+  loadLibrary(focusResults);
 }
 
 $("search-form").addEventListener("submit", (event) => { event.preventDefault(); changeLibrary(); });
@@ -4266,12 +4359,9 @@ $("library-location").addEventListener("change", () => {
   loadPublishers();
   changeLibrary();
 });
-for (const id of ["book-sort", "sort-direction", "book-status", "book-rating", "publisher", "page-size", "book-availability", "group-by"]) $(id).addEventListener("change", changeLibrary);
-$("back-to-groups").addEventListener("click", () => {
-  changeLibrary();
-  $("library-title").focus();
-  $("library-title").scrollIntoView({ block: "start" });
-});
+for (const id of ["book-sort", "sort-direction", "book-status", "book-rating", "publisher", "page-size", "book-availability"]) $(id).addEventListener("change", () => changeLibrary(false));
+$("group-by").addEventListener("change", () => changeLibrary());
+$("back-to-groups").addEventListener("click", () => changeLibrary(true, true));
 for (const suffix of ["", "-bottom"]) {
   $("previous-books" + suffix).addEventListener("click", () => { if (libraryPage > 1) { libraryPage--; loadLibrary(true); } });
   $("next-books" + suffix).addEventListener("click", () => { if (libraryPage < libraryPages) { libraryPage++; loadLibrary(true); } });
@@ -4283,7 +4373,7 @@ $("retry-scan-status").addEventListener("click", () => requestScan());
 $("dismiss-scan").addEventListener("click", () => {
   rememberScanDismissal(scanResultSignature());
   renderScan();
-  $("library-title").focus();
+  $("library-status").focus();
 });
 $("maintenance").addEventListener("click", () => {
   $("maintenance-error").hidden = true;
@@ -4663,7 +4753,11 @@ window.addEventListener("hashchange", resetComicVine);
 window.addEventListener("pagehide", resetComicVine);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
-  if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy || $("confirm-archive").checked) { event.preventDefault(); event.returnValue = ""; }
+  if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy || $("confirm-archive").checked
+    || fileOperationBusy || organizationBusy || accountBusy
+    || ($("file-operation-dialog").open && fileOperationDirty())
+    || ($("organization-dialog").open && organizationDirty())
+    || ($("user-dialog").open && accountDirty())) { event.preventDefault(); event.returnValue = ""; }
 });
 
 (async () => {

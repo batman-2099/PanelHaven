@@ -201,11 +201,7 @@ public sealed partial class LibraryStore
         Diff(beforeValues.Fields, afterValues.Fields, false);
         Diff(beforeValues.Custom, afterValues.Custom, true);
         var operation = backupId is null ? "write" : "restore";
-        using var revisionHash = SHA256.Create();
-        using var binding = new CryptoStream(Stream.Null, revisionHash, CryptoStreamMode.Write);
-        JsonSerializer.Serialize(binding, new { catalog, hash, version.Size, version.Ticks, security, operation, restore, entries });
-        binding.FlushFinalBlock();
-        var revision = Convert.ToHexString(revisionHash.Hash!);
+        var revision = FileRevision(new { catalog, hash, version.Size, version.Ticks, security, operation, restore, entries });
         using var latest = OpenArchive(root, catalog.Path);
         if (ReadSourceVersion(root, catalog.Path) != version || ArchiveHash(latest, cancellationToken) != hash)
             throw new ArchiveWriteConflictException();

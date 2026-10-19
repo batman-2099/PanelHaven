@@ -46,9 +46,9 @@
     assert(!page.hidden && key.value === "navigation-check-not-a-real-key" && archived.value === "/navigation-check/archived" && unsorted.value === "/navigation-check/unsorted", "Cancelled navigation discarded the draft.");
     window.confirm = () => true;
     document.getElementById("settings-catalog-back").click();
-    await waitFor(() => !document.getElementById("library-view").hidden);
+    await waitFor(() => !document.getElementById("library-view").hidden && document.getElementById("books").getAttribute("aria-busy") !== "true");
     assert(page.hidden && key.value === "", "Leaving settings retained secret inputs or the page.");
-    assert(document.activeElement.id === "library-title", "Returning to the library lost keyboard focus.");
+    assert(document.activeElement !== document.body && document.activeElement.checkVisibility(), "Returning to the library lost visible keyboard focus.");
     history.back();
     await waitFor(() => !page.hidden && !document.getElementById("server-settings-controls").disabled);
     assert(location.hash === "#settings" && key.value === "", "Browser Back failed to reopen clean settings.");

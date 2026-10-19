@@ -32,7 +32,7 @@ public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) 
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var jpeg = Render(library.GetPage(id, 0).Bytes, cancellationToken);
+            var jpeg = Render(library.GetPage(id, 0, cancellationToken).Bytes, cancellationToken);
             EnsureRevision(id, revision);
             Directory.CreateDirectory(cacheDirectory);
             var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

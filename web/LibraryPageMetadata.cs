@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
@@ -38,14 +37,8 @@ public sealed partial class LibraryStore
         return new(id, reader.GetInt32(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
     }
 
-    private static string PageRevision(PageCatalog catalog, PageMetadataRow[]? draft)
-    {
-        using var hash = SHA256.Create();
-        using var binding = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write);
-        JsonSerializer.Serialize(binding, new { catalog, draft });
-        binding.FlushFinalBlock();
-        return Convert.ToHexString(hash.Hash!);
-    }
+    private static string PageRevision(PageCatalog catalog, PageMetadataRow[]? draft) =>
+        FileRevision(new { catalog, draft });
 
     // Only elements in the document's established namespace are ComicInfo structures; extensions survive.
     private static Dictionary<int, XElement> EditablePages(XElement root, int count)

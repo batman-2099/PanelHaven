@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json;
 using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
@@ -107,6 +108,71 @@ public static class ReaderDataChecks
             CreateArchive(20);
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(store.GetBookmarks("alice", id).Single().Page == 0, "Deleting a stale bookmark failed.");
+
+            var secondPath = Path.Combine(directory, "second.cbz");
+            File.Copy(path, secondPath);
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Reading-status fixture import failed.");
+            var ids = store.ListBooks("alice", null).Items.Select(book => book.Id).ToArray();
+            var originalBytes = File.ReadAllBytes(path);
+            var originalMetadata = store.GetBook("alice", id).Metadata!["comicInfoXml"];
+            var list = store.CreateList("alice", new("Reading status", "manual", "all", []));
+            store.AddListBooks("alice", list.Id, ids);
+            store.SaveRating("alice", id, new(4));
+            store.SaveProgress("alice", id, new(3, false));
+            store.SaveProgress("bob", id, new(7, false));
+            var bobBooks = store.ListBooks("bob", null).Items;
+            Check(store.ListGroups("alice", null, "series").Items.Single()
+                is { Count: 2, Unread: 1, InProgress: 1, Completed: 0, CompletionPercent: 0 },
+                "Reading-status fixture did not start with mixed progress.");
+            foreach (var completed in new[] { true, true, false, false })
+            {
+                store.SetReadingStatus("alice", new(ids, completed));
+                var books = store.ListBooks("alice", null).Items;
+                Check(books.All(book => book.Completed == completed && book.Started == completed
+                    && book.CurrentPage == (completed ? book.PageCount - 1 : 0)),
+                    "Read must reach the final physical page; Unread must clear started and completed state.");
+                var group = store.ListGroups("alice", null, "series").Items.Single();
+                Check(group.Count == 2 && group.Unread == (completed ? 0 : 2) && group.InProgress == 0
+                    && group.Completed == (completed ? 2 : 0) && group.CompletionPercent == (completed ? 100 : 0),
+                    "Bulk reading status did not update group counts and completion percentage.");
+                foreach (var status in new[] { "unread", "in-progress", "completed" })
+                {
+                    var expected = status == (completed ? "completed" : "unread") ? 2 : 0;
+                    Check(store.ListBooks("alice", null, status: status).Total == expected
+                        && store.ListGroups("alice", null, "series", status: status).Items.Sum(item => item.Count) == expected,
+                        "Bulk reading status disagrees with book or group filters.");
+                }
+                Check(store.ListBooks("bob", null).Items.SequenceEqual(bobBooks),
+                    "Bulk reading status changed another user's progress.");
+            }
+            foreach (var completed in new[] { true, false })
+            {
+                store.SetReadingStatus("alice", new(ids, !completed));
+                var before = store.ListBooks("alice", null).Items;
+                Reject<KeyNotFoundException>(() => store.SetReadingStatus("alice", new([ids[0], "missing"], completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new([ids[0], null!], completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new([ids[0], " "], completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new([ids[0], new string('x', 129)], completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new([], completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new(null!, completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", new(Enumerable.Repeat(id, 101).ToArray(), completed)));
+                Reject<ArgumentException>(() => store.SetReadingStatus("alice", null!));
+                Check(store.ListBooks("alice", null).Items.SequenceEqual(before),
+                    "Invalid bulk reading-status selection partially changed progress.");
+            }
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            foreach (var json in new[] { "{}", "{\"bookIds\":[]}", "{\"completed\":true}",
+                "{\"bookIds\":[],\"completed\":null}", "{\"bookIds\":[],\"completed\":\"true\"}",
+                "{\"bookIds\":[],\"completed\":1}", "{\"bookIds\":\"book\",\"completed\":true}",
+                "{\"bookIds\":[1],\"completed\":true}", "{\"bookIds\":[],\"completed\":true,\"userId\":\"bob\"}" })
+                Reject<JsonException>(() => JsonSerializer.Deserialize<ReadingStatusEdit>(json, jsonOptions));
+            Check(store.GetBook("alice", id).PersonalRating == 4
+                && Equals(store.GetBook("alice", id).Metadata!["comicInfoXml"], originalMetadata)
+                && store.GetBookmarks("alice", id).SequenceEqual(new[] { new ReaderBookmark(0, "Updated") })
+                && store.ListBooks("alice", null, listId: list.Id).Total == 2
+                && File.ReadAllBytes(path).SequenceEqual(originalBytes)
+                && File.ReadAllBytes(secondPath).SequenceEqual(originalBytes),
+                "Bulk reading status changed ratings, metadata, bookmarks, list membership, or source archives.");
         }
         finally
         {

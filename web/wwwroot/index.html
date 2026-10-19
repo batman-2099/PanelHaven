@@ -14,10 +14,10 @@
   <header class="site-header">
     <a id="catalog-home" class="brand" href="#library" aria-label="Panel Haven library"><img class="brand-mark" src="/icon.svg" width="40" height="40" alt=""><img class="brand-wordmark" src="/wordmark.svg" width="176" height="28" alt=""></a>
     <div id="account" class="account" hidden>
-      <span id="username"></span>
       <details id="account-menu">
         <summary aria-label="Account and administration menu" title="Menu"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></summary>
         <div class="account-menu-panel">
+          <span id="username"></span>
           <button id="change-password" class="quiet" type="button">Change password</button>
           <section id="admin-actions" aria-labelledby="admin-menu-title" hidden>
             <h2 id="admin-menu-title">Administration</h2>
@@ -57,26 +57,33 @@
         <button id="cancel-password" type="button" class="quiet">Cancel</button>
       </form>
     </section>
-    <section id="scan-panel" class="notice" aria-label="Library scan" hidden>
+    <details id="scan-panel" class="notice" aria-label="Library scan" hidden>
+      <summary id="scan-summary" aria-live="polite" aria-atomic="true">Library scan</summary>
       <p id="scan-result" role="status"></p>
       <p id="scan-error" class="scan-error" role="alert" hidden></p>
       <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button><button id="dismiss-scan" type="button" hidden>Dismiss scan result</button></div>
       <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
-    </section>
+    </details>
     <section id="library-view" aria-labelledby="library-title" hidden>
-      <div class="section-heading"><h1 id="library-title" tabindex="-1">Your library</h1><nav class="catalog-navigation" aria-label="Comicbook areas"><a id="library-navigation" href="#library" aria-current="page">Library</a><a id="unsorted-navigation" href="#unsorted">Unsorted</a></nav></div>
-      <p id="catalog-help" class="muted">Browse your organized comicbooks. Archived comicbooks are hidden unless you choose Archived below.</p>
-      <p id="watch-status" class="muted" role="status" hidden></p>
+      <div class="section-heading"><h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1><nav class="catalog-navigation" aria-label="Comicbook areas"><a id="library-navigation" href="#library" aria-current="page">Library</a><a id="unsorted-navigation" href="#unsorted">Unsorted</a></nav></div>
+      <details class="compact-disclosure"><summary>Library information</summary>
+        <p id="catalog-help" class="muted">Browse your organized comicbooks. Archived comicbooks are hidden unless you choose Archived below.</p>
+        <p id="watch-status" class="muted" role="status" hidden></p>
+      </details>
       <div class="library-layout">
         <aside class="reading-list-sidebar" aria-labelledby="reading-lists-title">
-          <h2 id="reading-lists-title">Reading lists</h2>
-          <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
-          <div class="reading-list-actions">
-            <button id="create-list" type="button" class="primary">New list</button>
-            <button id="edit-list" type="button" disabled>Edit list</button>
-            <button id="delete-list" type="button" class="danger" disabled>Delete list</button>
-            <button id="manage-list-folders" type="button">Manage list folders</button>
-          </div>
+          <details id="reading-lists-disclosure" class="compact-disclosure" open>
+            <summary id="reading-lists-title">Reading lists</summary>
+            <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
+            <details class="reading-list-management compact-disclosure"><summary>Manage lists</summary>
+              <div class="reading-list-actions">
+                <button id="create-list" type="button" class="primary">New list</button>
+                <button id="edit-list" type="button" disabled>Edit list</button>
+                <button id="delete-list" type="button" class="danger" disabled>Delete list</button>
+                <button id="manage-list-folders" type="button">Manage list folders</button>
+              </div>
+            </details>
+          </details>
         </aside>
         <div class="library-content">
       <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
@@ -94,15 +101,25 @@
         <label>Items per page<select id="page-size"><option value="24">24</option><option value="48" selected>48</option><option value="96">96</option></select></label>
       </div></details>
       <div class="selection-toolbar" role="group" aria-label="Selected books" hidden>
-        <button id="select-page" type="button">Select page</button>
-        <span id="selection-count" role="status">0 of 100 selected</span><button id="clear-selection" type="button" disabled>Clear selection</button><button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
-        <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
-        <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
-        <button id="export-selected-comics" type="button" disabled>Export selected comics</button>
-        <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
+        <div class="selection-primary">
+          <button id="select-page" type="button">Select page</button>
+          <span id="selection-count" role="status">0 of 100 selected</span><button id="clear-selection" type="button" disabled>Clear selection</button>
+        </div>
+        <div class="selection-mark" role="group" aria-labelledby="mark-selected-label">
+          <span id="mark-selected-label">Mark selected</span>
+          <button id="mark-selected-read" type="button" title="Mark selected comicbooks 100% read for your account" aria-label="Read: mark selected comicbooks 100% read for your account" disabled>Read</button>
+          <button id="mark-selected-unread" type="button" title="Mark selected comicbooks unread (0%) for your account" aria-label="Unread: reset selected comicbooks to unread (0%) for your account" disabled>Unread</button>
+        </div>
+        <details class="selection-tools compact-disclosure"><summary>More selected actions</summary><div class="actions">
+          <button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
+          <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
+          <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
+          <button id="export-selected-comics" type="button" disabled>Export selected comics</button>
+          <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
+        </div></details>
       </div>
       <p id="management-status" role="status"></p>
-      <p id="library-status" class="muted" role="status"></p>
+      <p id="library-status" class="muted" role="status" tabindex="-1"></p>
       <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button">Home</button><span id="group-label"></span></div>
       <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
       <div id="books" class="book-grid" aria-label="Books"></div>
@@ -139,13 +156,15 @@
         <section id="embedded-bookmarks-section" aria-labelledby="embedded-bookmarks-title" hidden><h2 id="embedded-bookmarks-title">Embedded bookmarks (read-only)</h2><ul id="embedded-bookmarks" aria-label="Embedded bookmarks"></ul></section>
         <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original comicbook. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
       </details>
+      <details class="reader-options"><summary>Help</summary>
       <p id="reader-hint" class="reader-hint muted">Scroll or pan natively; pinch to zoom on touch screens. In paged modes, Page Up/Down turn pages; left/right arrows or horizontal swipes also turn pages at 100%. Progress saves after a page is visible.</p>
       <p id="spread-hint" class="reader-hint muted" hidden>Spreads use fixed pairs after the optional cover; skipped members do not regroup later pages. A pair containing a landscape page after rotation is shown as two separate pages.</p>
+      </details>
     </section>
   <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
     <div class="section-heading"><h1 id="server-settings-title" tabindex="-1">Server settings</h1><a id="settings-catalog-back" href="#library">Back to library</a></div>
     <nav class="settings-jumps actions" aria-label="Settings sections">
-      <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-comic-vine">Comic Vine</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Save changes</button>
+      <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-comic-vine">Comic Vine</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Go to save</button>
     </nav>
     <p id="server-settings-help">These are saved server settings, not browser preferences. Application, library, network, TLS, and secret changes take effect only after restart. Backup scheduling is applied when saved; check its actual status below.</p>
     <p id="server-settings-restart" class="notice" role="status"></p>
@@ -317,8 +336,8 @@
   </dialog>
   <dialog id="page-order-dialog" aria-labelledby="page-order-title">
     <div class="dialog-heading"><h2 id="page-order-title">Organize page order</h2><button type="button" data-close="page-order-dialog" class="quiet">Close</button></div>
-    <p>Shared reading order for all readers. Comicbooks, physical page numbers, private bookmarks, and progress are unchanged. Drag a thumbnail onto another position, or use Move earlier / Move later with keyboard or touch. Changes remain a draft until saved.</p>
-    <p class="muted">Changed comicbook bytes invalidate custom order, including metadata write-back or restore. Rescan externally changed sources first; unchanged scans and moves keep saved order.</p>
+    <p>Change the reading order for everyone without changing the comicbook file, original page numbers, private bookmarks, or reading progress. Drag a thumbnail to another position, or use Move earlier / Move later with a keyboard or touch. Choose Save page order to apply your changes.</p>
+    <p class="muted">If the comicbook file changes, its custom reading order can no longer be used. This includes writing metadata to the file or restoring a backup. Scan externally changed files before organizing pages. Scanning an unchanged file or moving it keeps its saved order.</p>
     <div class="actions">
       <button id="save-page-order" type="button" class="primary" disabled>Save page order</button>
       <button id="reset-page-order" type="button" disabled>Reset to comicbook order (draft)</button>
@@ -376,7 +395,7 @@
     </section>
   </dialog>
   <dialog id="file-operation-dialog" aria-labelledby="file-operation-title">
-    <div class="dialog-heading"><h2 id="file-operation-title">Rename / move comicbook</h2><button type="button" data-close="file-operation-dialog" class="quiet">Close</button></div>
+    <div class="dialog-heading"><h2 id="file-operation-title" tabindex="-1" autofocus>Rename / move comicbook</h2><button type="button" data-close="file-operation-dialog" class="quiet">Close</button></div>
     <p id="file-operation-book"></p>
     <form id="file-operation-draft" class="form-stack">
       <fieldset id="file-operation-controls" disabled><legend>Destination</legend>
@@ -442,7 +461,7 @@
   <dialog id="list-dialog" aria-labelledby="list-title">
     <div class="dialog-heading"><h2 id="list-title">New reading list</h2><button type="button" data-close="list-dialog" class="quiet">Close</button></div>
     <form id="list-form" class="form-stack">
-      <fieldset id="list-controls"><legend>Private reading list</legend><label>Name<input id="list-name" required maxlength="200"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
+      <fieldset id="list-controls"><legend>Private reading list</legend><label>Name (required)<input id="list-name" required maxlength="200"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
         <label>Folder<select id="list-folder"><option value="">Unfiled</option></select></label>
         <p class="muted">Smart-rule previews show the regular library only. When browsing a saved list, the selected Library, Archived, or Unsorted area still applies.</p>
         <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules (AND)</option><option value="any">Any rule (OR)</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><button id="add-list-group" type="button">Add group</button><p class="muted">Smart lists update automatically as metadata, your reading progress, and private ratings change. Use 1–20 total rules in at most 20 groups and 4 levels (including this root). Groups cannot be empty. Use Is empty for unknown dates or other optional numbers. My rating uses 0–5 (0 means unrated). Text comparisons treat % and _ literally. Preview current rules before saving; changing the name or folder does not require another preview.</p><button id="preview-list" type="button">Preview matches</button><p id="list-preview-status" role="status"></p><nav class="library-pagination" aria-label="Smart list preview pages"><button id="previous-list-preview" type="button" disabled>Previous matches</button><span id="list-preview-page" role="status">Page 1 of 1</span><button id="next-list-preview" type="button" disabled>Next matches</button></nav><div id="list-preview-items"></div></fieldset>

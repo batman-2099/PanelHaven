@@ -3,6 +3,12 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+if (args is ["--archive-write-crash-child", var mode, var fixture])
+{
+    ArchiveWriteChecks.RunCrashChild(mode, fixture);
+    return;
+}
+
 LibraryChecks.Run();
 Console.WriteLine("PASS: archive import, natural ordering, metadata preservation, isolated progress and unsafe archive rejection.");
 ThumbnailChecks.Run();

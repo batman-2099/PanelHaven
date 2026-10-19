@@ -66,11 +66,17 @@ public sealed partial class LibraryStore
                 UPDATE archive_backup_owners SET book_id=$id WHERE book_id=$merged;
                 INSERT OR IGNORE INTO book_path_provenance(book_id,source,destination)
                     SELECT $id,source,destination FROM book_path_provenance WHERE book_id=$merged;
-                INSERT INTO page_metadata_edits(book_id,page,fields)
-                    SELECT $id,page,fields FROM page_metadata_edits WHERE book_id=$merged
-                    ON CONFLICT(book_id,page) DO UPDATE SET fields=fields|excluded.fields;
                 """;
             command.ExecuteNonQuery();
+            if (RelocationTableExists(db, "page_metadata_edits", transaction))
+            {
+                command.CommandText = """
+                    INSERT INTO page_metadata_edits(book_id,page,fields)
+                        SELECT $id,page,fields FROM page_metadata_edits WHERE book_id=$merged
+                        ON CONFLICT(book_id,page) DO UPDATE SET fields=fields|excluded.fields;
+                    """;
+                command.ExecuteNonQuery();
+            }
             if (RelocationTableExists(db, "file_operations", transaction))
             {
                 command.CommandText = "UPDATE file_operations SET book_id=$id WHERE book_id=$merged";

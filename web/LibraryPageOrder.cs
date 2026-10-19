@@ -39,37 +39,34 @@ public sealed partial class LibraryStore
         return ReadOrSavePageOrder(id, edit, cancellationToken);
     }
 
+    private readonly record struct PageOrderCatalog(string Path, int Count, long Size, long Ticks, string? Hash,
+        string Availability, string? SavedHash, string Generation, string? Json);
+
+    private static PageOrderCatalog ReadPageOrderCatalog(SqliteConnection db, SqliteTransaction? transaction, string id)
+    {
+        using var command = Command(db, """
+            SELECT b.path,b.page_count,b.file_size,b.modified_ticks,b.content_hash,b.availability,
+                o.source_hash,COALESCE(o.revision,''),o.pages_json
+            FROM books b LEFT JOIN page_orders o ON o.book_id=b.id WHERE b.id=$id
+            """, ("$id", id));
+        command.Transaction = transaction;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) throw new KeyNotFoundException();
+        return new(reader.GetString(0), reader.GetInt32(1), reader.GetInt64(2), reader.GetInt64(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8));
+    }
+
     private BookPageOrder ReadOrSavePageOrder(string id, PageOrderEdit? edit, CancellationToken cancellationToken)
     {
-        // Reads use the database transaction below; only edits must wait for scans and moves.
+        // Only edits must wait for scans and moves; source validation never reserves the SQLite writer.
         if (edit is not null) scanLock.Wait(cancellationToken);
         try
         {
             using var db = Open();
-            using var transaction = db.BeginTransaction(deferred: false);
-            string path, generation, availability;
-            string? hash, savedHash, json;
-            int count;
-            long size, ticks;
-            using (var command = Command(db, """
-                SELECT b.path,b.page_count,b.file_size,b.modified_ticks,b.content_hash,b.availability,
-                    o.source_hash,COALESCE(o.revision,''),o.pages_json
-                FROM books b LEFT JOIN page_orders o ON o.book_id=b.id WHERE b.id=$id
-                """, ("$id", id)))
-            {
-                command.Transaction = transaction;
-                using var reader = command.ExecuteReader();
-                if (!reader.Read()) throw new KeyNotFoundException();
-                path = reader.GetString(0);
-                count = reader.GetInt32(1);
-                size = reader.GetInt64(2);
-                ticks = reader.GetInt64(3);
-                hash = reader.IsDBNull(4) ? null : reader.GetString(4);
-                availability = reader.GetString(5);
-                savedHash = reader.IsDBNull(6) ? null : reader.GetString(6);
-                generation = reader.GetString(7);
-                json = reader.IsDBNull(8) ? null : reader.GetString(8);
-            }
+            var catalog = ReadPageOrderCatalog(db, null, id);
+            var (path, count, size, ticks, hash, availability, savedHash, generation, json) = catalog;
             var revision = FileRevision(new { id, hash, count, generation });
             if (edit is not null)
             {
@@ -87,6 +84,8 @@ public sealed partial class LibraryStore
                 using var source = OpenArchive(root, path);
                 changed = ArchiveHash(source, cancellationToken) != hash || ReadSourceVersion(root, path) != version;
             }
+            using var transaction = db.BeginTransaction(deferred: edit is null && !changed);
+            if (ReadPageOrderCatalog(db, transaction, id) != catalog) throw new MetadataRevisionException();
             if (changed)
             {
                 // Even a same-size/same-timestamp replacement must be imported by the next ordinary scan.

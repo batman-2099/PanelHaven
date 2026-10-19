@@ -111,10 +111,10 @@ public sealed partial class LibraryStore
             return (info, book);
         }
 
-        public byte[] ReadPage(Entry target)
+        public byte[] ReadPage(Entry target, CancellationToken cancellationToken)
         {
             byte[]? result = null;
-            Visit(target, (entry, stream) => result = Consume(stream, entry.Size, entry == target ? MaxPageBytes : null, default));
+            Visit(target, (entry, stream) => result = Consume(stream, entry.Size, entry == target ? MaxPageBytes : null, cancellationToken));
             return result ?? throw new InvalidDataException();
         }
 
@@ -158,6 +158,7 @@ public sealed partial class LibraryStore
 
         public static byte[]? Consume(Stream stream, long size, int? retainLimit, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (size < 0 || size > MaxExpandedBytes || retainLimit.HasValue && size > retainLimit.Value) throw new InvalidDataException();
             var bytes = retainLimit.HasValue ? new byte[(int)size] : null;
             var buffer = bytes is null ? ArrayPool<byte>.Shared.Rent(81920) : null;
@@ -167,11 +168,12 @@ public sealed partial class LibraryStore
                 while (read < size)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var destination = bytes is null ? buffer!.AsSpan(0, (int)Math.Min(buffer!.Length, size - read)) : bytes.AsSpan((int)read);
+                    var destination = bytes is null ? buffer!.AsSpan(0, (int)Math.Min(buffer!.Length, size - read)) : bytes.AsSpan((int)read, (int)Math.Min(81920, size - read));
                     var count = stream.Read(destination);
                     if (count == 0) throw new InvalidDataException("Truncated comicbook entry.");
                     read += count;
                 }
+                cancellationToken.ThrowIfCancellationRequested();
                 if (stream.ReadByte() != -1) throw new InvalidDataException("Comicbook entry exceeds its declared size.");
                 return bytes;
             }

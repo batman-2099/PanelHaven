@@ -198,6 +198,16 @@ public static class RelocationChecks
                 Check(Run(true).Contains("applied=1 merged=1") && Id(to, "unhashed") == old["unhashed"], "Symlink-root relocation lost the historical ID.");
                 Check(Run(true).Contains("mapped=0"), "Symlink-root relocation was not idempotent.");
             }
+            // Offline maintenance must not require optional tables introduced after this catalog.
+            Sql("DROP TABLE page_metadata_edits");
+            Sql("DELETE FROM ratings WHERE book_id=$id", ("$id", fresh["rating"]));
+            var oldSchema = Snapshot();
+            Check(Run(false).Contains("mapped=1 ") && Snapshot() == oldSchema,
+                "Older-schema relocation preview changed the catalog or refused the merge.");
+            Check(Run(true).Contains("applied=1 merged=1") && Id(to, "rating") == old["rating"]
+                && store.GetBook("alice", old["rating"]).PersonalRating == 5
+                && Sql("SELECT 1 FROM sqlite_master WHERE type='table' AND name='page_metadata_edits'") is null,
+                "Older-schema apply failed, lost private state, or initialized the optional table.");
             Check(!RelocateCatalog.Run(new ConfigurationBuilder().Build(), directory, [to]), "Normal startup was treated as relocation.");
         }
         finally

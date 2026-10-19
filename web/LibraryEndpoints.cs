@@ -89,7 +89,7 @@ public static class LibraryEndpoints
             Results.Ok(store.GetBook(UserId(user), id)));
         api.MapGet("/books/{id}/pages/{page:int}", (LibraryStore store, HttpContext context, string id, int page) =>
         {
-            var image = store.GetPage(id, page);
+            var image = store.GetPage(id, page, context.RequestAborted);
             context.Response.Headers.CacheControl = "private, no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
             return Results.Bytes(image.Bytes, image.ContentType);
@@ -165,6 +165,18 @@ public static class LibraryEndpoints
             store.SaveProgress(UserId(user), id, progress);
             return Results.NoContent();
         });
+        api.MapPost("/reading-status", async (LibraryStore store, ClaimsPrincipal user, HttpRequest request) =>
+        {
+            if (!request.HasJsonContentType()) return Error(400, "Reading status must be a JSON object.");
+            try
+            {
+                var edit = await request.ReadFromJsonAsync<ReadingStatusEdit>(request.HttpContext.RequestAborted);
+                store.SetReadingStatus(UserId(user), edit!);
+                return Results.NoContent();
+            }
+            catch (JsonException) { return Error(400, "Reading status requires only bookIds and boolean completed."); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        }).RequireAuthorization(policy => policy.RequireRole("reader", "admin"));
         api.MapPut("/books/{id}/rating", async (LibraryStore store, ClaimsPrincipal user, string id, HttpRequest request) =>
         {
             if (!request.HasJsonContentType()) return Error(400, "Rating must be a JSON object with an integer rating.");

@@ -15,6 +15,8 @@ public sealed record Book(string Id, string Title, string Series, string Number,
 public sealed record BookPage(List<Book> Items, int Total, int Page, int PageSize);
 public sealed record ReadingProgress([property: JsonRequired] int Page, [property: JsonRequired] bool Completed);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ReadingStatusEdit([property: JsonRequired] string[] BookIds, [property: JsonRequired] bool Completed);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RatingEdit([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int Rating);
 public sealed record ScanResult(int Scanned, int Added, int Updated, int Skipped, int ErrorCount, List<string> Errors);
 public sealed record PageData(byte[] Bytes, string ContentType);
@@ -155,6 +157,26 @@ public sealed partial class LibraryStore
             GetBook(user, id);
             throw new ArgumentException("Page is outside the book.");
         }
+    }
+
+    public void SetReadingStatus(string user, ReadingStatusEdit edit)
+    {
+        if (edit is null) throw new ArgumentException("Reading status is required.");
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        ValidateListBooks(db, transaction, edit.BookIds);
+        using var command = Command(db, edit.Completed ? """
+            INSERT INTO progress(user_id,book_id,page,completed)
+            SELECT $user,id,page_count-1,1 FROM books WHERE id=$book
+            ON CONFLICT(user_id,book_id) DO UPDATE SET page=excluded.page,completed=excluded.completed
+            """ : "DELETE FROM progress WHERE user_id=$user AND book_id=$book", ("$user", user), ("$book", ""));
+        command.Transaction = transaction;
+        foreach (var book in edit.BookIds)
+        {
+            command.Parameters["$book"].Value = book;
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public void SaveRating(string user, string id, RatingEdit edit)
@@ -420,17 +442,20 @@ public sealed partial class LibraryStore
         return $"{source.Size:x}-{source.Ticks:x}";
     }
 
-    public PageData GetPage(string id, int page)
+    public PageData GetPage(string id, int page) => GetPage(id, page, default);
+
+    public PageData GetPage(string id, int page, CancellationToken cancellationToken)
     {
         if (page < 0) throw new ArgumentException("Page is outside the book.");
+        cancellationToken.ThrowIfCancellationRequested();
         var source = GetSource(id, page);
         using var file = OpenArchive(source.Root, source.Path);
         if (file.Length != source.Size || ReadSourceVersion(source.Root, source.Path) != (source.Size, source.Ticks))
             throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
-        using var archive = new ComicArchive(file, source.Path);
+        using var archive = new ComicArchive(file, source.Path, cancellationToken);
         if (page >= archive.Pages.Count) throw new InvalidDataException();
         var entry = archive.Pages[page];
-        var bytes = archive.ReadPage(entry);
+        var bytes = archive.ReadPage(entry, cancellationToken);
         var mime = ImageMime(entry.Name)!;
         if (!HasImageSignature(bytes, mime)) throw new InvalidDataException();
         if (file.Length != source.Size || ReadSourceVersion(source.Root, source.Path) != (source.Size, source.Ticks))

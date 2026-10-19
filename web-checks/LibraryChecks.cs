@@ -44,6 +44,11 @@ public static class LibraryChecks
                 "ComicInfo precedence, legacy progress isolation, or list metadata exclusion failed.");
             Check(store.GetPage(book.Id, 0).Bytes.SequenceEqual(gif), "Pages are not naturally ordered.");
             Check(store.GetPage(book.Id, 1).Bytes.SequenceEqual(png), "Page byte delivery changed the source.");
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                Reject<OperationCanceledException>(() => store.GetPage(book.Id, 0, cancelled.Token));
+            }
             store.SaveProgress("alice", book.Id, new ReadingProgress(1, true));
             Check(store.GetBook("alice", book.Id).CurrentPage == 1 && store.GetBook("alice", book.Id).Started
                 && store.GetBook("bob", book.Id).CurrentPage == 0 && !store.GetBook("bob", book.Id).Started,

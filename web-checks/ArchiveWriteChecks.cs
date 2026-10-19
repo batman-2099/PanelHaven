@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,6 +9,155 @@ using PanelHaven.Web;
 
 public static class ArchiveWriteChecks
 {
+    public static void RunCrashChild(string mode, string directory)
+    {
+        var root = Path.Combine(directory, "books");
+        var database = Path.Combine(directory, "state", "library.sqlite");
+        var store = new LibraryStore(database, [root]);
+        var id = store.ListBooks("owner", null).Items.Single().Id;
+        if (mode == "write")
+        {
+            var preview = store.PreviewArchiveWrite(id);
+            store.ApplyArchiveWrite(id, new(preview.Revision, true));
+            throw new Exception("Crash fixture unexpectedly committed.");
+        }
+        if (mode != "recover") throw new ArgumentException("Unknown crash fixture mode.");
+        using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString()))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText = "DROP TRIGGER block_archive_commit;";
+            command.ExecuteNonQuery();
+        }
+        // Recovery is explicit verified-backup restore, not automatic startup rollback.
+        var backup = store.GetArchiveBackups(id).Single();
+        var restore = store.PreviewArchiveRestore(id, backup.Id);
+        store.RestoreArchiveBackup(id, backup.Id, new(restore.Revision, true));
+    }
+
+    private static void CrashRecovery()
+    {
+        static void Check(bool condition, string message)
+        {
+            if (!condition) throw new Exception(message);
+        }
+        var directory = Path.Combine(Path.GetTempPath(), "panelhaven-archive-crash-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "books");
+        var database = Path.Combine(directory, "state", "library.sqlite");
+        Directory.CreateDirectory(root);
+        Process Start(string mode)
+        {
+            var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false };
+            if (Path.GetFileNameWithoutExtension(start.FileName).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+                start.ArgumentList.Add(typeof(ArchiveWriteChecks).Assembly.Location);
+            start.ArgumentList.Add("--archive-write-crash-child");
+            start.ArgumentList.Add(mode);
+            start.ArgumentList.Add(directory);
+            return Process.Start(start)!;
+        }
+        static void Stop(Process child)
+        {
+            if (!child.HasExited) child.Kill(entireProcessTree: true);
+            if (!child.WaitForExit(10_000)) throw new Exception("Crash fixture child did not terminate.");
+        }
+        try
+        {
+            var path = Path.Combine(root, "crash.cbz");
+            var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=");
+            using (var archive = ZipFile.Open(path, ZipArchiveMode.Create))
+            {
+                for (var page = 0; page < 3; page++)
+                {
+                    using var image = archive.CreateEntry($"{page}.png").Open();
+                    image.Write(png);
+                }
+                using var xml = new StreamWriter(archive.CreateEntry("ComicInfo.xml").Open());
+                xml.Write("<ComicInfo><Title>Original</Title></ComicInfo>");
+            }
+            var original = File.ReadAllBytes(path);
+            var store = new LibraryStore(database, [root]);
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Crash fixture did not import.");
+            var id = store.ListBooks("owner", null).Items.Single().Id;
+            store.SaveProgress("owner", id, new(1, true));
+            store.SaveRating("owner", id, new(4));
+            store.SaveBookmark("owner", id, 2, new("Private"));
+            var list = store.CreateList("owner", new("Keep", "manual", "all", []));
+            store.AddListBooks("owner", list.Id, [id]);
+            var order = store.SavePageOrder(id, new(store.GetPageOrder(id).Revision, [2, 0, 1]));
+            store.EditMetadata(id, new(new() { ["Title"] = "Edited" }));
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString()))
+            {
+                db.Open();
+                using var command = db.CreateCommand();
+                // UNION ALL of a constant never completes and uses constant memory. This blocks only
+                // the isolated fixture's post-replace UPDATE; it cannot throw and exercise catch rollback.
+                command.CommandText = """
+                    CREATE TRIGGER block_archive_commit BEFORE UPDATE OF content_hash ON books BEGIN
+                        SELECT count(*) FROM (
+                            WITH RECURSIVE spin(x) AS (SELECT 1 UNION ALL SELECT x FROM spin)
+                            SELECT x FROM spin
+                        );
+                    END;
+                    """;
+                command.ExecuteNonQuery();
+            }
+            using (var child = Start("write"))
+            {
+                try
+                {
+                    var timeout = Stopwatch.StartNew();
+                    while (File.ReadAllBytes(path).SequenceEqual(original) && !child.HasExited
+                        && timeout.Elapsed < TimeSpan.FromSeconds(30))
+                        Thread.Sleep(10);
+                    Check(!child.HasExited && !File.ReadAllBytes(path).SequenceEqual(original),
+                        "Crash fixture did not reach post-replace/pre-commit boundary.");
+                }
+                finally { Stop(child); }
+                Check(child.ExitCode != 0, "Crash fixture exited normally instead of being killed.");
+            }
+            Check(!File.ReadAllBytes(path).SequenceEqual(original), "Killed writer ran managed rollback.");
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString()))
+            {
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = "SELECT content_hash FROM books;";
+                Check((string)command.ExecuteScalar()! == Convert.ToHexString(SHA256.HashData(original)),
+                    "Killed writer committed its new source hash.");
+                command.CommandText = "SELECT pages_json FROM page_orders;";
+                Check(JsonSerializer.Deserialize<int[]>((string)command.ExecuteScalar()!)!.SequenceEqual(order.Pages),
+                    "Killed writer committed a page-order reset.");
+            }
+            using (var child = Start("recover"))
+            {
+                try
+                {
+                    Check(child.WaitForExit(30_000), "Restarted archive recovery timed out.");
+                    Check(child.ExitCode == 0, "Restarted archive recovery failed.");
+                }
+                finally { Stop(child); }
+            }
+            Check(File.ReadAllBytes(path).SequenceEqual(original), "Restart recovery did not restore byte-exact original.");
+            store = new LibraryStore(database, [root]);
+            store.ScanAsync(default).GetAwaiter().GetResult();
+            var book = store.ListBooks("owner", null).Items.Single();
+            Check(book.Id == id && book.CurrentPage == 1 && book.Completed && book.PersonalRating == 4
+                && store.GetBookmarks("owner", id).Single() == new ReaderBookmark(2, "Private")
+                && store.GetList("owner", list.Id).BookIds!.Single() == id
+                && !store.GetBook("other", id).Started && store.GetBookmarks("other", id).Count == 0,
+                "Crash recovery lost identity or private/account-scoped data.");
+            Check(store.GetMetadata(id).Fields["Title"] == "Edited"
+                && store.GetPageOrder(id).Revision == order.Revision
+                && store.GetPageOrder(id).Pages.SequenceEqual(order.Pages)
+                && store.GetPage(id, 2).Bytes.SequenceEqual(png),
+                "Restore before rescan lost catalog edits, custom physical order or page payload.");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, true);
+        }
+    }
+
     public static void Run()
     {
         static void Check(bool condition, string message)
@@ -228,5 +378,6 @@ public static class ArchiveWriteChecks
             SqliteConnection.ClearAllPools();
             Directory.Delete(directory, true);
         }
+        CrashRecovery();
     }
 }

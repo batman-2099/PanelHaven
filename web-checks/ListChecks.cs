@@ -37,7 +37,7 @@ public static class ListChecks
             var ids = titles.Select(title => store.ListBooks("alice", title).Items.Single().Id).ToArray();
             var manualEdit = new ListEdit("Reading", "manual", "all", []);
             var manual = store.CreateList("alice", manualEdit);
-            Check(store.GetLists("alice").Single().Id == manual.Id && store.GetLists("bob").Count == 0,
+            Check(store.GetLists("alice").Any(list => list.Id == manual.Id) && store.GetLists("bob").All(list => list.Id != manual.Id),
                 "List ownership leaked in list index.");
             Check(store.GetList("alice", manual.Id).BookIds!.Length == 0, "New manual list was not empty.");
             Reject<KeyNotFoundException>(() => store.GetList("bob", manual.Id));
@@ -48,7 +48,7 @@ public static class ListChecks
             Reject<KeyNotFoundException>(() => store.MoveListBook("bob", manual.Id, ids[0], null));
             Reject<KeyNotFoundException>(() => store.ListBooks("bob", null, listId: manual.Id));
             Reject<KeyNotFoundException>(() => store.GetList("alice", "' OR 1=1 --"));
-            Check(store.GetLists("' OR 1=1 --").Count == 0, "User ID was interpreted as SQL.");
+            Check(store.GetLists("' OR 1=1 --").All(list => list.Id != manual.Id), "User ID was interpreted as SQL.");
 
             void Order(params string[] expected) => Check(store.GetList("alice", manual.Id).BookIds!.SequenceEqual(expected),
                 "Manual membership/order differs from requested order.");
@@ -130,6 +130,8 @@ public static class ListChecks
                 (new("Title", "contains", "ALP"), 1), (new("Series", "notEquals", "One"), 2),
                 (new("Number", "equals", "2"), 1), (new("Summary", "contains", "marker"), 4),
                 (new("PageCount", "equals", "3"), 1), (new("PageCount", "lessThan", "3"), 2),
+                (new("PageCount", "notEquals", "3"), 3), (new("PageCount", "greaterOrEqual", "3"), 2),
+                (new("PageCount", "lessOrEqual", "3"), 3),
                 (new("Title", "contains", "' OR 1=1 --"), 0), (new("Title", "contains", "%"), 0)
             })
             {
@@ -142,6 +144,7 @@ public static class ListChecks
                 new("ReadStatus", "contains", "unread"), new("ReadStatus", "equals", "invalid"),
                 new("PageCount", "contains", "2"), new("PageCount", "equals", "-1"),
                 new("PageCount", "equals", "2147483648"), new("PageCount", "equals", "1.5"),
+                new("DaysSinceAdded", "equals", "-1"), new("DaysSinceAdded", "equals", "1.5"),
                 new("Title", "equals", new string('x', 2001)), new("Title", "equals", null!), null!
             }) Reject<ArgumentException>(() => store.CreateList("alice", smartEdit with { Rules = [rule] }));
             Reject<ArgumentException>(() => store.CreateList("alice", manualEdit with { Name = " " }));
@@ -162,7 +165,7 @@ public static class ListChecks
             store.DeleteList("alice", manual.Id);
             Reject<KeyNotFoundException>(() => store.GetList("alice", manual.Id));
             Reject<KeyNotFoundException>(() => store.DeleteList("alice", manual.Id));
-            Check(store.GetLists("bob").Single().Id == bobReading.Id, "Deleting one user's list affected another user.");
+            Check(store.GetLists("bob").Any(list => list.Id == bobReading.Id), "Deleting one user's list affected another user.");
         }
         finally
         {

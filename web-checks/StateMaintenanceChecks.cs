@@ -14,10 +14,14 @@ public static class StateMaintenanceChecks
         {
             if (!condition) throw new Exception(message);
         }
-        static void Reject(Action action)
+        static void Reject(Action action, Type? errorType = null)
         {
             try { action(); }
-            catch (Exception error) when (error is IOException or InvalidDataException or ArgumentException or SqliteException or XmlException) { return; }
+            catch (Exception error) when (error is IOException or InvalidDataException or ArgumentException or SqliteException or XmlException)
+            {
+                Check(errorType is null || error.GetType() == errorType, "Maintenance failed with an unexpected exception type: " + error.GetType().Name);
+                return;
+            }
             throw new Exception("Unsafe state maintenance was accepted.");
         }
         static IConfiguration Options(params (string Key, string Value)[] values) => new ConfigurationBuilder()
@@ -36,6 +40,19 @@ public static class StateMaintenanceChecks
         Directory.CreateDirectory(root);
         try
         {
+            var untouched = Path.Combine(root, "untouched");
+            foreach (var options in new[]
+            {
+                Options(("backup-live", "one"), ("backup", "two")),
+                Options(("backup-live", "one"), ("restore", "two")),
+                Options(("backup-live", "one"), ("relocate-from", "/old"), ("relocate-to", "/new")),
+                Options(("backup-live", "one"), ("apply-relocation", "false")),
+                Options(("backup-live", "")),
+                Options(("relocate-from", "/old")),
+                Options(("relocate-from", "/old"), ("relocate-to", "/new"), ("apply-relocation", "invalid"))
+            })
+                Reject(() => StateMaintenance.ValidateOptions(options, untouched));
+            Check(!Directory.EnumerateFileSystemEntries(root).Any(), "Invalid CLI options mutated state or lock files.");
             var source = Path.Combine(root, "live");
             var backup = Path.Combine(root, "backup");
             var restored = Path.Combine(root, "restored");
@@ -46,6 +63,18 @@ public static class StateMaintenanceChecks
             Reject(() => StateMaintenance.Acquire(source).Dispose());
             Reject(() => StateMaintenance.Acquire(Path.Combine(source, ".")).Dispose());
             Check(!StateMaintenance.Run(Options(), source), "Normal startup was treated as maintenance.");
+            Check(StateMaintenance.ValidateOptions(Options(("backup-live", backup)), source), "Live backup did not bypass the lifetime lease.");
+            Check(!StateMaintenance.ValidateOptions(Options(("backup", backup)), source), "Offline backup bypassed the lifetime lease.");
+            using (StateMaintenance.AcquireBackupGate(source))
+            {
+                Reject(() => StateMaintenance.AcquireBackupGate(Path.Combine(source, ".")).Dispose(), typeof(IOException));
+                Reject(() => StateMaintenance.Run(Options(("backup-live", backup)), source), typeof(IOException));
+                Reject(() => StateMaintenance.Run(Options(("backup", backup)), source), typeof(IOException));
+                Reject(() => StateMaintenance.Run(Options(("restore", backup)), source), typeof(IOException));
+                Reject(() => RelocateCatalog.Run(Options(("relocate-from", Path.Combine(root, "old")),
+                    ("relocate-to", comics)), source, [comics]), typeof(IOException));
+            }
+            Check(!Directory.Exists(backup), "Gate contention left a backup destination.");
             var database = Path.Combine(source, "panelhaven.sqlite");
             var library = new LibraryStore(database, [comics]);
             var accounts = new Accounts(database);
@@ -61,10 +90,12 @@ public static class StateMaintenanceChecks
             }
             Check(library.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Backup comic fixture did not import.");
             var book = library.ListBooks(owner.Id, null).Items.Single();
+            var pageOrder = library.SavePageOrder(book.Id, new(library.GetPageOrder(book.Id).Revision, [1, 0]));
             library.SaveProgress(owner.Id, book.Id, new ReadingProgress(1, true));
             library.SaveRating(owner.Id, book.Id, new RatingEdit(5));
             var folder = library.CreateListFolder(owner.Id, new ListFolderEdit("Private folder"));
-            var list = library.CreateList(owner.Id, new ListEdit("Private list", "manual", "all", [], folder.Id));
+            var childFolder = library.CreateListFolder(owner.Id, new ListFolderEdit("Nested folder", folder.Id));
+            var list = library.CreateList(owner.Id, new ListEdit("Private list", "manual", "all", [], childFolder.Id));
             library.AddListBooks(owner.Id, list.Id, [book.Id]);
             var protectedValue = Protector(source).Protect("original-cookie-key-material");
             Directory.CreateDirectory(Path.Combine(source, "thumbnails"));
@@ -79,8 +110,17 @@ public static class StateMaintenanceChecks
                 command.Parameters.AddWithValue("$user", owner.Id);
                 command.ExecuteNonQuery();
                 Check(File.Exists(database + "-wal") && new FileInfo(database + "-wal").Length > 0, "Fixture has no committed WAL state.");
-                Check(StateMaintenance.Run(Options(("backup", backup)), source), "Backup was not handled.");
+                var sourceHash = SHA256.HashData(File.ReadAllBytes(database));
+                var walHash = SHA256.HashData(File.ReadAllBytes(database + "-wal"));
+                var keyHashes = Directory.EnumerateFiles(Path.Combine(source, "keys"))
+                    .ToDictionary(path => path, path => SHA256.HashData(File.ReadAllBytes(path)));
+                Check(StateMaintenance.Run(Options(("backup-live", backup)), source), "Live backup was not handled while the server lease was held.");
+                Check(SHA256.HashData(File.ReadAllBytes(database)).SequenceEqual(sourceHash)
+                    && SHA256.HashData(File.ReadAllBytes(database + "-wal")).SequenceEqual(walHash)
+                    && keyHashes.All(pair => SHA256.HashData(File.ReadAllBytes(pair.Key)).SequenceEqual(pair.Value)),
+                    "Live backup changed source state.");
             }
+            Check(StateMaintenance.Run(Options(("backup", Path.Combine(root, "offline-backup"))), source), "Offline backup was not handled.");
             Check(Directory.EnumerateFileSystemEntries(backup).Select(Path.GetFileName).Order().SequenceEqual(new[] { "keys", "panelhaven.sqlite" }),
                 "Backup included transient or regenerable data.");
             Check(Directory.EnumerateFiles(Path.Combine(backup, "keys")).Any(), "Backup omitted the key ring.");
@@ -101,12 +141,18 @@ public static class StateMaintenanceChecks
                 Check(restoredAccounts.Authenticate("backup-reader", "incorrect-password") is null, "Restore bypassed authentication.");
                 Check(restoredAccounts.ValidateSession(Accounts.Principal(owner))?.Id == owner.Id, "Restore lost the original session identity.");
                 var restoredLibrary = new LibraryStore(Path.Combine(restored, "panelhaven.sqlite"), [comics]);
+                var restoredOrder = restoredLibrary.GetPageOrder(book.Id);
+                Check(restoredOrder.Custom && restoredOrder.Revision == pageOrder.Revision && restoredOrder.Pages.SequenceEqual([1, 0]),
+                    "Restore lost shared page order or its stale-edit generation.");
                 var restoredBook = restoredLibrary.GetBook(owner.Id, book.Id);
                 Check(restoredBook.CurrentPage == 1 && !restoredBook.Completed && restoredBook.PersonalRating == 5,
                     "Restore lost committed WAL progress or personal ratings.");
-                Check(restoredLibrary.GetList(owner.Id, list.Id).BookIds!.SequenceEqual([book.Id])
-                    && restoredLibrary.GetListFolders(owner.Id).Single() == folder, "Restored private lists are not usable.");
-                Check(restoredLibrary.GetLists(other.Id).Count == 0 && restoredLibrary.GetBook(other.Id, book.Id).PersonalRating == 0,
+                var restoredList = restoredLibrary.GetList(owner.Id, list.Id);
+                var restoredFolders = restoredLibrary.GetListFolders(owner.Id);
+                Check(restoredList.BookIds!.SequenceEqual([book.Id]) && restoredList.FolderId == childFolder.Id
+                    && restoredFolders.Count == 2 && restoredFolders.Contains(folder) && restoredFolders.Contains(childFolder),
+                    "Restore lost private list membership or the folder hierarchy.");
+                Check(restoredLibrary.GetLists(other.Id).All(list => list.Name == "Recently added") && restoredLibrary.GetBook(other.Id, book.Id).PersonalRating == 0,
                     "Restore crossed private account boundaries.");
                 Check(Protector(restored).Unprotect(protectedValue) == "original-cookie-key-material", "Restored keys cannot decrypt original protected data.");
                 Reject(() => StateMaintenance.Run(Options(("restore", backup)), restored));
@@ -119,6 +165,9 @@ public static class StateMaintenanceChecks
             Reject(() => StateMaintenance.Run(Options(("backup", Path.Combine(source, "nested"))), source));
             Reject(() => StateMaintenance.Run(Options(("backup", root)), source));
             Reject(() => StateMaintenance.Run(Options(("backup", source + ".state.lock")), source));
+            Reject(() => StateMaintenance.Run(Options(("backup-live", source + ".backup.lock")), source));
+            Reject(() => StateMaintenance.Run(Options(("backup-live", backup)), source));
+            Reject(() => StateMaintenance.Run(Options(("backup-live", Path.Combine(source, "nested"))), source));
             Reject(() => StateMaintenance.Run(Options(("backup", "")), source));
             Reject(() => StateMaintenance.Run(Options(("backup", backup), ("restore", backup)), source));
             Reject(() => StateMaintenance.Run(Options(("backup", backup), ("relocate-from", comics)), source));
@@ -161,6 +210,7 @@ public static class StateMaintenanceChecks
                     Directory.CreateSymbolicLink(alias, source);
                     Reject(() => StateMaintenance.Acquire(alias).Dispose());
                     Reject(() => StateMaintenance.Run(Options(("backup", Path.Combine(alias, "nested"))), source));
+                    Reject(() => StateMaintenance.Run(Options(("backup-live", Path.Combine(alias, "nested"))), source));
                     Directory.Delete(alias);
                     var invalid = Path.Combine(root, "linked-key");
                     CopyBackup(backup, invalid);
@@ -177,6 +227,7 @@ public static class StateMaintenanceChecks
             var sourceKey = Directory.EnumerateFiles(Path.Combine(source, "keys")).First();
             File.WriteAllText(sourceKey, "<invalid/>");
             Reject(() => StateMaintenance.Run(Options(("backup", failedBackup)), source));
+            Reject(() => StateMaintenance.Run(Options(("backup-live", failedBackup)), source));
             Check(!Directory.Exists(failedBackup) && !Directory.EnumerateDirectories(root, ".panelhaven-state-*").Any(),
                 "Failed maintenance published a destination or leaked staged private data.");
         }

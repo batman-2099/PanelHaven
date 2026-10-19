@@ -5,27 +5,124 @@ using Microsoft.Data.Sqlite;
 
 namespace PanelHaven.Web;
 
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ListRule([property: JsonRequired] string Field,
-    [property: JsonRequired] string Operator, [property: JsonRequired] string Value);
+[JsonConverter(typeof(ListRuleJsonConverter))]
+public sealed record ListRule(string? Field = null, string? Operator = null, string? Value = null,
+    string? Match = null, ListRule[]? Rules = null);
+
+public sealed class ListRuleJsonConverter : JsonConverter<ListRule>
+{
+    private static readonly string[] PropertyNames = ["Field", "Operator", "Value", "Match", "Rules"];
+    public override ListRule Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException("Expected a rule object.");
+        string? field = null, operation = null, value = null, match = null;
+        ListRule[]? rules = null;
+        var seen = 0;
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            var name = property.Name;
+            var index = 0;
+            for (; index < PropertyNames.Length; index++)
+                if (string.Equals(name, options.PropertyNamingPolicy?.ConvertName(PropertyNames[index]) ?? PropertyNames[index],
+                    options.PropertyNameCaseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) break;
+            if (index == PropertyNames.Length || (seen & (1 << index)) != 0) throw new JsonException("Unknown or duplicate rule property.");
+            seen |= 1 << index;
+            if (index == 4)
+            {
+                if (property.Value.ValueKind != JsonValueKind.Array) throw new JsonException("Expected group rules.");
+                rules = property.Value.Deserialize<ListRule[]>(options);
+            }
+            else
+            {
+                if (property.Value.ValueKind != JsonValueKind.String) throw new JsonException("Expected a rule string.");
+                var text = property.Value.GetString()!;
+                switch (index)
+                {
+                    case 0: field = text; break;
+                    case 1: operation = text; break;
+                    case 2: value = text; break;
+                    case 3: match = text; break;
+                }
+            }
+        }
+        if (seen is not (7 or 24)) throw new JsonException("Use either field/operator/value or match/rules.");
+        return new(field, operation, value, match, rules);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ListRule rule, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (rule.Match is not null || rule.Rules is not null)
+        {
+            writer.WriteString(options.PropertyNamingPolicy?.ConvertName("Match") ?? "Match", rule.Match);
+            writer.WritePropertyName(options.PropertyNamingPolicy?.ConvertName("Rules") ?? "Rules");
+            JsonSerializer.Serialize(writer, rule.Rules, options);
+        }
+        else
+        {
+            writer.WriteString(options.PropertyNamingPolicy?.ConvertName("Field") ?? "Field", rule.Field);
+            writer.WriteString(options.PropertyNamingPolicy?.ConvertName("Operator") ?? "Operator", rule.Operator);
+            writer.WriteString(options.PropertyNamingPolicy?.ConvertName("Value") ?? "Value", rule.Value);
+        }
+        writer.WriteEndObject();
+    }
+}
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ListEdit([property: JsonRequired] string Name, [property: JsonRequired] string Kind,
     [property: JsonRequired] string Match, [property: JsonRequired] ListRule[] Rules, string? FolderId = null);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record SmartListPreview([property: JsonRequired] string Match, [property: JsonRequired] ListRule[] Rules);
 public sealed record NativeList(string Id, string Name, string Kind, string Match, ListRule[] Rules,
     string[]? BookIds = null, string? FolderId = null);
-public sealed record ListFolder(string Id, string Name);
+public sealed record ListFolder(string Id, string Name, string? ParentId = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ListFolderEdit([property: JsonRequired] string Name);
+public sealed record ListFolderEdit([property: JsonRequired] string Name, string? ParentId = null);
 
 public sealed partial class LibraryStore
 {
+    public static readonly MetadataField[] ListRuleFields;
+    private static readonly Dictionary<string, MetadataField> ListRuleSchema;
+
+    static LibraryStore()
+    {
+        ListRuleFields =
+        [
+            new("Title", "Title", "text"), new("Series", "Series", "text"), new("Number", "Number", "text"),
+            new("Publisher", "Publisher", "text"), new("Summary", "Summary", "text"),
+            new("Writer", "Writer", "text"), new("Penciller", "Penciller", "text"), new("Genre", "Genre", "text"),
+            new("Location", "Location", "text"), new("Folder", "Folder", "text"),
+            new("PageCount", "Page count", "integer", Min: 0, Max: int.MaxValue),
+            new("DaysSinceAdded", "Days since added", "integer", Min: 0, Max: int.MaxValue),
+            new("Year", "Year", "integer", Min: 0, Max: 9999),
+            new("PersonalRating", "Personal rating", "integer", Min: 0, Max: 5),
+            new("ReadStatus", "Reading status", "readStatus"), new("Availability", "Availability", "availability"),
+            .. MetadataFields.Where(field => field.Name is "Colorist" or "Inker" or "Letterer" or "CoverArtist" or "Editor"
+                or "LanguageISO" or "Format" or "AgeRating" or "Volume" or "Month" or "Day" or "Count")
+                .Select(field => field.Type == "integer" ? field with { Label = field.Name, Min = field.Name is "Month" or "Day" ? 1 : 0 } : field)
+        ];
+        ListRuleSchema = ListRuleFields.ToDictionary(field => field.Name);
+    }
+
+    private static object? SmartMetadataScalar(string xml, string name)
+    {
+        // ponytail: uncommon fields use catalog XML; add indexed columns only if large-library queries need them.
+        var root = ParseXml(xml, "ComicInfo").Root!;
+        var value = root.Element(root.Name.Namespace + name)?.Value ?? "";
+        var field = ListRuleSchema[name];
+        if (field.Type != "integer") return value;
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+            && number >= field.Min && number <= field.Max ? number : null;
+    }
+
     private static void InitializeLists(SqliteConnection db)
     {
         using var transaction = db.BeginTransaction();
         using var command = Command(db, """
             CREATE TABLE IF NOT EXISTS list_folders (
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
-                name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 200)
+                name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 200),
+                parent_id TEXT REFERENCES list_folders(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS list_folders_user ON list_folders(user_id,name COLLATE NOCASE,id);
             CREATE TABLE IF NOT EXISTS lists (
@@ -41,6 +138,9 @@ public sealed partial class LibraryStore
                 position INTEGER NOT NULL CHECK(position >= 0), PRIMARY KEY(list_id,book_id)
             );
             CREATE INDEX IF NOT EXISTS list_books_order ON list_books(list_id,position,book_id);
+            CREATE TABLE IF NOT EXISTS default_list_seeds (
+                user_id TEXT PRIMARY KEY NOT NULL
+            );
             """);
         command.Transaction = transaction;
         command.ExecuteNonQuery();
@@ -50,8 +150,35 @@ public sealed partial class LibraryStore
             command.CommandText = "ALTER TABLE lists ADD COLUMN folder_id TEXT REFERENCES list_folders(id) ON DELETE SET NULL";
             command.ExecuteNonQuery();
         }
+        command.CommandText = "SELECT 1 FROM pragma_table_info('list_folders') WHERE name='parent_id'";
+        if (command.ExecuteScalar() is null)
+        {
+            command.CommandText = "ALTER TABLE list_folders ADD COLUMN parent_id TEXT REFERENCES list_folders(id) ON DELETE SET NULL";
+            command.ExecuteNonQuery();
+        }
         command.CommandText = """
             CREATE INDEX IF NOT EXISTS lists_folder ON lists(folder_id);
+            CREATE INDEX IF NOT EXISTS list_folders_parent ON list_folders(parent_id);
+            CREATE TRIGGER IF NOT EXISTS list_folders_parent_insert BEFORE INSERT ON list_folders
+            WHEN NEW.parent_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT,'Invalid folder parent.') WHERE NEW.parent_id=NEW.id OR NOT EXISTS(
+                    SELECT 1 FROM list_folders WHERE id=NEW.parent_id AND user_id=NEW.user_id);
+            END;
+            CREATE TRIGGER IF NOT EXISTS list_folders_parent_update BEFORE UPDATE ON list_folders
+            WHEN NEW.parent_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT,'Invalid folder parent.') WHERE NOT EXISTS(
+                    SELECT 1 FROM list_folders WHERE id=NEW.parent_id AND user_id=NEW.user_id);
+                SELECT RAISE(ABORT,'Folder cycle.') WHERE NEW.id IN (
+                    WITH RECURSIVE ancestors(id,parent_id) AS (
+                        SELECT id,parent_id FROM list_folders WHERE id=NEW.parent_id
+                        UNION ALL SELECT f.id,f.parent_id FROM list_folders f JOIN ancestors a ON f.id=a.parent_id
+                    ) SELECT id FROM ancestors);
+            END;
+            CREATE TRIGGER IF NOT EXISTS list_folders_children_owner_update BEFORE UPDATE OF user_id ON list_folders
+            WHEN EXISTS(SELECT 1 FROM list_folders WHERE parent_id=OLD.id AND user_id<>NEW.user_id)
+            BEGIN SELECT RAISE(ABORT,'Folder contains another account''s folders.'); END;
             CREATE TRIGGER IF NOT EXISTS lists_folder_insert BEFORE INSERT ON lists
             WHEN NEW.folder_id IS NOT NULL AND NOT EXISTS(
                 SELECT 1 FROM list_folders WHERE id=NEW.folder_id AND user_id=NEW.user_id)
@@ -80,33 +207,85 @@ public sealed partial class LibraryStore
             throw new ArgumentException("List name must contain 1–200 characters.");
         if (edit.Kind is not ("manual" or "smart") || edit.Match is not ("all" or "any"))
             throw new ArgumentException("Invalid list kind or rule match mode.");
-        if (edit.Rules is null || (edit.Kind == "manual" ? edit.Rules.Length != 0 : edit.Rules.Length is < 1 or > 20))
-            throw new ArgumentException("Manual lists have no rules; smart lists require 1–20 rules.");
-        foreach (var rule in edit.Rules)
+        if (edit.Rules is null || (edit.Kind == "manual" && edit.Rules.Length != 0))
+            throw new ArgumentException("Manual lists have no rules; smart lists require rules.");
+        if (edit.Kind == "smart") ValidateSmartRules(edit.Match, edit.Rules);
+    }
+
+    private static void ValidateSmartRules(string match, ListRule[] rules)
+    {
+        var leaves = 0;
+        var groups = 0;
+        ValidateGroup(match, rules, 1);
+        void ValidateGroup(string mode, ListRule[] children, int depth)
         {
-            if (rule is null || rule.Value is null || rule.Value.Length > 2000)
-                throw new ArgumentException("Invalid rule value; maximum length is 2000 characters.");
-            switch (rule.Field)
+            if (mode is not ("all" or "any") || children is null || children.Length is < 1 or > 20
+                || depth > 4 || ++groups > 20)
+                throw new ArgumentException("Smart lists require nonempty all/any groups, at most 4 group levels and 20 groups including the root.");
+            foreach (var rule in children)
             {
-                case "Title": case "Series": case "Number": case "Publisher": case "Summary":
-                case "Writer": case "Penciller": case "Genre":
-                    if (rule.Operator is not ("contains" or "equals" or "notEquals"))
-                        throw new ArgumentException("Invalid text rule operator.");
-                    break;
-                case "PageCount": case "Year": case "PersonalRating":
-                    if (rule.Operator is not ("equals" or "greaterThan" or "lessThan")
-                        || !int.TryParse(rule.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-                        || number < 0 || (rule.Field == "Year" && number > 9999) || (rule.Field == "PersonalRating" && number > 5))
-                        throw new ArgumentException("Numeric rules require an integer in the field's range and a numeric operator.");
-                    break;
-                case "ReadStatus":
-                    if (rule.Operator is not ("equals" or "notEquals")
-                        || rule.Value is not ("unread" or "in-progress" or "completed"))
-                        throw new ArgumentException("Invalid reading status rule.");
-                    break;
-                default: throw new ArgumentException("Unknown smart list field.");
+                if (rule is null) throw new ArgumentException("A rule is required.");
+                if (rule.Match is not null || rule.Rules is not null)
+                {
+                    if (rule.Field is not null || rule.Operator is not null || rule.Value is not null
+                        || rule.Match is null || rule.Rules is null)
+                        throw new ArgumentException("Use either field/operator/value or match/rules.");
+                    ValidateGroup(rule.Match, rule.Rules, depth + 1);
+                    continue;
+                }
+                if (++leaves > 20) throw new ArgumentException("Smart lists support at most 20 total leaf rules.");
+                if (rule.Field is null || !ListRuleSchema.TryGetValue(rule.Field, out var field))
+                    throw new ArgumentException("Unknown smart list field.");
+                if (rule.Value is null || rule.Value.Length > 2000)
+                    throw new ArgumentException("Invalid rule value; maximum length is 2000 characters.");
+                if (rule.Operator is "isEmpty" or "isNotEmpty")
+                {
+                    if (rule.Value != "") throw new ArgumentException("Empty checks require an empty rule value.");
+                    if (field.Type == "integer" && rule.Field is not ("PageCount" or "PersonalRating")) continue;
+                }
+                switch (field.Type)
+                {
+                    case "text":
+                        if (rule.Operator is not ("contains" or "notContains" or "equals" or "notEquals"
+                            or "startsWith" or "endsWith" or "isEmpty" or "isNotEmpty"))
+                            throw new ArgumentException("Invalid text rule operator.");
+                        break;
+                    case "integer":
+                        if (rule.Operator is not ("equals" or "notEquals" or "greaterThan" or "lessThan" or "greaterOrEqual" or "lessOrEqual")
+                            || !int.TryParse(rule.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+                            || number < field.Min || number > field.Max)
+                            throw new ArgumentException("Numeric rules require an integer in the field's range and a numeric operator.");
+                        break;
+                    case "readStatus":
+                        if (rule.Operator is not ("equals" or "notEquals")
+                            || rule.Value is not ("unread" or "in-progress" or "completed"))
+                            throw new ArgumentException("Invalid reading status rule.");
+                        break;
+                    case "availability":
+                        if (rule.Operator is not ("equals" or "notEquals")
+                            || rule.Value is not ("available" or "missing" or "unavailable"))
+                            throw new ArgumentException("Invalid availability rule.");
+                        break;
+                }
             }
         }
+    }
+
+    public BookPage PreviewSmartList(string user, SmartListPreview edit, int page = 1, int pageSize = 48)
+    {
+        ValidateListId(user);
+        if (edit is null) throw new ArgumentException("Smart rules are required.");
+        ValidateSmartRules(edit.Match, edit.Rules);
+        if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
+        using var db = Open();
+        using var transaction = db.BeginTransaction(deferred: true);
+        using var command = Command(db, "", ("$user", user));
+        command.Transaction = transaction;
+        var filter = BookFrom + " WHERE " + SmartListFilter(command, edit.Match, edit.Rules)
+            + " AND " + LocationFilter(command, "library");
+        var result = ReadBookPage(command, filter, "b.series COLLATE NOCASE ASC", page, pageSize);
+        transaction.Commit();
+        return result;
     }
 
     private static NativeList ReadList(SqliteDataReader reader) => new(reader.GetString(0), reader.GetString(1),
@@ -129,6 +308,28 @@ public sealed partial class LibraryStore
     {
         ValidateListId(user);
         using var db = Open();
+        using (var seed = Command(db, "SELECT 1 FROM default_list_seeds WHERE user_id=$user", ("$user", user)))
+        {
+            if (seed.ExecuteScalar() is null)
+            {
+                using var transaction = db.BeginTransaction();
+                seed.Transaction = transaction;
+                seed.CommandText = "INSERT INTO default_list_seeds(user_id) VALUES($user) ON CONFLICT(user_id) DO NOTHING";
+                if (seed.ExecuteNonQuery() != 0)
+                {
+                    seed.CommandText = """
+                        INSERT INTO lists(id,user_id,name,kind,match,rules_json)
+                        SELECT $id,$user,$name,'smart','all',$rules
+                        WHERE NOT EXISTS(SELECT 1 FROM lists WHERE user_id=$user AND name=$name COLLATE NOCASE)
+                        """;
+                    seed.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+                    seed.Parameters.AddWithValue("$name", "Recently added");
+                    seed.Parameters.AddWithValue("$rules", JsonSerializer.Serialize(new ListRule[] { new("DaysSinceAdded", "lessThan", "30") }));
+                    seed.ExecuteNonQuery();
+                }
+                transaction.Commit();
+            }
+        }
         using var command = Command(db, "SELECT id,name,kind,match,rules_json,folder_id FROM lists WHERE user_id=$user ORDER BY name COLLATE NOCASE,id",
             ("$user", user));
         using var reader = command.ExecuteReader();
@@ -219,21 +420,25 @@ public sealed partial class LibraryStore
     {
         ValidateListId(user);
         using var db = Open();
-        using var command = Command(db, "SELECT id,name FROM list_folders WHERE user_id=$user ORDER BY name COLLATE NOCASE,id", ("$user", user));
+        using var command = Command(db, "SELECT id,name,parent_id FROM list_folders WHERE user_id=$user ORDER BY name COLLATE NOCASE,id", ("$user", user));
         using var reader = command.ExecuteReader();
         var result = new List<ListFolder>();
-        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1)));
+        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
         return result;
     }
 
     public ListFolder CreateListFolder(string user, ListFolderEdit edit)
     {
         ValidateListId(user);
-        var folder = new ListFolder(Guid.NewGuid().ToString("N"), ListFolderName(edit));
+        var folder = new ListFolder(Guid.NewGuid().ToString("N"), ListFolderName(edit), edit.ParentId);
         using var db = Open();
-        using var command = Command(db, "INSERT INTO list_folders(id,user_id,name) VALUES($id,$user,$name)",
-            ("$id", folder.Id), ("$user", user), ("$name", folder.Name));
+        using var transaction = db.BeginTransaction();
+        RequireListFolder(db, transaction, user, folder.ParentId);
+        using var command = Command(db, "INSERT INTO list_folders(id,user_id,name,parent_id) VALUES($id,$user,$name,$parent)",
+            ("$id", folder.Id), ("$user", user), ("$name", folder.Name), ("$parent", folder.ParentId));
+        command.Transaction = transaction;
         command.ExecuteNonQuery();
+        transaction.Commit();
         return folder;
     }
 
@@ -241,11 +446,22 @@ public sealed partial class LibraryStore
     {
         ValidateListId(user);
         ValidateListId(id);
-        var folder = new ListFolder(id, ListFolderName(edit));
+        var folder = new ListFolder(id, ListFolderName(edit), edit.ParentId);
         using var db = Open();
-        using var command = Command(db, "UPDATE list_folders SET name=$name WHERE id=$id AND user_id=$user",
-            ("$id", id), ("$user", user), ("$name", folder.Name));
-        if (command.ExecuteNonQuery() == 0) throw new KeyNotFoundException();
+        using var transaction = db.BeginTransaction();
+        RequireListFolder(db, transaction, user, id);
+        RequireListFolder(db, transaction, user, folder.ParentId);
+        using var command = Command(db, """
+            WITH RECURSIVE ancestors(id,parent_id) AS (
+                SELECT id,parent_id FROM list_folders WHERE id=$parent
+                UNION ALL SELECT f.id,f.parent_id FROM list_folders f JOIN ancestors a ON f.id=a.parent_id
+            ) SELECT 1 FROM ancestors WHERE id=$id
+            """, ("$id", id), ("$user", user), ("$name", folder.Name), ("$parent", folder.ParentId));
+        command.Transaction = transaction;
+        if (command.ExecuteScalar() is not null) throw new ArgumentException("A folder cannot contain itself or an ancestor.");
+        command.CommandText = "UPDATE list_folders SET name=$name,parent_id=$parent WHERE id=$id AND user_id=$user";
+        command.ExecuteNonQuery();
+        transaction.Commit();
         return folder;
     }
 
@@ -254,7 +470,7 @@ public sealed partial class LibraryStore
         ValidateListId(user);
         ValidateListId(id);
         using var db = Open();
-        // ON DELETE SET NULL unfiles lists atomically without touching their membership or positions.
+        // SET NULL unfiles direct lists and promotes immediate children without touching list membership.
         using var command = Command(db, "DELETE FROM list_folders WHERE id=$id AND user_id=$user", ("$id", id), ("$user", user));
         if (command.ExecuteNonQuery() == 0) throw new KeyNotFoundException();
     }
@@ -361,31 +577,53 @@ public sealed partial class LibraryStore
             command.Parameters.AddWithValue("$list", list.Id);
             return "EXISTS (SELECT 1 FROM list_books lb WHERE lb.list_id=$list AND lb.book_id=b.id)";
         }
-        var rules = new string[list.Rules.Length];
-        for (var i = 0; i < list.Rules.Length; i++)
+        ValidateSmartRules(list.Match, list.Rules);
+        return SmartListFilter(command, list.Match, list.Rules);
+    }
+
+    private static string SmartListFilter(SqliteCommand command, string match, ListRule[] listRules)
+    {
+        var parameterIndex = 0;
+        return GroupFilter(match, listRules);
+        string GroupFilter(string mode, ListRule[] children) =>
+            "(" + string.Join(mode == "all" ? " AND " : " OR ", children.Select(RuleFilter)) + ")";
+        string RuleFilter(ListRule rule)
         {
-            var rule = list.Rules[i];
+            if (rule.Rules is not null) return GroupFilter(rule.Match!, rule.Rules);
+            var field = ListRuleSchema[rule.Field!];
             var column = rule.Field switch
             {
                 "Title" => "b.title", "Series" => "b.series", "Number" => "b.number", "Publisher" => "b.publisher",
                 "Summary" => "b.summary", "PageCount" => "b.page_count", "Writer" => "b.writer",
                 "Penciller" => "b.penciller", "Genre" => "b.genre", "Year" => "b.year", "PersonalRating" => "COALESCE(r.rating,0)",
+                "DaysSinceAdded" => "max(0,(unixepoch()-b.added_at)/86400)",
                 "ReadStatus" => "(CASE WHEN p.book_id IS NULL THEN 'unread' WHEN p.completed=1 THEN 'completed' ELSE 'in-progress' END)",
-                _ => throw new ArgumentException("Unknown smart list field.")
+                "Location" => "b.location", "Folder" => "b.folder", "Availability" => "b.availability",
+                _ => $"metadata_scalar(b.info_xml,'{field.Name}')"
             };
-            var parameter = "$rule" + i;
-            command.Parameters.AddWithValue(parameter, rule.Field is "PageCount" or "Year" or "PersonalRating"
-                ? (object)int.Parse(rule.Value, CultureInfo.InvariantCulture) : rule.Value);
-            rules[i] = rule.Operator switch
+            if (rule.Operator is "isEmpty" or "isNotEmpty")
+            {
+                return field.Type == "integer"
+                    ? $"{column} IS {(rule.Operator == "isEmpty" ? "" : "NOT ")}NULL"
+                    : $"{column} {(rule.Operator == "isEmpty" ? "=" : "<>")} ''";
+            }
+            var parameter = "$rule" + parameterIndex++;
+            command.Parameters.AddWithValue(parameter, field.Type == "integer"
+                ? (object)int.Parse(rule.Value!, CultureInfo.InvariantCulture) : rule.Value!);
+            return rule.Operator switch
             {
                 "contains" => $"instr(lower({column}),lower({parameter}))>0",
+                "notContains" => $"instr(lower({column}),lower({parameter}))=0",
+                "startsWith" => $"substr({column},1,length({parameter})) = {parameter} COLLATE NOCASE",
+                "endsWith" => $"substr({column},length({column})-length({parameter})+1) = {parameter} COLLATE NOCASE",
                 "equals" => $"{column} = {parameter} COLLATE NOCASE",
                 "notEquals" => $"{column} <> {parameter} COLLATE NOCASE",
                 "greaterThan" => $"{column} > {parameter}",
                 "lessThan" => $"{column} < {parameter}",
+                "greaterOrEqual" => $"{column} >= {parameter}",
+                "lessOrEqual" => $"{column} <= {parameter}",
                 _ => throw new ArgumentException("Unknown smart list operator.")
             };
         }
-        return "(" + string.Join(list.Match == "all" ? " AND " : " OR ", rules) + ")";
     }
 }

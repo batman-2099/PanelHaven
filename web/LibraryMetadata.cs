@@ -38,7 +38,7 @@ public sealed partial class LibraryStore
         new("Colorist", "Colorist", "text"), new("Letterer", "Letterer", "text"),
         new("CoverArtist", "Cover artist", "text"), new("Editor", "Editor", "text"), new("Translator", "Translator", "text"),
         new("Publisher", "Publisher", "text"), new("Imprint", "Imprint", "text"), new("Genre", "Genre", "text"),
-        new("Web", "Web", "text"), new("PageCount", "Declared page count (reader uses archive)", "integer", Min: 0, Max: int.MaxValue),
+        new("Web", "Web", "text"), new("PageCount", "Declared page count (reader uses comicbook)", "integer", Min: 0, Max: int.MaxValue),
         new("LanguageISO", "Language ISO", "text"), new("Format", "Format", "text"), new("AgeRating", "Age rating", "text"),
         new("BlackAndWhite", "Black and white", "enum", ["Unknown", "No", "Yes"]),
         new("Manga", "Manga", "enum", ["Unknown", "No", "Yes", "YesAndRightToLeft"]),

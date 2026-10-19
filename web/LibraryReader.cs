@@ -19,6 +19,12 @@ public sealed partial class LibraryStore
                 page INTEGER NOT NULL CHECK(page >= 0), name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 200),
                 PRIMARY KEY(user_id,book_id,page)
             );
+            CREATE TABLE IF NOT EXISTS page_metadata_edits (
+                book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+                page INTEGER NOT NULL CHECK(page >= 0),
+                fields INTEGER NOT NULL CHECK(fields BETWEEN 1 AND 3),
+                PRIMARY KEY(book_id,page)
+            );
             """);
         command.ExecuteNonQuery();
     }
@@ -80,7 +86,8 @@ public sealed partial class LibraryStore
         var xml = ParseXml(reader.GetString(1), "ComicInfo");
         var pages = new Dictionary<int, ReaderPageInfo>();
         var seen = new HashSet<int>();
-        foreach (var entry in xml.Root!.Elements("Pages").Elements("Page"))
+        var ns = xml.Root!.Name.Namespace;
+        foreach (var entry in xml.Root.Elements(ns + "Pages").Elements(ns + "Page"))
         {
             if (!int.TryParse(entry.Attribute("Image")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var page)
                 || page < 0 || page >= count) continue;

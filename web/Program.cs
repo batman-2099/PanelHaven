@@ -12,18 +12,54 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 64 * 1024);
-var requireHttps = DeploymentSecurity.Configure(builder.Services, builder.Configuration);
+var bootstrapDataPath = Path.GetFullPath(builder.Configuration["DataPath"] ?? "data", builder.Environment.ContentRootPath);
+ServerSettings? serverSettings = null;
+ServerHost? serverHost = null;
+try
+{
+    // Offline maintenance must retain its explicit CLI paths and never apply server-only overrides.
+    if (!ServerSettings.IsMaintenance(builder.Configuration))
+    {
+        serverSettings = ServerSettings.Load(builder.Configuration, builder.Environment.ContentRootPath);
+        DataRelocation.Execute(serverSettings);
+        serverSettings.Apply(builder.Configuration);
+        serverHost = new ServerHost(serverSettings.Path, bootstrapDataPath);
+        builder.Services.AddSingleton(serverSettings);
+        builder.Services.AddSingleton(serverHost);
+    }
+}
+catch (Exception exception) when (exception is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException)
+{
+    Console.Error.WriteLine(exception.Message);
+    Environment.ExitCode = 1;
+    return;
+}
 var dataPath = Path.GetFullPath(builder.Configuration["DataPath"] ?? "data", builder.Environment.ContentRootPath);
-if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dataPath);
-else Directory.CreateDirectory(dataPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+bool liveBackup;
+try { liveBackup = StateMaintenance.ValidateOptions(builder.Configuration, dataPath); }
+catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+{
+    Console.Error.WriteLine(exception.Message);
+    Environment.ExitCode = 1;
+    return;
+}
 var databasePath = Path.Combine(dataPath, "panelhaven.sqlite");
 var roots = builder.Configuration.GetSection("Libraries").Get<string[]>() ?? [];
 roots = roots.Select(path => Path.GetFullPath(path, builder.Environment.ContentRootPath)).ToArray();
-using var stateLock = StateMaintenance.Acquire(dataPath);
+string? SpecialRoot(string key) => string.IsNullOrEmpty(builder.Configuration[key]) ? null
+    : Path.GetFullPath(builder.Configuration[key]!, builder.Environment.ContentRootPath);
+var archivePath = SpecialRoot("ArchivePath");
+var unsortedPath = SpecialRoot("UnsortedPath");
+if (!liveBackup)
+{
+    if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dataPath);
+    else Directory.CreateDirectory(dataPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+}
+using var stateLock = liveBackup ? null : StateMaintenance.Acquire(dataPath);
 try
 {
     if (StateMaintenance.Run(builder.Configuration, dataPath)
-        || RelocateCatalog.Run(builder.Configuration, dataPath, roots)) return;
+        || RelocateCatalog.Run(builder.Configuration, dataPath, roots.Concat(new[] { archivePath, unsortedPath }.OfType<string>()).ToArray())) return;
 }
 catch (Exception exception) when (exception is ArgumentException or IOException or InvalidOperationException
     or InvalidDataException or UnauthorizedAccessException or SqliteException or System.Xml.XmlException)
@@ -32,11 +68,15 @@ catch (Exception exception) when (exception is ArgumentException or IOException 
     Environment.ExitCode = 1;
     return;
 }
-var library = new LibraryStore(databasePath, roots);
+var requireHttps = DeploymentSecurity.Configure(builder.Services, builder.Configuration);
+// Startup migrations must not overlap a live snapshot; the lifetime lease still excludes a second server.
+using var startupBackupGate = StateMaintenance.AcquireBackupGate(dataPath);
+var library = new LibraryStore(databasePath, roots, archivePath, unsortedPath);
 var accounts = new Accounts(databasePath);
 accounts.Bootstrap(Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_USERNAME"), Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_PASSWORD"));
 builder.Services.AddSingleton(accounts);
 builder.Services.AddSingleton(library);
+builder.Services.AddSingleton(_ => new ComicVine(builder.Configuration["ComicVine:ApiKey"]));
 builder.Services.AddSingleton(provider => new ThumbnailStore(provider.GetRequiredService<LibraryStore>(), Path.Combine(dataPath, "thumbnails")));
 builder.Services.AddSingleton<ScanWorker>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ScanWorker>());
@@ -88,6 +128,8 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
+startupBackupGate.Dispose();
+if (serverSettings!.Persisted) await serverHost!.ApplyBackupAsync(serverSettings.Document.Settings.Backup);
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;
@@ -123,7 +165,10 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl = "no-cache"
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
@@ -222,6 +267,7 @@ accountApi.MapDelete("/users/{id}", async (string id, HttpContext context, Accou
     return Results.NoContent();
 }).RequireAuthorization(policy => policy.RequireRole("admin"));
 app.MapLibraryEndpoints();
+app.MapServerSettingsEndpoints();
 app.Run();
 
 static (string Id, long Version) AccountActor(ClaimsPrincipal principal) =>

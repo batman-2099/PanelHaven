@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using System.Xml;
 using System.Xml.Linq;
@@ -12,10 +13,16 @@ public static class StateMaintenance
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    public static FileStream Acquire(string dataPath)
+    public static FileStream Acquire(string dataPath) => AcquireLock(dataPath, ".state.lock",
+        "Cannot acquire the state lease. Stop the Panel Haven service before maintenance; another process may be using this DataPath.");
+
+    public static FileStream AcquireBackupGate(string dataPath) => AcquireLock(dataPath, ".backup.lock",
+        "Cannot acquire the backup gate. Another backup, maintenance operation, or server startup is using this DataPath.");
+
+    private static FileStream AcquireLock(string dataPath, string suffix, string message)
     {
         dataPath = SafePath(dataPath);
-        var lockPath = SafePath(dataPath + ".state.lock");
+        var lockPath = SafePath(dataPath + suffix);
         // Keep the inode after release: unlinking a lease lets another process lock a different inode.
         var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = FileModePrivate;
@@ -28,26 +35,53 @@ public static class StateMaintenance
         }
         catch (IOException exception)
         {
-            throw new IOException("Cannot acquire the state lease. Stop the Panel Haven service before maintenance; another process may be using this DataPath.", exception);
+            throw new IOException(message, exception);
         }
+    }
+
+    public static bool ValidateOptions(IConfiguration configuration, string dataPath)
+    {
+        var backup = configuration["backup"];
+        var live = configuration["backup-live"];
+        var restore = configuration["restore"];
+        var from = configuration["relocate-from"];
+        var to = configuration["relocate-to"];
+        var apply = configuration["apply-relocation"];
+        var relocating = from is not null || to is not null || apply is not null;
+        if ((backup is not null ? 1 : 0) + (live is not null ? 1 : 0) + (restore is not null ? 1 : 0)
+            + (relocating ? 1 : 0) > 1)
+            throw new ArgumentException("Choose exactly one operation: backup, backup-live, restore, or relocation.");
+        if (relocating)
+        {
+            if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to)
+                || !Path.IsPathFullyQualified(from) || !Path.IsPathFullyQualified(to))
+                throw new ArgumentException("Relocation requires absolute --relocate-from and --relocate-to roots.");
+            if (apply is not null && !bool.TryParse(apply, out _))
+                throw new ArgumentException("--apply-relocation must be true or false; omit it for a preview.");
+        }
+        var requested = backup ?? live ?? restore;
+        if (requested is not null)
+        {
+            if (string.IsNullOrWhiteSpace(requested)) throw new ArgumentException("Backup and restore require a directory path.");
+            dataPath = SafePath(dataPath);
+            var other = SafePath(requested);
+            if (Contains(dataPath, other) || Contains(other, dataPath)
+                || other.Equals(dataPath + ".state.lock", PathComparison)
+                || other.Equals(dataPath + ".backup.lock", PathComparison))
+                throw new ArgumentException("State and backup directories must be separate, non-overlapping trees.");
+        }
+        return live is not null;
     }
 
     public static bool Run(IConfiguration configuration, string dataPath)
     {
-        var backup = configuration["backup"];
+        ValidateOptions(configuration, dataPath);
+        var backup = configuration["backup"] ?? configuration["backup-live"];
         var restore = configuration["restore"];
         if (backup is null && restore is null) return false;
-        if (backup is not null && restore is not null
-            || configuration["relocate-from"] is not null || configuration["relocate-to"] is not null
-            || configuration["apply-relocation"] is not null)
-            throw new ArgumentException("Choose exactly one operation: backup, restore, or relocation.");
-        var requested = backup ?? restore!;
-        if (string.IsNullOrWhiteSpace(requested)) throw new ArgumentException("Backup and restore require a directory path.");
         dataPath = SafePath(dataPath);
-        var other = SafePath(requested);
-        if (Contains(dataPath, other) || Contains(other, dataPath)
-            || other.Equals(dataPath + ".state.lock", PathComparison))
-            throw new ArgumentException("State and backup directories must be separate, non-overlapping trees.");
+        var other = SafePath(backup ?? restore!);
+        using var gate = AcquireBackupGate(dataPath);
         if (backup is not null) Backup(dataPath, other);
         else Restore(other, dataPath);
         Console.WriteLine(backup is not null ? $"Backup completed: {other}" : $"Restore completed: {dataPath}");
@@ -114,15 +148,16 @@ public static class StateMaintenance
         foreach (var suffix in new[] { "-wal", "-shm", "-journal" }) SafePath(database + suffix);
         var targetKeys = Path.Combine(stage, "keys");
         CreatePrivateDirectory(targetKeys);
-        foreach (var entry in Directory.EnumerateFileSystemEntries(keys))
+        var entries = Directory.GetFileSystemEntries(keys);
+        foreach (var entry in entries)
         {
             SafePath(entry);
             if (Directory.Exists(entry) || !Path.GetExtension(entry).Equals(".xml", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The keys directory must contain only Data Protection XML files.");
-            ValidateKey(entry);
             var target = Path.Combine(targetKeys, Path.GetFileName(entry));
             File.Copy(entry, target, overwrite: false);
             MakePrivate(target);
+            ValidateKey(target);
         }
         var targetDatabase = Path.Combine(stage, Database);
         using (var input = Open(database, SqliteOpenMode.ReadOnly))
@@ -135,6 +170,21 @@ public static class StateMaintenance
             ValidateDatabase(output);
         }
         MakePrivate(targetDatabase);
+        // Data Protection writes keys independently of SQLite; refuse a changing ring rather than retrying.
+        if (!entries.Order(StringComparer.Ordinal).SequenceEqual(
+            Directory.EnumerateFileSystemEntries(SafePath(keys)).Order(StringComparer.Ordinal)))
+            throw new IOException("The key ring changed during the snapshot; no backup was published.");
+        Span<byte> sourceHash = stackalloc byte[SHA256.HashSizeInBytes];
+        Span<byte> targetHash = stackalloc byte[SHA256.HashSizeInBytes];
+        foreach (var entry in entries)
+        {
+            using var original = File.OpenRead(SafePath(entry));
+            using var copied = File.OpenRead(Path.Combine(targetKeys, Path.GetFileName(entry)));
+            SHA256.HashData(original, sourceHash);
+            SHA256.HashData(copied, targetHash);
+            if (!sourceHash.SequenceEqual(targetHash))
+                throw new IOException("The key ring changed during the snapshot; no backup was published.");
+        }
     }
 
     private static SqliteConnection Open(string path, SqliteOpenMode mode)

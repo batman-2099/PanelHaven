@@ -4,10 +4,13 @@ namespace PanelHaven.Web;
 
 public sealed record MaintenanceBook(string Id, string Title, string Location, string Availability, string? DuplicateKey);
 public sealed record MaintenancePage(List<MaintenanceBook> Items, int Total, int Page, int PageSize);
+public sealed record DuplicateComparisonBook(Book Book, BookMetadata Metadata);
+public sealed record DuplicateComparison(DuplicateComparisonBook Anchor, List<DuplicateComparisonBook> Items,
+    int Total, int Page, int PageSize, string DuplicateKey);
 
 public sealed partial class LibraryStore
 {
-    private static void InitializeMaintenance(SqliteConnection db)
+    private void InitializeMaintenance(SqliteConnection db)
     {
         using var transaction = db.BeginTransaction();
         var columns = new HashSet<string>(StringComparer.Ordinal);
@@ -22,7 +25,8 @@ public sealed partial class LibraryStore
             ("availability", "TEXT NOT NULL DEFAULT 'available' CHECK(availability IN ('available','missing','unavailable'))"),
             ("location", "TEXT NOT NULL DEFAULT ''"),
             ("folder", "TEXT NOT NULL DEFAULT ''"),
-            ("content_hash", "TEXT")
+            ("content_hash", "TEXT"),
+            ("added_at", "INTEGER")
         })
         {
             if (columns.Contains(name)) continue;
@@ -40,6 +44,30 @@ public sealed partial class LibraryStore
             command.Transaction = transaction;
             command.ExecuteNonQuery();
         }
+        var locations = new List<(string Id, string Location, string Folder)>();
+        using (var command = Command(db, "SELECT id,path,location,folder FROM books"))
+        {
+            command.Transaction = transaction;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var (location, folder) = SourceLocation(reader.GetString(1));
+                if (location != reader.GetString(2) || folder != reader.GetString(3))
+                    locations.Add((reader.GetString(0), location, folder));
+            }
+        }
+        using (var command = Command(db, "UPDATE books SET location=$location,folder=$folder WHERE id=$id",
+            ("$id", ""), ("$location", ""), ("$folder", "")))
+        {
+            command.Transaction = transaction;
+            foreach (var (id, location, folder) in locations)
+            {
+                command.Parameters["$id"].Value = id;
+                command.Parameters["$location"].Value = location;
+                command.Parameters["$folder"].Value = folder;
+                command.ExecuteNonQuery();
+            }
+        }
         transaction.Commit();
     }
 
@@ -51,7 +79,7 @@ public sealed partial class LibraryStore
         if (index < 0) return ("Unconfigured library", "Unconfigured library");
         var relative = Path.GetRelativePath(roots[index], path).Replace(Path.DirectorySeparatorChar, '/');
         relative = new string(relative.Select(c => char.IsControl(c) ? '_' : c).ToArray());
-        var prefix = $"Library {index + 1}";
+        var prefix = RootLabel(index);
         var separator = relative.LastIndexOf('/');
         return ($"{prefix}/{relative}", separator < 0 ? prefix : $"{prefix}/{relative[..separator]}");
     }
@@ -140,6 +168,44 @@ public sealed partial class LibraryStore
         return new(books, total, page, pageSize);
     }
 
+    public DuplicateComparison CompareDuplicates(string user, string id, int page = 1, int pageSize = 3)
+    {
+        if (page < 1 || pageSize is < 1 or > 3) throw new ArgumentException("Invalid page or page size.");
+        using var db = Open();
+        using var transaction = db.BeginTransaction(deferred: true);
+        using var command = Command(db, "SELECT " + BookColumns + ",b.info_xml,b.book_xml,b.content_hash" + BookFrom
+            + "WHERE b.id=$id AND b.availability='available' AND b.content_hash IS NOT NULL",
+            ("$user", user), ("$id", id));
+        command.Transaction = transaction;
+        DuplicateComparisonBook anchor;
+        string hash;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read()) throw new KeyNotFoundException();
+            anchor = ReadComparisonBook(reader);
+            hash = reader.GetString(15);
+        }
+        const string peers = " WHERE b.availability='available' AND b.content_hash=$hash AND b.id<>$id";
+        command.CommandText = "SELECT COUNT(*) FROM books b" + peers;
+        command.Parameters.AddWithValue("$hash", hash);
+        var total = Convert.ToInt32(command.ExecuteScalar());
+        if (total == 0) throw new KeyNotFoundException();
+        page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
+        command.CommandText = "SELECT " + BookColumns + ",b.info_xml,b.book_xml" + BookFrom + peers
+            + " ORDER BY b.location,b.id LIMIT $limit OFFSET $offset";
+        command.Parameters.AddWithValue("$limit", pageSize);
+        command.Parameters.AddWithValue("$offset", (page - 1) * (long)pageSize);
+        var items = new List<DuplicateComparisonBook>(Math.Min(total, pageSize));
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) items.Add(ReadComparisonBook(reader));
+        transaction.Commit();
+        return new(anchor, items, total, page, pageSize, hash);
+
+        static DuplicateComparisonBook ReadComparisonBook(SqliteDataReader reader) =>
+            new(ReadBook(reader, false), ReadMetadata(ParseXml(reader.GetString(13), "ComicInfo").Root!,
+                reader.IsDBNull(14) ? null : ParseXml(reader.GetString(14), "ComicBook").Root));
+    }
+
     public void RemoveMissingBook(string id)
     {
         if (!scanLock.Wait(0)) throw new InvalidOperationException("A scan is running; wait before removing a catalog entry.");
@@ -147,6 +213,7 @@ public sealed partial class LibraryStore
         {
             using var db = Open();
             using var transaction = db.BeginTransaction();
+            RefusePendingFileOperation(db, id, transaction);
             string path;
             using (var command = Command(db, "SELECT path,availability FROM books WHERE id=$id", ("$id", id)))
             {

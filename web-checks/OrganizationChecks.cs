@@ -55,6 +55,8 @@ public static class OrganizationChecks
                     match TEXT NOT NULL,rules_json TEXT NOT NULL);
                 CREATE TABLE list_books (list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
                     book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,position INTEGER NOT NULL,PRIMARY KEY(list_id,book_id));
+                CREATE TABLE list_folders (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,name TEXT NOT NULL);
+                INSERT INTO list_folders VALUES('legacy-folder',$user,'Old folder');
                 INSERT INTO books VALUES('legacy-book',$path,'Legacy','One','0','Press','marker',2,$xml,NULL,1,0,0);
                 INSERT INTO progress VALUES($user,'legacy-book',0,1);
                 INSERT INTO lists VALUES('legacy-list',$user,'Existing manual','manual','all','[]');
@@ -72,6 +74,8 @@ public static class OrganizationChecks
                 && store.GetBook(owner.Id, "legacy-book").Completed
                 && (string)Scalar("SELECT info_xml FROM books WHERE id='legacy-book'")! == legacyXml,
                 "Organization migration lost existing lists, positions, progress, rules, or original XML.");
+            Check(store.GetListFolders(owner.Id).Single() == new ListFolder("legacy-folder", "Old folder"),
+                "Existing folder migration did not preserve the folder as a root.");
 
             var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=");
             void Archive(string title, string? year, string writer, string penciller, string genre, bool legacy = false)
@@ -135,7 +139,7 @@ public static class OrganizationChecks
             Reject<ArgumentException>(() => store.ListBooks(owner.Id, null, rating: 6));
             Reject<ArgumentException>(() => store.ListGroups(owner.Id, null, "series", rating: -1));
 
-            var folder = store.CreateListFolder(owner.Id, new("  Reading  "));
+            var folder = store.UpdateListFolder(owner.Id, "legacy-folder", new("  Reading  "));
             var otherFolder = store.CreateListFolder(owner.Id, new("Later"));
             var adminFolder = store.CreateListFolder(admin.Id, new("Admin"));
             Check(folder.Name == "Reading" && store.GetListFolders(owner.Id).Count == 2
@@ -145,10 +149,39 @@ public static class OrganizationChecks
                 Reject<ArgumentException>(() => store.CreateListFolder(owner.Id, new(name)));
             Reject<ArgumentException>(() => store.CreateListFolder(owner.Id, null!));
             Reject<ArgumentException>(() => store.CreateListFolder(owner.Id, new(null!)));
-            foreach (var json in new[] { "{}", "{\"name\":3}", "{\"name\":\"x\",\"parentId\":\"y\"}" })
+            foreach (var json in new[] { "{}", "{\"name\":3}", "{\"name\":\"x\",\"parentId\":3}", "{\"name\":\"x\",\"unexpected\":true}" })
                 Reject<JsonException>(() => JsonSerializer.Deserialize<ListFolderEdit>(json, jsonOptions));
             Reject<KeyNotFoundException>(() => store.UpdateListFolder(admin.Id, folder.Id, new("Stolen")));
             Reject<KeyNotFoundException>(() => store.DeleteListFolder(admin.Id, folder.Id));
+            var child = store.CreateListFolder(owner.Id, new("Child", folder.Id));
+            var grandchild = store.CreateListFolder(owner.Id, new("Grandchild", child.Id));
+            Check(store.GetListFolders(owner.Id).Single(item => item.Id == grandchild.Id).ParentId == child.Id,
+                "Nested folder parent was not persisted.");
+            Reject<ArgumentException>(() => store.UpdateListFolder(owner.Id, folder.Id, new("Bad rename", folder.Id)));
+            Reject<ArgumentException>(() => store.UpdateListFolder(owner.Id, folder.Id, new("Bad rename", grandchild.Id)));
+            Reject<KeyNotFoundException>(() => store.CreateListFolder(owner.Id, new("Cross-account", adminFolder.Id)));
+            Reject<KeyNotFoundException>(() => store.CreateListFolder(owner.Id, new("Missing parent", "missing")));
+            Reject<KeyNotFoundException>(() => store.UpdateListFolder(owner.Id, folder.Id, new("Bad rename", adminFolder.Id)));
+            Check(store.GetListFolders(owner.Id).Single(item => item.Id == folder.Id) == (folder with { Name = "Renamed" }),
+                "Rejected reparenting changed the folder's name or parent.");
+            Check(store.UpdateListFolder(owner.Id, child.Id, new("Moved", otherFolder.Id)).ParentId == otherFolder.Id
+                && store.GetListFolders(owner.Id).Single(item => item.Id == grandchild.Id).ParentId == child.Id,
+                "Reparenting changed descendants.");
+            Check(store.UpdateListFolder(owner.Id, child.Id, new("Root")).ParentId is null, "Folder could not move to root.");
+            store.UpdateListFolder(owner.Id, child.Id, new("Child", folder.Id));
+            Reject<SqliteException>(() => Execute("UPDATE list_folders SET parent_id=$child WHERE id=$folder", ("$child", grandchild.Id), ("$folder", folder.Id)));
+            Reject<SqliteException>(() => Execute("UPDATE list_folders SET parent_id=id WHERE id=$folder", ("$folder", folder.Id)));
+            Reject<SqliteException>(() => Execute("UPDATE list_folders SET parent_id=$parent WHERE id=$child", ("$parent", adminFolder.Id), ("$child", child.Id)));
+            Reject<SqliteException>(() => Execute("UPDATE list_folders SET user_id=$admin WHERE id=$folder", ("$admin", admin.Id), ("$folder", folder.Id)));
+            Reject<SqliteException>(() => Execute("UPDATE list_folders SET user_id=$admin WHERE id=$child", ("$admin", admin.Id), ("$child", grandchild.Id)));
+            Reject<SqliteException>(() => Execute("INSERT INTO list_folders(id,user_id,name,parent_id) VALUES('cross-owner',$owner,'X',$parent)",
+                ("$owner", owner.Id), ("$parent", adminFolder.Id)));
+            Reject<SqliteException>(() => Execute("INSERT INTO list_folders(id,user_id,name,parent_id) VALUES('self-parent',$owner,'X','self-parent')", ("$owner", owner.Id)));
+            var directList = store.CreateList(owner.Id, new("Direct", "manual", "all", [], folder.Id));
+            var childList = store.CreateList(owner.Id, new("Child list", "manual", "all", [], child.Id));
+            var deepList = store.CreateList(owner.Id, new("Deep list", "smart", "all", [new("Title", "equals", "Alpha")], grandchild.Id));
+            store.AddListBooks(owner.Id, directList.Id, [ids["Alpha"]]);
+            store.AddListBooks(owner.Id, childList.Id, [ids["Beta"], ids["Alpha"]]);
             var manualEdit = new ListEdit("Existing manual", "manual", "all", [], folder.Id);
             store.UpdateList(owner.Id, "legacy-list", manualEdit);
             store.AddListBooks(owner.Id, "legacy-list", [ids["Beta"], ids["Alpha"], ids["Gamma"]]);
@@ -163,6 +196,17 @@ public static class OrganizationChecks
             store.UpdateList(owner.Id, "legacy-list", manualEdit with { FolderId = otherFolder.Id });
             store.DeleteListFolder(owner.Id, folder.Id);
             Check(store.GetList(owner.Id, "legacy-list").FolderId == otherFolder.Id, "Deleting a previous folder unfiled a reassigned list.");
+            Check(store.GetListFolders(owner.Id).Single(item => item.Id == child.Id).ParentId is null
+                && store.GetListFolders(owner.Id).Single(item => item.Id == grandchild.Id).ParentId == child.Id
+                && store.GetList(owner.Id, directList.Id).FolderId is null
+                && store.GetList(owner.Id, directList.Id).BookIds!.SequenceEqual([ids["Alpha"]])
+                && store.GetList(owner.Id, childList.Id).FolderId == child.Id
+                && store.GetList(owner.Id, childList.Id).BookIds!.SequenceEqual([ids["Beta"], ids["Alpha"]])
+                && store.GetList(owner.Id, deepList.Id).FolderId == grandchild.Id
+                && store.ListBooks(owner.Id, null, listId: deepList.Id).Items.Single().Id == ids["Alpha"]
+                && store.GetBook(owner.Id, ids["Legacy"]).Completed
+                && store.GetBook(owner.Id, ids["Alpha"]).PersonalRating == 3,
+                "Folder deletion lost hierarchy, list membership, smart rules, or private book state.");
             store.DeleteListFolder(owner.Id, otherFolder.Id);
             Check(store.GetList(owner.Id, "legacy-list").FolderId is null
                 && store.GetList(owner.Id, "legacy-list").BookIds!.SequenceEqual(memberOrder), "Folder deletion changed list membership/order.");
@@ -173,9 +217,14 @@ public static class OrganizationChecks
             var smart = store.CreateList(owner.Id, smartEdit);
             void Matches(ListRule rule, params string[] expected)
             {
+                var listsBefore = (long)Scalar("SELECT COUNT(*) FROM lists")!;
+                var preview = store.PreviewSmartList(owner.Id, new("all", [rule]));
+                Check((long)Scalar("SELECT COUNT(*) FROM lists")! == listsBefore, "Preview persisted a list.");
                 store.UpdateList(owner.Id, smart.Id, smartEdit with { Rules = [rule] });
-                var actual = store.ListBooks(owner.Id, null, listId: smart.Id).Items.Select(book => book.Title).Order(StringComparer.Ordinal);
-                Check(actual.SequenceEqual(expected.Order(StringComparer.Ordinal)), $"Expanded rule failed: {rule}.");
+                var saved = store.ListBooks(owner.Id, null, listId: smart.Id);
+                Check(preview.Total == saved.Total && preview.Items.SequenceEqual(saved.Items), "Preview and saved smart matching diverged.");
+                Check(saved.Items.Select(book => book.Title).Order(StringComparer.Ordinal).SequenceEqual(expected.Order(StringComparer.Ordinal)),
+                    $"Expanded rule failed: {rule}.");
             }
             Matches(new("Writer", "contains", "ADA"), "Legacy", "Alpha", "Gamma");
             Matches(new("Penciller", "equals", "ink"), "Legacy", "Alpha", "Gamma");
@@ -185,6 +234,30 @@ public static class OrganizationChecks
             Matches(new("Year", "greaterThan", "0"), "Legacy", "Alpha");
             Matches(new("PersonalRating", "equals", "0"), "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
             Matches(new("PersonalRating", "lessThan", "3"), "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+            Matches(new("Year", "notEquals", "0"), "Legacy", "Alpha");
+            Matches(new("Year", "greaterOrEqual", "2005"), "Alpha");
+            Matches(new("Year", "lessOrEqual", "1998"), "Legacy", "Epsilon");
+            Matches(new("Year", "isEmpty", ""), "Beta", "Gamma", "Delta", "Zeta", "Eta");
+            Matches(new("Year", "isNotEmpty", ""), "Legacy", "Alpha", "Epsilon");
+            Matches(new("PersonalRating", "notEquals", "0"), "Legacy", "Alpha", "Beta");
+            Matches(new("PersonalRating", "greaterOrEqual", "3"), "Legacy", "Alpha", "Beta");
+            Matches(new("PersonalRating", "lessOrEqual", "3"), "Alpha", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+            Matches(new("Writer", "notContains", "a"), "Beta", "Delta", "Epsilon", "Zeta", "Eta");
+            Matches(new("Writer", "startsWith", "AD"), "Legacy", "Alpha", "Gamma");
+            Matches(new("Genre", "endsWith", "TERY"), "Legacy", "Beta", "Gamma");
+            Matches(new("Number", "isEmpty", ""), "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+            Matches(new("Number", "isNotEmpty", ""), "Legacy");
+            Matches(new("Location", "endsWith", "/Alpha.cbz"), "Alpha");
+            Matches(new("Folder", "equals", "Library 1"), "Legacy", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+            Matches(new("Availability", "equals", "missing"), "Legacy");
+            Matches(new("Availability", "notEquals", "available"), "Legacy");
+            Matches(new("Availability", "equals", "unavailable"));
+            foreach (var operation in new[] { "contains", "startsWith", "endsWith", "equals" })
+            foreach (var literal in new[] { "%", "_", "' OR 1=1 --" })
+                Matches(new("Title", operation, literal));
+            Matches(new("Title", "notContains", "%"), "Legacy", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+            foreach (var operation in new[] { "startsWith", "endsWith", "contains" })
+                Matches(new("Title", operation, ""), "Legacy", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
             var allRules = smartEdit with { Rules = [new("Writer", "equals", "Ada"), new("Year", "greaterThan", "2000"), new("PersonalRating", "greaterThan", "2")] };
             store.UpdateList(owner.Id, smart.Id, allRules);
             Check(store.ListBooks(owner.Id, null, listId: smart.Id).Items.Single().Id == ids["Alpha"], "All expanded rules did not intersect.");
@@ -196,11 +269,167 @@ public static class OrganizationChecks
             store.UpdateList(owner.Id, smart.Id, smartEdit with { Match = "any", Rules = [new("Writer", "equals", "Ada"), new("Genre", "equals", "Mystery")] });
             Check(store.ListBooks(owner.Id, null, listId: smart.Id).Total == 4, "Any expanded rules lost overlapping matches or counted duplicates.");
             foreach (var rule in new ListRule[] { new("Year", "equals", "-1"), new("Year", "equals", "10000"), new("Year", "equals", "1.5"),
-                new("Year", "contains", "2000"), new("PersonalRating", "equals", "6"), new("PersonalRating", "notEquals", "2"),
-                new("Writer", "greaterThan", "a"), new("Penciller", "equals", null!) })
+                new("Year", "contains", "2000"), new("PersonalRating", "equals", "6"), new("PersonalRating", "isEmpty", ""),
+                new("Writer", "greaterThan", "a"), new("Penciller", "equals", null!), new("Year", "isEmpty", "0"),
+                new("Title", "isNotEmpty", "x"), new("Availability", "contains", "available"), new("Availability", "equals", "other"),
+                new("PageCount", "isEmpty", "") })
+            {
                 Reject<ArgumentException>(() => store.CreateList(owner.Id, smartEdit with { Rules = [rule] }));
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, new("all", [rule])));
+            }
 
             store.SaveProgress(owner.Id, ids["Alpha"], new(0, false));
+            var privatePreview = new SmartListPreview("all", [new("PersonalRating", "greaterOrEqual", "3"), new("ReadStatus", "equals", "in-progress")]);
+            Check(store.PreviewSmartList(owner.Id, privatePreview).Items.Single().Id == ids["Alpha"]
+                && store.PreviewSmartList(admin.Id, privatePreview).Total == 0, "Preview leaked private ratings or progress.");
+            Check(store.PreviewSmartList(admin.Id, new("all", [new("PersonalRating", "greaterThan", "2")])).Total == 0
+                && store.PreviewSmartList(admin.Id, new("all", [new("ReadStatus", "equals", "completed")])).Total == 0
+                && store.PreviewSmartList(owner.Id, new("all", [new("ReadStatus", "equals", "completed")])).Items.Single().Id == ids["Legacy"],
+                "Preview rule joins were not independently scoped to the requesting account.");
+            var adminBook = store.PreviewSmartList(admin.Id, new("all", [new("Title", "equals", "Legacy")])).Items.Single();
+            Check(adminBook.PersonalRating == 2 && !adminBook.Started && !adminBook.Completed,
+                "Preview book results exposed another account's private state.");
+            var previewEdit = new SmartListPreview("any", [new("PersonalRating", "equals", "5"), new("Writer", "equals", "Ada")]);
+            store.UpdateList(owner.Id, smart.Id, smartEdit with { Match = previewEdit.Match, Rules = previewEdit.Rules });
+            var previewPages = Enumerable.Range(1, 2).Select(page => store.PreviewSmartList(owner.Id, previewEdit, page, 2)).ToArray();
+            var savedPreview = store.ListBooks(owner.Id, null, listId: smart.Id);
+            Check(previewPages.All(page => page.Total == 4 && page.Items.Count == 2)
+                && previewPages.SelectMany(page => page.Items).SequenceEqual(savedPreview.Items)
+                && store.PreviewSmartList(owner.Id, previewEdit, int.MaxValue, 2).Page == 2,
+                "Preview pagination differed from saved matching or lost overlapping any-rule matches.");
+            Check(store.PreviewSmartList(owner.Id, new("all", [new("Title", "equals", "absent")]), int.MaxValue).Page == 1,
+                "Empty preview did not normalize its page.");
+            foreach (var json in new[] { "{}", "{\"match\":\"all\"}", "{\"rules\":[]}", "{\"match\":\"all\",\"rules\":[],\"userId\":\"other\"}",
+                "{\"match\":\"all\",\"rules\":[{\"field\":\"Title\",\"operator\":\"isEmpty\"}]}" })
+                Reject<JsonException>(() => JsonSerializer.Deserialize<SmartListPreview>(json, jsonOptions));
+            foreach (var edit in new SmartListPreview[] { null!, new("wrong", [new("Title", "equals", "a")]), new("all", null!), new("all", []),
+                new("all", Enumerable.Repeat(new ListRule("Title", "equals", "a"), 21).ToArray()) })
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, edit));
+            foreach (var (page, size) in new[] { (0, 1), (1, 0), (1, 101) })
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, previewEdit, page, size));
+
+            // Exercise both group operators at each level against independent predicate sets.
+            var ruleSets = new[]
+            {
+                new HashSet<string>(["Legacy", "Alpha", "Gamma"]),
+                new HashSet<string>(["Legacy", "Beta", "Gamma"]),
+                new HashSet<string>(["Legacy", "Alpha", "Beta"]),
+                new HashSet<string>(["Legacy", "Alpha", "Epsilon"])
+            };
+            static bool Combine(string mode, bool left, bool right) => mode == "all" ? left && right : left || right;
+            foreach (var outer in new[] { "all", "any" })
+            foreach (var left in new[] { "all", "any" })
+            foreach (var right in new[] { "all", "any" })
+            {
+                var tree = new SmartListPreview(outer,
+                [
+                    new(Match: left, Rules: [new("Writer", "equals", "Ada"), new("Genre", "equals", "Mystery")]),
+                    new(Match: right, Rules: [new("PersonalRating", "greaterOrEqual", "3"), new("Year", "isNotEmpty", "")])
+                ]);
+                var expected = ids.Where(pair => Combine(outer,
+                    Combine(left, ruleSets[0].Contains(pair.Key), ruleSets[1].Contains(pair.Key)),
+                    Combine(right, ruleSets[2].Contains(pair.Key), ruleSets[3].Contains(pair.Key))))
+                    .Select(pair => pair.Value).Order().ToArray();
+                var preview = store.PreviewSmartList(owner.Id, tree);
+                store.UpdateList(owner.Id, smart.Id, smartEdit with { Match = tree.Match, Rules = tree.Rules });
+                var reopened = new LibraryStore(database, [root]);
+                var savedTree = reopened.GetList(owner.Id, smart.Id);
+                var saved = reopened.ListBooks(owner.Id, null, listId: smart.Id);
+                Check(JsonSerializer.Serialize(savedTree.Rules) == JsonSerializer.Serialize(tree.Rules)
+                    && preview.Total == expected.Length && saved.Total == expected.Length
+                    && preview.Items.SequenceEqual(saved.Items)
+                    && saved.Items.Select(book => book.Id).Order().SequenceEqual(expected)
+                    && reopened.ListGroups(owner.Id, null, "series", listId: smart.Id).Items.Sum(item => item.Count) == expected.Length,
+                    "Nested AND/OR truth table, persistence, counts, or preview/save parity failed.");
+            }
+            var nestedPrivate = new SmartListPreview("all",
+                [new(Match: "any", Rules: [new("PersonalRating", "equals", "5"), new("ReadStatus", "equals", "in-progress")])]);
+            Check(store.PreviewSmartList(owner.Id, nestedPrivate).Total == 3
+                && store.PreviewSmartList(admin.Id, nestedPrivate).Total == 0, "Nested rules leaked private state.");
+            Reject<KeyNotFoundException>(() => store.GetList(admin.Id, smart.Id));
+            Reject<KeyNotFoundException>(() => store.ListBooks(admin.Id, null, listId: smart.Id));
+
+            var extraText = new[] { "Colorist", "Inker", "Letterer", "CoverArtist", "Editor", "LanguageISO", "Format", "AgeRating" };
+            var extraNumbers = new[] { "Volume", "Count", "Month", "Day" };
+            const string literalMetadata = "%_\\' OR 1=1 --";
+            store.EditMetadata(ids["Alpha"], new(extraText.ToDictionary(name => name, _ => (string?)literalMetadata)));
+            store.EditMetadata(ids["Alpha"], new(extraNumbers.ToDictionary(name => name, _ => (string?)"2")));
+            foreach (var name in extraText)
+            {
+                Check(LibraryStore.ListRuleFields.Single(field => field.Name == name).Type == "text", "Missing text rule schema.");
+                foreach (var operation in new[] { "equals", "contains", "startsWith", "endsWith" })
+                    Matches(new(name, operation, literalMetadata), "Alpha");
+                Matches(new(name, "isNotEmpty", ""), "Alpha");
+            }
+            foreach (var name in extraNumbers)
+            {
+                Check(LibraryStore.ListRuleFields.Single(field => field.Name == name).Type == "integer", "Missing numeric rule schema.");
+                Matches(new(name, "equals", "2"), "Alpha");
+                Matches(new(name, "notEquals", "3"), "Alpha");
+                Matches(new(name, "isNotEmpty", ""), "Alpha");
+                store.EditMetadata(ids["Beta"], new(new() { [name] = "-1" }));
+                Matches(new(name, "isEmpty", ""), "Legacy", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta");
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, new("all", [new(name, "equals", "-1")])));
+            }
+            foreach (var (name, value) in new[] { ("Month", "0"), ("Month", "13"), ("Day", "32"), ("Count", "1.5"), ("Volume", "2147483648") })
+            {
+                var xml = XDocument.Parse((string)Scalar("SELECT info_xml FROM books WHERE id=$id", ("$id", ids["Beta"]))!);
+                xml.Root!.SetElementValue(name, value);
+                Execute("UPDATE books SET info_xml=$xml WHERE id=$id", ("$xml", xml.ToString()), ("$id", ids["Beta"]));
+                Matches(new(name, "isNotEmpty", ""), "Alpha");
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, new("all", [new(name, "equals", value)])));
+            }
+            var metadataTree = new SmartListPreview("all", [new(Match: "any",
+                Rules: [new("Colorist", "equals", literalMetadata), new("Count", "greaterThan", "2")])]);
+            store.UpdateList(owner.Id, smart.Id, smartEdit with { Rules = metadataTree.Rules });
+            Check(store.ListBooks(owner.Id, null, listId: smart.Id).Items.Single().Id == ids["Alpha"], "Nested extra fields did not match.");
+            store.EditMetadata(ids["Alpha"], new(new() { ["Colorist"] = "Changed", ["Count"] = "1" }));
+            Check(new LibraryStore(database, [root]).ListBooks(owner.Id, null, listId: smart.Id).Total == 0
+                && store.PreviewSmartList(owner.Id, metadataTree).Total == 0, "Nested rules did not reflect catalog metadata edits.");
+
+            ListRule Nested(int groups)
+            {
+                var rule = new ListRule("Title", "equals", "Alpha");
+                for (var level = 0; level < groups; level++) rule = new(Match: "all", Rules: [rule]);
+                return rule;
+            }
+            Check(store.PreviewSmartList(owner.Id, new("all", [Nested(3)])).Total == 1, "Four group levels should be accepted.");
+            Check(store.PreviewSmartList(owner.Id, new("all", Enumerable.Range(0, 19).Select(_ => Nested(1)).ToArray())).Total == 1,
+                "Twenty total groups should be accepted.");
+            Check(store.PreviewSmartList(owner.Id, new("all", Enumerable.Repeat(Nested(0), 20).ToArray())).Total == 1,
+                "Twenty total leaves should be accepted.");
+            var cyclicRules = new ListRule[1];
+            cyclicRules[0] = new(Match: "all", Rules: cyclicRules);
+            foreach (var invalid in new ListRule[][]
+            {
+                [Nested(4)], Enumerable.Range(0, 20).Select(_ => Nested(1)).ToArray(),
+                [new(Match: "all", Rules: Enumerable.Repeat(Nested(0), 11).ToArray()),
+                    new(Match: "any", Rules: Enumerable.Repeat(Nested(0), 10).ToArray())],
+                [new(Match: "all", Rules: [])], [new(Match: "wrong", Rules: [Nested(0)])],
+                [new(Match: "all")], [new(Rules: [Nested(0)])], [new("Title", "equals", "Alpha", "all", [Nested(0)])],
+                [new()], [null!], cyclicRules
+            })
+            {
+                Reject<ArgumentException>(() => store.PreviewSmartList(owner.Id, new("all", invalid)));
+                Reject<ArgumentException>(() => store.CreateList(owner.Id, smartEdit with { Rules = invalid }));
+                Reject<ArgumentException>(() => store.UpdateList(owner.Id, smart.Id, smartEdit with { Rules = invalid }));
+            }
+            foreach (var json in new[]
+            {
+                "{\"match\":\"all\",\"rules\":[],\"field\":null}",
+                "{\"match\":\"all\",\"rules\":[],\"value\":\"\"}",
+                "{\"field\":\"Title\",\"operator\":\"equals\",\"value\":\"Alpha\",\"rules\":null}",
+                "{\"match\":\"all\",\"rules\":null}", "{\"match\":\"all\",\"rules\":[],\"extra\":1}",
+                "{\"field\":\"Title\",\"field\":\"Series\",\"operator\":\"equals\",\"value\":\"Alpha\"}",
+                string.Concat(Enumerable.Repeat("{\"match\":\"all\",\"rules\":[", 40))
+                    + "{\"field\":\"Title\",\"operator\":\"equals\",\"value\":\"Alpha\"}" + string.Concat(Enumerable.Repeat("]}", 40))
+            })
+                Reject<JsonException>(() => JsonSerializer.Deserialize<ListRule>(json, jsonOptions));
+            var webTree = JsonSerializer.Serialize(metadataTree, jsonOptions);
+            Check(!webTree.Contains("\"field\":null") && !webTree.Contains("\"rules\":null")
+                && JsonSerializer.Serialize(JsonSerializer.Deserialize<SmartListPreview>(webTree, jsonOptions), jsonOptions) == webTree,
+                "Nested rule JSON did not preserve the exclusive group/leaf contract.");
+            store.UpdateList(owner.Id, smart.Id, smartEdit with { Match = previewEdit.Match, Rules = previewEdit.Rules });
             var group = store.ListGroups(owner.Id, null, "series").Items.Single(item => item.Key == "One");
             Check(group is { Count: 3, Unread: 1, InProgress: 1, Completed: 1, CompletionPercent: 33 }, "Series statistics did not partition books or floor completed-book percentage.");
             Check(store.ListGroups(admin.Id, null, "series").Items.All(item => item.Unread == item.Count && item.Completed == 0 && item.InProgress == 0),

@@ -25,22 +25,37 @@ public sealed partial class LibraryStore
     private const long MaxArchiveBytes = 1024L * 1024 * 1024, MaxExpandedBytes = 2L * 1024 * 1024 * 1024;
     private readonly string connectionString;
     private readonly string[] roots;
+    private readonly string? archivePath;
+    private readonly string? unsortedPath;
+    private readonly string archiveBackupRoot;
     private readonly SemaphoreSlim scanLock = new(1, 1);
     internal IReadOnlyList<string> WatchRoots => roots;
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    public LibraryStore(string databasePath, string[] libraryRoots)
+    public LibraryStore(string databasePath, string[] libraryRoots, string? archivePath = null, string? unsortedPath = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
+        archiveBackupRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(databasePath))!, "archive-backups");
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath, ForeignKeys = true, DefaultTimeout = 30
         }.ToString();
         var configuredRoots = libraryRoots.Select(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)))
             .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal).ToArray();
+        this.archivePath = string.IsNullOrWhiteSpace(archivePath) ? null
+            : Path.TrimEndingDirectorySeparator(Path.GetFullPath(archivePath));
+        this.unsortedPath = string.IsNullOrWhiteSpace(unsortedPath) ? null
+            : Path.TrimEndingDirectorySeparator(Path.GetFullPath(unsortedPath));
+        var specialRoots = new[] { this.archivePath, this.unsortedPath }.OfType<string>().ToArray();
+        foreach (var special in specialRoots)
+            if (configuredRoots.Any(root => IsContained(root, special) || IsContained(special, root)))
+                throw new ArgumentException("Archived and Unsorted paths must not overlap regular library paths.");
+        if (this.archivePath is not null && this.unsortedPath is not null
+            && (IsContained(this.archivePath, this.unsortedPath) || IsContained(this.unsortedPath, this.archivePath)))
+            throw new ArgumentException("Archived and Unsorted paths must not overlap.");
         roots = configuredRoots.Where(root => !configuredRoots.Any(other =>
-            !root.Equals(other, PathComparison) && IsContained(other, root))).ToArray();
+            !root.Equals(other, PathComparison) && IsContained(other, root))).Concat(specialRoots).ToArray();
         using var db = Open();
         using var command = Command(db, """
             PRAGMA journal_mode=WAL;
@@ -71,14 +86,20 @@ public sealed partial class LibraryStore
         InitializeLists(db);
         InitializeReader(db);
         InitializeMaintenance(db);
+        InitializePageOrder(db);
         InitializeMetadata(db);
+        InitializeFileOperations(db);
     }
+
+    private string RootLabel(int index) => roots[index].Equals(archivePath, PathComparison) ? "Archived"
+        : roots[index].Equals(unsortedPath, PathComparison) ? "Unsorted" : $"Library {index + 1}";
 
     private SqliteConnection Open()
     {
         var db = new SqliteConnection(connectionString);
         db.Open();
         db.CreateCollation("NATURAL_NUMBER", static (a, b) => NaturalCompare(a ?? "", b ?? ""));
+        db.CreateFunction<string, string, object?>("metadata_scalar", SmartMetadataScalar, isDeterministic: true);
         return db;
     }
 
@@ -181,6 +202,7 @@ public sealed partial class LibraryStore
             if (roots.Length == 0)
                 Error("No library roots are configured. Ask an administrator to configure Libraries.");
             using var db = Open();
+            var reservedPaths = ReservedFileOperationPaths(db);
             var remaining = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
             using (var command = Command(db, "SELECT path FROM books"))
             using (var reader = command.ExecuteReader())
@@ -192,6 +214,7 @@ public sealed partial class LibraryStore
                 while (pending.TryPop(out var directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (IsContained(archiveBackupRoot, directory)) continue;
                     try
                     {
                         EnsureSafePath(root, directory);
@@ -204,6 +227,13 @@ public sealed partial class LibraryStore
                             {
                                 scanned++;
                                 remaining.Remove(path);
+                                if (reservedPaths.Contains(path))
+                                {
+                                    SetAvailability(db, path, "unavailable");
+                                    skipped++;
+                                    Publish();
+                                    continue;
+                                }
                             }
                             try
                             {
@@ -222,7 +252,7 @@ public sealed partial class LibraryStore
                             catch (Exception ex) when (IsArchiveError(ex))
                             {
                                 if (isArchive) MarkImportFailure(db, path);
-                                Error($"{SafeRelative(root, path)}: {(ex is ArchiveFeatureException ? ex.Message : "archive unavailable, invalid, or exceeds safety limits.")}");
+                                Error($"{SafeRelative(root, path)}: {(ex is ArchiveFeatureException ? ex.Message : "comicbook unavailable, invalid, or exceeds safety limits.")}");
                             }
                             if (isArchive) Publish();
                         }
@@ -238,6 +268,11 @@ public sealed partial class LibraryStore
             foreach (var path in remaining)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (reservedPaths.Contains(path))
+                {
+                    SetAvailability(db, path, "unavailable");
+                    continue;
+                }
                 var availability = SourceAvailability(path);
                 if (availability != "available")
                 {
@@ -258,7 +293,7 @@ public sealed partial class LibraryStore
                 catch (Exception ex) when (IsArchiveError(ex))
                 {
                     MarkImportFailure(db, path);
-                    Error($"{SafeRelative(root, path)}: archive unavailable, invalid, or exceeds safety limits.");
+                    Error($"{SafeRelative(root, path)}: comicbook unavailable, invalid, or exceeds safety limits.");
                 }
                 Publish();
             }
@@ -299,7 +334,7 @@ public sealed partial class LibraryStore
         if (existing is not null) SetAvailability(db, path, "unavailable");
         cancellationToken.ThrowIfCancellationRequested();
         using var file = OpenArchive(root, path);
-        if (file.Length != version.Size || ReadSourceVersion(root, path) != version) throw new IOException("Archive changed during scan.");
+        if (file.Length != version.Size || ReadSourceVersion(root, path) != version) throw new IOException("Comicbook changed during scan.");
         using var archive = new ComicArchive(file, path, cancellationToken);
         var metadata = archive.ReadMetadata(cancellationToken);
         var legacy = metadata.Book is null ? null : ReadXml(metadata.Book, "ComicBook", cancellationToken);
@@ -327,9 +362,9 @@ public sealed partial class LibraryStore
         using var transaction = db.BeginTransaction();
         using var command = Command(db, """
             INSERT INTO books(id,path,title,series,number,publisher,summary,page_count,info_xml,book_xml,file_size,modified_ticks,
-                availability,location,folder,content_hash,writer,penciller,genre,year)
+                availability,location,folder,content_hash,writer,penciller,genre,year,added_at)
             VALUES($id,$path,$title,$series,$number,$publisher,$summary,$pages,$xml,$legacy,$size,$ticks,
-                'available',$location,$folder,$hash,$writer,$penciller,$genre,$year)
+                'available',$location,$folder,$hash,$writer,$penciller,$genre,$year,unixepoch())
             ON CONFLICT(path) DO UPDATE SET
                 title=CASE WHEN books.edited=0 THEN excluded.title ELSE books.title END,
                 series=CASE WHEN books.edited=0 THEN excluded.series ELSE books.series END,
@@ -354,7 +389,7 @@ public sealed partial class LibraryStore
         command.Transaction = transaction;
         command.ExecuteNonQuery();
         cancellationToken.ThrowIfCancellationRequested();
-        if (file.Length != version.Size || ReadSourceVersion(root, path) != version) throw new IOException("Archive changed during scan.");
+        if (file.Length != version.Size || ReadSourceVersion(root, path) != version) throw new IOException("Comicbook changed during scan.");
         transaction.Commit();
         return existing is null ? ImportOutcome.Added : ImportOutcome.Updated;
     }
@@ -375,7 +410,7 @@ public sealed partial class LibraryStore
         }
         var root = roots.FirstOrDefault(r => IsContained(r, path)) ?? throw new UnauthorizedAccessException();
         if (ReadSourceVersion(root, path) != (size, ticks))
-            throw new InvalidOperationException("Archive changed; an administrator must rescan the library.");
+            throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
         return (root, path, size, ticks);
     }
 
@@ -391,7 +426,7 @@ public sealed partial class LibraryStore
         var source = GetSource(id, page);
         using var file = OpenArchive(source.Root, source.Path);
         if (file.Length != source.Size || ReadSourceVersion(source.Root, source.Path) != (source.Size, source.Ticks))
-            throw new InvalidOperationException("Archive changed; an administrator must rescan the library.");
+            throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
         using var archive = new ComicArchive(file, source.Path);
         if (page >= archive.Pages.Count) throw new InvalidDataException();
         var entry = archive.Pages[page];
@@ -399,7 +434,7 @@ public sealed partial class LibraryStore
         var mime = ImageMime(entry.Name)!;
         if (!HasImageSignature(bytes, mime)) throw new InvalidDataException();
         if (file.Length != source.Size || ReadSourceVersion(source.Root, source.Path) != (source.Size, source.Ticks))
-            throw new InvalidOperationException("Archive changed; an administrator must rescan the library.");
+            throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
         return new PageData(bytes, mime);
     }
 
@@ -429,7 +464,7 @@ public sealed partial class LibraryStore
             if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException();
     }
 
-    private static FileStream OpenArchive(string root, string path)
+    private static FileStream OpenArchive(string root, string path, string? formatPath = null)
     {
         EnsureSafePath(root, path);
         var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -437,7 +472,7 @@ public sealed partial class LibraryStore
         {
             EnsureSafePath(root, path);
             if (file.Length < 22 || file.Length > MaxArchiveBytes) throw new InvalidDataException();
-            if (Path.GetExtension(path).ToLowerInvariant() is not (".cbz" or ".zip")) return file;
+            if (Path.GetExtension(formatPath ?? path).ToLowerInvariant() is not (".cbz" or ".zip")) return file;
             // Bound the central directory before ZipArchive materializes it. ZIP64/multidisk are deliberately unsupported.
             var tail = new byte[(int)Math.Min(file.Length, 65557)];
             file.Position = file.Length - tail.Length;
@@ -457,6 +492,7 @@ public sealed partial class LibraryStore
                     || count == 0 || count > MaxEntries || directorySize > 16 * 1024 * 1024
                     || (long)directoryOffset + directorySize != file.Length - tail.Length + i)
                     throw new InvalidDataException();
+                ValidateZipHeaders(file, directoryOffset, count);
                 valid = true;
                 break;
             }
@@ -465,6 +501,53 @@ public sealed partial class LibraryStore
             return file;
         }
         catch { file.Dispose(); throw; }
+    }
+
+    private static void ValidateZipHeaders(FileStream file, long directoryOffset, int count)
+    {
+        Span<byte> header = stackalloc byte[46], local = stackalloc byte[30];
+        file.Position = directoryOffset;
+        for (var entry = 0; entry < count; entry++)
+        {
+            file.ReadExactly(header);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x02014b50) throw new InvalidDataException();
+            var flags = BinaryPrimitives.ReadUInt16LittleEndian(header[8..]);
+            if ((flags & (1 | 64 | 8192)) != 0) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header[20..]) == uint.MaxValue
+                || BinaryPrimitives.ReadUInt32LittleEndian(header[24..]) == uint.MaxValue
+                || BinaryPrimitives.ReadUInt16LittleEndian(header[34..]) != 0)
+                throw new InvalidDataException("ZIP64 and multipart comicbooks are not supported.");
+            var offset = BinaryPrimitives.ReadUInt32LittleEndian(header[42..]);
+            file.Position += BinaryPrimitives.ReadUInt16LittleEndian(header[28..]);
+            ValidateZipExtra(file, BinaryPrimitives.ReadUInt16LittleEndian(header[30..]));
+            file.Position += BinaryPrimitives.ReadUInt16LittleEndian(header[32..]);
+            var next = file.Position;
+            if (offset >= directoryOffset) throw new InvalidDataException();
+            file.Position = offset;
+            file.ReadExactly(local);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(local) != 0x04034b50
+                || BinaryPrimitives.ReadUInt16LittleEndian(local[6..]) != flags) throw new InvalidDataException();
+            file.Position += BinaryPrimitives.ReadUInt16LittleEndian(local[26..]);
+            ValidateZipExtra(file, BinaryPrimitives.ReadUInt16LittleEndian(local[28..]));
+            file.Position = next;
+        }
+    }
+
+    private static void ValidateZipExtra(FileStream file, int remaining)
+    {
+        Span<byte> header = stackalloc byte[4];
+        if (file.Position + remaining > file.Length) throw new InvalidDataException();
+        while (remaining != 0)
+        {
+            if (remaining < 4) throw new InvalidDataException();
+            file.ReadExactly(header);
+            var kind = BinaryPrimitives.ReadUInt16LittleEndian(header);
+            var length = BinaryPrimitives.ReadUInt16LittleEndian(header[2..]);
+            if (kind == 1) throw new InvalidDataException("ZIP64 comicbooks are not supported.");
+            if (length > remaining - 4) throw new InvalidDataException();
+            remaining -= 4 + length;
+            file.Position += length;
+        }
     }
 
 

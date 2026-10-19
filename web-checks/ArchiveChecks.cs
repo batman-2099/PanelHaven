@@ -127,7 +127,7 @@ public static class ArchiveChecks
             try { invalid.GetPage(understated.Id, 0); }
             catch (InvalidDataException) { pageRejected = true; }
             Check(pageRejected, "An understated ZIP entry reached the reader as an invalid image.");
-            Check(rejected.Errors.Count(e => e.Contains("Encrypted archives")) == 3 && rejected.Errors.Any(e => e.Contains("Multipart archives")),
+            Check(rejected.Errors.Count(e => e.Contains("Encrypted")) == 3 && rejected.Errors.Any(e => e.Contains("Multipart")),
                 "Encrypted/multipart scan errors were not explicit.");
             Check(rejected.Errors.All(e => !e.Contains(directory)), "Archive errors leaked source paths.");
         }

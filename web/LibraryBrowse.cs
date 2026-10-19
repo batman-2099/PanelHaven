@@ -19,7 +19,7 @@ public sealed partial class LibraryStore
     public BookPage ListBooks(string user, string? query, int page = 1, int pageSize = 48,
         string sort = "series", string direction = "asc", string status = "all", string? publisher = null,
         string? listId = null, string availability = "all", string groupBy = "none", string? groupKey = null,
-        int? rating = null)
+        int? rating = null, string location = "library")
     {
         var groupColumn = GroupColumn(groupBy);
         if (groupKey is not null && groupColumn is null)
@@ -47,29 +47,35 @@ public sealed partial class LibraryStore
         };
         using var command = Command(db, "");
         command.Transaction = transaction;
-        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating);
+        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location);
         if (groupKey is not null)
         {
             filter += " AND " + groupColumn + "=$groupKey";
             command.Parameters.AddWithValue("$groupKey", groupKey);
         }
+        var result = ReadBookPage(command, filter, order + ordering, page, pageSize);
+        transaction.Commit();
+        return result;
+    }
+
+    private static BookPage ReadBookPage(SqliteCommand command, string filter, string order, int page, int pageSize)
+    {
         command.CommandText = "SELECT COUNT(*)" + filter;
         var total = Convert.ToInt32(command.ExecuteScalar());
         page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
-        command.CommandText = "SELECT " + BookColumns + filter + " ORDER BY " + order + ordering
+        command.CommandText = "SELECT " + BookColumns + filter + " ORDER BY " + order
             + ",b.id LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * (long)pageSize);
         var result = new List<Book>(Math.Min(pageSize, total));
         using (var reader = command.ExecuteReader())
             while (reader.Read()) result.Add(ReadBook(reader, false));
-        transaction.Commit();
         return new BookPage(result, total, page, pageSize);
     }
 
     public BookGroupPage ListGroups(string user, string? query, string groupBy, int page = 1,
         int pageSize = 48, string status = "all", string? publisher = null, string? listId = null,
-        string availability = "all", int? rating = null)
+        string availability = "all", int? rating = null, string location = "library")
     {
         var column = GroupColumn(groupBy) ?? throw new ArgumentException("A grouping is required.");
         if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
@@ -78,7 +84,7 @@ public sealed partial class LibraryStore
         var list = listId is null ? null : LoadList(db, transaction, user, listId);
         using var command = Command(db, "");
         command.Transaction = transaction;
-        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating);
+        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location);
         var grouped = filter + " GROUP BY " + column;
         command.CommandText = "SELECT COUNT(*) FROM (SELECT " + column + grouped + ")";
         var total = Convert.ToInt32(command.ExecuteScalar());
@@ -107,8 +113,8 @@ public sealed partial class LibraryStore
         _ => throw new ArgumentException("Invalid grouping.")
     };
 
-    private static string BrowseFilter(SqliteCommand command, string user, string? query, string status,
-        string? publisher, string availability, NativeList? list, int? rating)
+    private string BrowseFilter(SqliteCommand command, string user, string? query, string status,
+        string? publisher, string availability, NativeList? list, int? rating, string location)
     {
         if (query?.Length > 2000) throw new ArgumentException("Search is too long.");
         if (publisher?.Length > 2000) throw new ArgumentException("Publisher is too long.");
@@ -124,7 +130,7 @@ public sealed partial class LibraryStore
         var filter = BookFrom + """
             WHERE ($q='' OR instr(lower(b.title || ' ' || b.series || ' ' || b.number || ' ' || b.publisher || ' ' || b.summary),lower($q))>0)
             AND (
-            """ + progressFilter + ")";
+            """ + progressFilter + ") AND " + LocationFilter(command, location);
         command.Parameters.AddWithValue("$user", user);
         command.Parameters.AddWithValue("$q", query?.Trim() ?? "");
         if (!string.IsNullOrEmpty(publisher))
@@ -146,10 +152,33 @@ public sealed partial class LibraryStore
         return filter;
     }
 
-    public List<string> ListPublishers()
+    private string LocationFilter(SqliteCommand command, string location)
+    {
+        string Within(string? root, string parameter)
+        {
+            if (root is null) return "0";
+            var key = PathKey(root);
+            command.Parameters.AddWithValue(parameter, key);
+            command.Parameters.AddWithValue(parameter + "Prefix",
+                Path.EndsInDirectorySeparator(key) ? key : key + Path.DirectorySeparatorChar);
+            // Stored paths use PathKey; instr is literal and case-sensitive, unlike SQLite LIKE.
+            return $"(b.path={parameter} OR instr(b.path,{parameter}Prefix)=1)";
+        }
+        return location switch
+        {
+            "library" => "(NOT " + Within(archivePath, "$archived") + " AND NOT " + Within(unsortedPath, "$unsorted") + ")",
+            "archived" => Within(archivePath, "$archived"),
+            "unsorted" => Within(unsortedPath, "$unsorted"),
+            _ => throw new ArgumentException("Invalid library location.")
+        };
+    }
+
+    public List<string> ListPublishers(string location = "library")
     {
         using var db = Open();
-        using var command = Command(db, "SELECT DISTINCT publisher FROM books WHERE publisher<>'' ORDER BY publisher COLLATE NOCASE,publisher");
+        using var command = Command(db, "");
+        command.CommandText = "SELECT DISTINCT b.publisher FROM books b WHERE b.publisher<>'' AND "
+            + LocationFilter(command, location) + " ORDER BY b.publisher COLLATE NOCASE,b.publisher";
         using var reader = command.ExecuteReader();
         var result = new List<string>();
         while (reader.Read()) result.Add(reader.GetString(0));

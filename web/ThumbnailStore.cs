@@ -64,7 +64,7 @@ public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) 
     private void EnsureRevision(string id, string revision)
     {
         if (library.GetCoverVersion(id) != revision)
-            throw new InvalidOperationException("Archive changed; an administrator must rescan the library.");
+            throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
     }
 
     private static byte[] Render(byte[] source, CancellationToken cancellationToken)

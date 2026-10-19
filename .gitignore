@@ -2,5 +2,7 @@
 **/obj/
 web/data/
 web/data.state.lock
+web/data.backup.lock
+__pycache__/
 .env
 /upstream/

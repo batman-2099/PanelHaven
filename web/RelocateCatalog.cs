@@ -9,17 +9,14 @@ public static class RelocateCatalog
 {
     public static bool Run(IConfiguration configuration, string dataPath, string[] roots)
     {
+        StateMaintenance.ValidateOptions(configuration, dataPath);
         var from = configuration["relocate-from"];
         var to = configuration["relocate-to"];
         var applyText = configuration["apply-relocation"];
         if (from is null && to is null && applyText is null) return false;
-        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to)
-            || !Path.IsPathFullyQualified(from) || !Path.IsPathFullyQualified(to))
-            throw new ArgumentException("Relocation requires absolute --relocate-from and --relocate-to roots.");
-        var apply = false;
-        if (applyText is not null && !bool.TryParse(applyText, out apply))
-            throw new ArgumentException("--apply-relocation must be true or false; omit it for a preview.");
-        LibraryStore.Relocate(Path.Combine(dataPath, "panelhaven.sqlite"), roots, from, to, apply);
+        var apply = applyText is not null && bool.Parse(applyText);
+        using var gate = StateMaintenance.AcquireBackupGate(dataPath);
+        LibraryStore.Relocate(Path.Combine(dataPath, "panelhaven.sqlite"), roots, from!, to!, apply);
         return true;
     }
 }
@@ -55,12 +52,33 @@ public sealed partial class LibraryStore
             ForeignKeys = true, Pooling = false
         }.ToString());
         db.Open();
+        RefuseFileOperationRelocation(db, from, to);
         db.CreateCollation("NATURAL_NUMBER", static (a, b) => NaturalCompare(a ?? "", b ?? ""));
         var prefix = PathKey(Path.EndsInDirectorySeparator(from) ? from : from + Path.DirectorySeparatorChar);
         var sources = new List<(string Id, string Path)>();
         using (var command = Command(db, "SELECT id,path FROM books WHERE substr(path,1,length($prefix))=$prefix ORDER BY path", ("$prefix", prefix)))
         using (var reader = command.ExecuteReader())
             while (reader.Read()) sources.Add((reader.GetString(0), reader.GetString(1)));
+        var sourceIds = sources.Select(book => book.Id).ToHashSet(StringComparer.Ordinal);
+        // A book may have moved out of this root while its undo destination still lives here.
+        foreach (var table in new[] { "file_operations", "book_path_provenance" })
+        {
+            if (!RelocationTableExists(db, table)) continue;
+            using var command = Command(db, $"""
+                SELECT DISTINCT b.id,b.path FROM books b JOIN {table} h ON h.book_id=b.id
+                WHERE {(table == "file_operations" ? "substr(h.source,1,length($prefix))=$prefix OR " : "")}substr(h.destination,1,length($prefix))=$prefix
+                """, ("$prefix", prefix));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                if (sourceIds.Add(reader.GetString(0))) sources.Add((reader.GetString(0), reader.GetString(1)));
+        }
+        if (RelocationTableExists(db, "file_operations"))
+            foreach (var (id, _) in sources)
+            {
+                using var command = Command(db, "SELECT 1 FROM file_operations WHERE book_id=$id AND state='pending'", ("$id", id));
+                if (command.ExecuteScalar() is not null)
+                    throw new InvalidOperationException("Resolve pending file operations for books with relevant relocation history first.");
+            }
         var mapped = 0;
         var skipped = 0;
         var conflicts = 0;
@@ -68,15 +86,18 @@ public sealed partial class LibraryStore
         var merged = 0;
         foreach (var (id, source) in sources)
         {
+            if (!sourceIds.Contains(id)) continue;
             try
             {
-                if (!Path.IsPathFullyQualified(source) || !Path.GetFullPath(source).Equals(source, PathComparison)
-                    || !IsContained(from, source)) throw new InvalidDataException("Noncanonical source catalog path.");
-                var relative = Path.GetRelativePath(from, source);
-                var destination = Path.GetFullPath(Path.Combine(to, relative));
-                if (!IsContained(to, destination)) throw new InvalidDataException("Destination escapes its configured root.");
-                var version = ReadSourceVersion(to, destination);
-                using var file = OpenArchive(to, destination);
+                if (!Path.IsPathFullyQualified(source) || !Path.GetFullPath(source).Equals(source, PathComparison))
+                    throw new InvalidDataException("Noncanonical source catalog path.");
+                var moving = IsContained(from, source);
+                var relative = moving ? Path.GetRelativePath(from, source) : source;
+                var destination = RelocatedPath(source, from, to);
+                var destinationRoot = moving ? to : roots.FirstOrDefault(root => IsContained(root, destination))
+                    ?? throw new InvalidDataException("Book with relevant history is outside configured libraries.");
+                var version = ReadSourceVersion(destinationRoot, destination);
+                using var file = OpenArchive(destinationRoot, destination);
                 using var archive = new ComicArchive(file, destination);
                 // Validate the archive, not just a stale catalog fingerprint, before accepting any mapping.
                 var metadata = archive.ReadMetadata(default);
@@ -86,7 +107,7 @@ public sealed partial class LibraryStore
                     foreach (var element in freshBook.Root!.Elements()) freshInfo.Root!.Add(new XElement(element));
                 file.Position = 0;
                 var hash = Convert.ToHexString(SHA256.HashData(file));
-                if (file.Length != version.Size || ReadSourceVersion(to, destination) != version)
+                if (file.Length != version.Size || ReadSourceVersion(destinationRoot, destination) != version)
                     throw new IOException("Destination changed during validation; rescan and retry.");
                 using var transaction = db.BeginTransaction(deferred: !apply);
                 using var command = Command(db, "SELECT content_hash,edited,info_xml,book_xml FROM books WHERE id=$old AND path=$source",
@@ -104,7 +125,7 @@ public sealed partial class LibraryStore
                     oldInfo = reader.GetString(2);
                     oldBook = reader.IsDBNull(3) ? null : reader.GetString(3);
                 }
-                var alias = historicalHash is null && AliasCorresponds();
+                var alias = moving && historicalHash is null && AliasCorresponds();
                 if (historicalHash is not null && !historicalHash.Equals(hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Historical SHA256 differs from destination; no relocation.");
                 if (historicalHash is null && !alias)
@@ -114,7 +135,7 @@ public sealed partial class LibraryStore
                 var bookXml = oldEdited ? oldBook : oldBook ?? freshBook?.ToString(SaveOptions.DisableFormatting);
                 var edited = oldEdited;
                 var conflict = "";
-                command.CommandText = "SELECT id,edited,info_xml,book_xml FROM books WHERE path=$path";
+                command.CommandText = "SELECT id,edited,info_xml,book_xml FROM books WHERE path=$path AND id<>$old";
                 using (var reader = command.ExecuteReader())
                 {
                     if (reader.Read())
@@ -150,6 +171,22 @@ public sealed partial class LibraryStore
                 command.CommandText = "SELECT 1 FROM progress WHERE book_id IN ($old,$new) AND page >= $pages UNION ALL SELECT 1 FROM bookmarks WHERE book_id IN ($old,$new) AND page >= $pages LIMIT 1";
                 command.Parameters.AddWithValue("$pages", archive.Pages.Count);
                 if (command.ExecuteScalar() is not null) conflict += (conflict.Length == 0 ? "" : "; ") + "saved page exceeds destination page count";
+                if (RelocationTableExists(db, "page_metadata_edits", transaction))
+                {
+                    command.CommandText = "SELECT 1 FROM page_metadata_edits WHERE book_id IN ($old,$new) AND page >= $pages LIMIT 1";
+                    if (command.ExecuteScalar() is not null) conflict += (conflict.Length == 0 ? "" : "; ") + "edited page exceeds destination page count";
+                }
+                if (RelocationTableExists(db, "page_orders", transaction))
+                {
+                    command.Parameters.AddWithValue("$orderHash", hash);
+                    command.CommandText = """
+                        SELECT 1 FROM page_orders WHERE book_id IN ($old,$new) AND pages_json IS NOT NULL AND source_hash IS NOT $orderHash
+                        UNION ALL
+                        SELECT 1 FROM page_orders a JOIN page_orders b ON a.book_id=$old AND b.book_id=$new
+                        WHERE a.pages_json IS NOT NULL AND b.pages_json IS NOT NULL AND a.pages_json<>b.pages_json LIMIT 1
+                        """;
+                    if (command.ExecuteScalar() is not null) conflict += (conflict.Length == 0 ? "" : "; ") + "page orders differ or source changed";
+                }
                 if (conflict.Length != 0)
                 {
                     conflicts++;
@@ -157,12 +194,14 @@ public sealed partial class LibraryStore
                     continue;
                 }
                 if (Encoding.UTF8.GetByteCount(infoXml) > MaxXmlBytes) throw new InvalidDataException("Metadata exceeds the catalog limit.");
+                var historyPaths = RelocationPaths(db, transaction, id, destinationId, source, from, to);
                 var info = ParseXml(infoXml, "ComicInfo").Root!;
                 string Field(string name) => info.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value ?? "";
                 var title = Field("Title");
                 if (string.IsNullOrWhiteSpace(title)) title = Path.GetFileNameWithoutExtension(destination);
                 if (apply)
                 {
+                    ApplyRelocationHistory(db, transaction, id, destinationId, historyPaths);
                     foreach (var (table, columns) in new[]
                     {
                         ("progress", "user_id,page,completed"), ("ratings", "user_id,rating"),
@@ -172,11 +211,23 @@ public sealed partial class LibraryStore
                         command.CommandText = $"INSERT INTO {table}(book_id,{columns}) SELECT $old,{columns} FROM {table} WHERE book_id=$new ON CONFLICT DO NOTHING";
                         command.ExecuteNonQuery();
                     }
+                    if (RelocationTableExists(db, "page_orders", transaction))
+                    {
+                        command.CommandText = """
+                            INSERT INTO page_orders(book_id,source_hash,revision,pages_json)
+                            SELECT $old,source_hash,lower(hex(randomblob(16))),pages_json FROM page_orders WHERE book_id=$new
+                            ON CONFLICT(book_id) DO UPDATE SET source_hash=excluded.source_hash,
+                                revision=excluded.revision,pages_json=excluded.pages_json
+                            WHERE page_orders.pages_json IS NULL AND excluded.pages_json IS NOT NULL
+                            """;
+                        command.ExecuteNonQuery();
+                    }
                     command.CommandText = "DELETE FROM books WHERE id=$new";
                     command.ExecuteNonQuery();
-                    var displayRelative = Path.GetRelativePath(roots[rootIndex], destination).Replace(Path.DirectorySeparatorChar, '/');
+                    var destinationIndex = moving ? rootIndex : Array.FindIndex(roots, root => IsContained(root, destination));
+                    var displayRelative = Path.GetRelativePath(roots[destinationIndex], destination).Replace(Path.DirectorySeparatorChar, '/');
                     displayRelative = new string(displayRelative.Select(c => char.IsControl(c) ? '_' : c).ToArray());
-                    var location = $"Library {rootIndex + 1}/{displayRelative}";
+                    var location = $"Library {destinationIndex + 1}/{displayRelative}";
                     var folder = location[..location.LastIndexOf('/')];
                     command.CommandText = """
                         UPDATE books SET path=$path,title=$title,series=$series,number=$number,publisher=$publisher,summary=$summary,
@@ -193,9 +244,10 @@ public sealed partial class LibraryStore
                     }) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
                     command.ExecuteNonQuery();
                 }
-                if (file.Length != version.Size || ReadSourceVersion(to, destination) != version || (alias && !AliasCorresponds()))
+                if (file.Length != version.Size || ReadSourceVersion(destinationRoot, destination) != version || (alias && !AliasCorresponds()))
                     throw new IOException("Filesystem correspondence changed before commit; this pair was rolled back.");
                 if (apply) transaction.Commit();
+                if (destinationId is not null) sourceIds.Remove(destinationId);
                 mapped++;
                 if (apply) { applied++; if (destinationId is not null) merged++; }
                 Console.WriteLine($"{(apply ? "APPLIED" : "MAPPED")} {id} {relative}: {(destinationId is null ? "move path" : "merge " + destinationId)}; "

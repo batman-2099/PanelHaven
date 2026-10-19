@@ -180,13 +180,14 @@ public static class AccountChecks
             var adminList = library.CreateList(admin.Id, listEdit);
             library.AddListBooks(reader.Id, readerList.Id, [bookId]);
             library.AddListBooks(admin.Id, adminList.Id, [bookId]);
+            library.GetLists(reader.Id);
             var originalXml = Scalar("SELECT info_xml FROM books WHERE id=$id", ("$id", bookId));
             var originalBytes = File.ReadAllBytes(archivePath);
             readerSession = Accounts.Principal(reader);
             accounts.DeleteUser(admin.Id, 0, reader.Id);
             Check(accounts.ValidateSession(readerSession) is null && accounts.Authenticate(reader.Username, "reader-final-password") is null,
                 "Deleted account still authenticated.");
-            foreach (var table in new[] { "progress", "bookmarks", "lists", "reader_preferences" })
+            foreach (var table in new[] { "progress", "bookmarks", "lists", "reader_preferences", "default_list_seeds" })
                 Check((long)Scalar($"SELECT COUNT(*) FROM {table} WHERE user_id=$id", ("$id", reader.Id))! == 0, "Deletion left private rows in " + table);
             Check((long)Scalar("SELECT COUNT(*) FROM list_books WHERE list_id=$id", ("$id", readerList.Id))! == 0,
                 "Deleted list membership did not cascade.");
@@ -203,7 +204,8 @@ public static class AccountChecks
                 Reject<SqliteException>(() => Execute($"UPDATE {table} SET user_id=$deleted WHERE user_id=$admin", ("$deleted", reader.Id), ("$admin", admin.Id)));
             Reject<KeyNotFoundException>(() => library.AddListBooks(reader.Id, readerList.Id, [bookId]));
             var replacement = accounts.CreateManaged(admin.Id, 0, reader.Username, "replacement-password", "reader");
-            Check(replacement.Id != reader.Id && library.GetLists(replacement.Id).Count == 0 && library.GetBookmarks(replacement.Id, bookId).Count == 0
+            Check(replacement.Id != reader.Id && library.GetLists(replacement.Id).All(list => list.Name == "Recently added")
+                && library.GetBookmarks(replacement.Id, bookId).Count == 0
                 && !library.GetBook(replacement.Id, bookId).Started, "Recreated username inherited deleted private data.");
             var successor = accounts.CreateManaged(admin.Id, 0, "successor", "successor-password", "admin");
             accounts.DeleteUser(admin.Id, 0, admin.Id);

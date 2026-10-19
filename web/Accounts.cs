@@ -315,7 +315,7 @@ public sealed class Accounts
         PreserveAdministrator(db, transaction, account);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
-        foreach (var table in new[] { "progress", "bookmarks", "lists", "ratings", "list_folders" })
+        foreach (var table in new[] { "progress", "bookmarks", "lists", "ratings", "list_folders", "default_list_seeds" })
         {
             command.CommandText = "SELECT 1 FROM sqlite_schema WHERE type='table' AND name=$table";
             command.Parameters.Clear();

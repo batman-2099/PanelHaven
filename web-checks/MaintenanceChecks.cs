@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 using PanelHaven.Web;
 using Microsoft.Data.Sqlite;
 
@@ -89,9 +90,12 @@ public static class MaintenanceChecks
                 && book.Location == "Library 1/Series/original.cbz" && book.Availability == "available",
                 "Migration changed old metadata/history or exposed an unsafe location.");
             Check((string?)Scalar("SELECT content_hash FROM books WHERE id=$id") == hash, "Duplicate hash is not SHA256 of actual source bytes.");
-            store.EditMetadata(id, new(new() { ["Title"] = "Edited in web" }));
+            store.EditMetadata(id, new(new() { ["Title"] = "Edited in web", ["PageCount"] = "99" },
+                new() { ["Edition,=Note"] = "Catalog-only,=value" }));
             store.SaveBookmark("alice", id, 1, new("Remember"));
             store.SaveProgress("bob", id, new(0, false));
+            store.SaveRating("alice", id, new(5));
+            store.SaveRating("bob", id, new(2));
             var list = store.CreateList("alice", new("Keep", "manual", "all", []));
             store.AddListBooks("alice", list.Id, [id]);
             var editedXml = store.GetBook("alice", id).Metadata!["comicInfoXml"]!.ToString();
@@ -99,8 +103,10 @@ public static class MaintenanceChecks
             {
                 var current = store.GetBook("alice", id);
                 Check(current.Title == "Edited in web" && current.CurrentPage == 1 && current.Completed
+                    && current.PersonalRating == 5 && current.PageCount == 2
                     && current.Metadata!["comicInfoXml"]!.ToString() == editedXml
-                    && store.GetBook("bob", id).Started
+                    && store.GetBook("bob", id) is { Started: true, CurrentPage: 0, Completed: false, PersonalRating: 2 }
+                    && store.GetMetadata(id).Custom["Edition,=Note"] == "Catalog-only,=value"
                     && store.GetBookmarks("alice", id).Single() == new ReaderBookmark(1, "Remember")
                     && store.GetList("alice", list.Id).BookIds!.SequenceEqual(new[] { id }),
                     "Maintenance changed metadata, progress, bookmarks, or list membership.");
@@ -114,6 +120,52 @@ public static class MaintenanceChecks
             Check(first.Total == 2 && second.Total == 2 && first.Items[0].Id != second.Items[0].Id
                 && first.Items[0].DuplicateKey == second.Items[0].DuplicateKey
                 && store.ListMaintenance("duplicates", int.MaxValue, 1).Page == 2, "Duplicate pagination lost group continuity.");
+            var copyId = duplicates.Items.Single(b => b.Id != id).Id;
+            var differentId = store.ListBooks("alice", null).Items.Single(b => b.Location.EndsWith("/different.cbz", StringComparison.Ordinal)).Id;
+            store.SaveProgress("bob", copyId, new(1, true));
+            store.SaveRating("bob", copyId, new(4));
+            var comparison = store.CompareDuplicates("alice", id);
+            Check(comparison.Anchor.Book.Id == id && comparison.Total == 1 && comparison.Page == 1
+                && comparison.PageSize == 3 && comparison.DuplicateKey == hash && comparison.Items.Single().Book.Id == copyId,
+                "Comparison included a metadata-similar nonduplicate or lost its anchor/hash.");
+            Check(comparison.Anchor.Metadata.Fields["Title"] == "Edited in web"
+                && comparison.Items[0].Metadata.Fields["Title"] == "Same title"
+                && comparison.Anchor.Metadata.Fields["PageCount"] == "99" && comparison.Anchor.Book.PageCount == 2
+                && comparison.Items[0].Book.PageCount == 2
+                && comparison.Anchor.Metadata.Custom["Edition,=Note"] == "Catalog-only,=value"
+                && comparison.Items[0].Metadata.Custom.Count == 0,
+                "Comparison lost catalog scalar/custom differences or confused declared and physical page counts.");
+            Check(comparison.Anchor.Book is { CurrentPage: 1, Completed: true, PersonalRating: 5 }
+                && comparison.Items[0].Book is { Started: false, CurrentPage: 0, Completed: false, PersonalRating: 0 },
+                "Comparison leaked another account's peer progress or rating.");
+            var bobComparison = store.CompareDuplicates("bob", copyId);
+            Check(bobComparison.Anchor.Book is { Id: var bobAnchor, CurrentPage: 1, Completed: true, PersonalRating: 4 }
+                && bobAnchor == copyId && bobComparison.Items.Single().Book is { Id: id, CurrentPage: 0, Completed: false, PersonalRating: 2 },
+                "Reanchored comparison did not use the requesting account on both sides.");
+            var outsider = store.CompareDuplicates("outsider", id);
+            Check(!outsider.Anchor.Book.Started && outsider.Anchor.Book.PersonalRating == 0
+                && outsider.Items.All(item => !item.Book.Started && item.Book.PersonalRating == 0)
+                && comparison.Anchor.Book.Metadata is null && comparison.Items.All(item => item.Book.Metadata is null)
+                && !JsonSerializer.Serialize(comparison).Contains(directory, StringComparison.Ordinal),
+                "Comparison exposed other users' state, raw source metadata, or absolute host paths.");
+            Reject<KeyNotFoundException>(() => store.CompareDuplicates("alice", "unknown"));
+            Reject<KeyNotFoundException>(() => store.CompareDuplicates("alice", differentId));
+            Reject<ArgumentException>(() => store.CompareDuplicates("alice", id, 0));
+            Reject<ArgumentException>(() => store.CompareDuplicates("alice", id, pageSize: 0));
+            Reject<ArgumentException>(() => store.CompareDuplicates("alice", id, pageSize: 4));
+            Check(store.CompareDuplicates("alice", id, int.MaxValue, 1).Page == 1, "Single-peer comparison did not clamp pages.");
+            var comparisonOffline = Path.Combine(directory, "comparison-offline");
+            Directory.Move(root, comparisonOffline);
+            try
+            {
+                Check(JsonSerializer.Serialize(store.CompareDuplicates("alice", id)) == JsonSerializer.Serialize(comparison),
+                    "Comparison accessed source archives instead of the last-scan catalog.");
+            }
+            finally { Directory.Move(comparisonOffline, root); }
+            Preserved();
+            Check(File.ReadAllBytes(copy).SequenceEqual(sourceBytes) && File.ReadAllBytes(different).SequenceEqual(differentBytes)
+                && store.GetBook("bob", copyId) is { CurrentPage: 1, Completed: true, PersonalRating: 4 },
+                "Comparison changed source bytes or a peer's private state.");
             Reject<ArgumentException>(() => store.ListMaintenance("all"));
             Reject<ArgumentException>(() => store.ListMaintenance("missing", 0));
             Reject<ArgumentException>(() => store.ListMaintenance("missing", pageSize: 101));
@@ -124,13 +176,14 @@ public static class MaintenanceChecks
             Check(File.ReadAllBytes(original).SequenceEqual(sourceBytes), "Maintenance or metadata editing wrote to the source archive.");
 
             // A changed invalid source must retain its catalog/history but stop counting as a duplicate.
-            var copyId = duplicates.Items.Single(b => b.Id != id).Id;
             File.WriteAllText(copy, "corrupt replacement");
             scan = store.ScanAsync(default).GetAwaiter().GetResult();
             Check(scan.ErrorCount == 1 && store.GetBook("alice", copyId).Availability == "unavailable"
                 && store.ListMaintenance("duplicates").Total == 0,
                 "Changed corrupt sources counted as current duplicates or disappeared from the catalog.");
             Reject<InvalidOperationException>(() => store.RemoveMissingBook(copyId));
+            Reject<KeyNotFoundException>(() => store.CompareDuplicates("alice", copyId));
+            Reject<KeyNotFoundException>(() => store.CompareDuplicates("alice", id));
             File.WriteAllBytes(copy, sourceBytes);
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(store.ListMaintenance("duplicates").Total == 2, "Restored corrupt archive was not revalidated.");
@@ -138,6 +191,14 @@ public static class MaintenanceChecks
             File.SetLastWriteTimeUtc(different, DateTime.UtcNow.AddSeconds(5));
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(store.ListMaintenance("duplicates").Total == 3, "Valid changed sources were not rehashed.");
+            var peerPages = new[] { store.CompareDuplicates("alice", id, 1, 1), store.CompareDuplicates("alice", id, 2, 1) };
+            var peerIds = peerPages.SelectMany(result => result.Items).Select(item => item.Book.Id).ToArray();
+            var expectedPeers = store.ListMaintenance("duplicates").Items.Where(item => item.Id != id).Select(item => item.Id);
+            Check(peerPages.All(result => result.Anchor.Book.Id == id && result.Total == 2 && result.Items.Count == 1)
+                && peerIds.SequenceEqual(expectedPeers) && peerIds.Distinct().Count() == 2
+                && store.CompareDuplicates("alice", id, int.MaxValue, 1).Page == 2
+                && store.CompareDuplicates("alice", id, pageSize: 3).Items.Count == 2,
+                "Comparison pagination lost its anchor, stable peer order, or page bounds.");
             File.WriteAllBytes(different, differentBytes);
             File.SetLastWriteTimeUtc(different, DateTime.UtcNow.AddSeconds(10));
             store.ScanAsync(default).GetAwaiter().GetResult();
@@ -187,6 +248,7 @@ public static class MaintenanceChecks
             Check(scan.ErrorCount == 1 && store.ListMaintenance("missing").Items.Single().Id == id
                 && store.ListBooks("alice", null).Total == 3 && store.ListMaintenance("duplicates").Total == 0,
                 "Partial discovery errors hid confirmed missing sources or deleted catalog rows.");
+            Reject<KeyNotFoundException>(() => store.CompareDuplicates("alice", id));
             File.Delete(bad);
             Preserved();
             File.WriteAllBytes(original, sourceBytes);

@@ -66,17 +66,17 @@ public sealed partial class LibraryStore
                 if (zip is not null)
                     foreach (var e in zip.Entries)
                     {
-                        if (e.IsEncrypted) throw new ArchiveFeatureException("Encrypted archives are not supported.");
+                        if (e.IsEncrypted) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                         Add(e.FullName, e.Length, e.CompressedLength, e.Name.Length == 0, e.ExternalAttributes >> 16, e, null);
                     }
                 else
                     foreach (var e in archive!.Entries)
                     {
-                        if (e.IsEncrypted) throw new ArchiveFeatureException("Encrypted archives are not supported.");
+                        if (e.IsEncrypted) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                         // SevenZip's FilePart.Index is a file index, not a volume index.
                         if (!e.IsComplete || e.IsSplitAfter || archive.Type == SharpCompress.Common.ArchiveType.Rar
                             && (e.VolumeIndexFirst != 0 || e.VolumeIndexLast != 0))
-                            throw new ArchiveFeatureException("Multipart archives are not supported.");
+                            throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                         if (e.LinkTarget is not null) throw new InvalidDataException();
                         // TAR exposes links separately; its inherited Attrib getter is not implemented.
                         var attributes = e is SharpCompress.Common.Tar.TarEntry ? 0 : e.Attrib ?? 0;
@@ -88,7 +88,7 @@ public sealed partial class LibraryStore
             catch (Exception ex) when (DecoderError(ex))
             {
                 Dispose();
-                throw new InvalidDataException("Invalid archive data.", ex);
+                throw new InvalidDataException("Invalid comicbook data.", ex);
             }
             catch { Dispose(); throw; }
         }
@@ -99,34 +99,32 @@ public sealed partial class LibraryStore
         public (byte[]? Info, byte[]? Book) ReadMetadata(CancellationToken cancellationToken)
         {
             byte[]? info = null, book = null;
-            try
+            // A single pass also verifies actual expanded sizes of unselected entries without retaining their bytes.
+            Visit(null, (entry, stream) =>
             {
-                // A single pass also verifies actual expanded sizes of unselected entries without retaining their bytes.
-                Visit(null, (entry, stream) =>
-                {
-                    var isInfo = entry.Name.Equals("ComicInfo.xml", StringComparison.OrdinalIgnoreCase);
-                    var isBook = entry.Name.Equals("ComicBook.xml", StringComparison.OrdinalIgnoreCase);
-                    var bytes = Consume(stream, entry.Size, isInfo || isBook ? MaxXmlBytes : null, cancellationToken);
-                    if (isInfo) info = bytes;
-                    if (isBook) book = bytes;
-                });
-                return (info, book);
-            }
-            catch (Exception ex) when (DecoderError(ex)) { throw new InvalidDataException("Invalid archive data.", ex); }
+                var isInfo = entry.Name.Equals("ComicInfo.xml", StringComparison.OrdinalIgnoreCase);
+                var isBook = entry.Name.Equals("ComicBook.xml", StringComparison.OrdinalIgnoreCase);
+                var bytes = Consume(stream, entry.Size, isInfo || isBook ? MaxXmlBytes : null, cancellationToken);
+                if (isInfo) info = bytes;
+                if (isBook) book = bytes;
+            });
+            return (info, book);
         }
 
         public byte[] ReadPage(Entry target)
         {
-            try
-            {
-                byte[]? result = null;
-                Visit(target, (entry, stream) => result = Consume(stream, entry.Size, entry == target ? MaxPageBytes : null, default));
-                return result ?? throw new InvalidDataException();
-            }
-            catch (Exception ex) when (DecoderError(ex)) { throw new InvalidDataException("Invalid archive data.", ex); }
+            byte[]? result = null;
+            Visit(target, (entry, stream) => result = Consume(stream, entry.Size, entry == target ? MaxPageBytes : null, default));
+            return result ?? throw new InvalidDataException();
         }
 
-        private void Visit(Entry? target, Action<Entry, Stream> consume)
+        public void Visit(Entry? target, Action<Entry, Stream> consume)
+        {
+            try { VisitEntries(target, consume); }
+            catch (Exception ex) when (DecoderError(ex)) { throw new InvalidDataException("Invalid comicbook data.", ex); }
+        }
+
+        private void VisitEntries(Entry? target, Action<Entry, Stream> consume)
         {
             if (solid)
             {
@@ -158,7 +156,7 @@ public sealed partial class LibraryStore
             }
         }
 
-        private static byte[]? Consume(Stream stream, long size, int? retainLimit, CancellationToken cancellationToken)
+        public static byte[]? Consume(Stream stream, long size, int? retainLimit, CancellationToken cancellationToken)
         {
             if (size < 0 || size > MaxExpandedBytes || retainLimit.HasValue && size > retainLimit.Value) throw new InvalidDataException();
             var bytes = retainLimit.HasValue ? new byte[(int)size] : null;
@@ -171,10 +169,10 @@ public sealed partial class LibraryStore
                     cancellationToken.ThrowIfCancellationRequested();
                     var destination = bytes is null ? buffer!.AsSpan(0, (int)Math.Min(buffer!.Length, size - read)) : bytes.AsSpan((int)read);
                     var count = stream.Read(destination);
-                    if (count == 0) throw new InvalidDataException("Truncated archive entry.");
+                    if (count == 0) throw new InvalidDataException("Truncated comicbook entry.");
                     read += count;
                 }
-                if (stream.ReadByte() != -1) throw new InvalidDataException("Archive entry exceeds its declared size.");
+                if (stream.ReadByte() != -1) throw new InvalidDataException("Comicbook entry exceeds its declared size.");
                 return bytes;
             }
             finally { if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer); }
@@ -219,9 +217,9 @@ public sealed partial class LibraryStore
                     var flags = RarInt(reader);
                     var extra = (flags & 1) != 0 ? checked((long)RarInt(reader)) : 0;
                     if ((flags & 2) != 0) packed = checked((long)RarInt(reader));
-                    if ((flags & 0x18) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
-                    if (type == 4) throw new ArchiveFeatureException("Encrypted archives are not supported.");
-                    if (type == 1 && (RarInt(reader) & 1) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
+                    if ((flags & 0x18) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
+                    if (type == 4) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
+                    if (type == 1 && (RarInt(reader) & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                     if (type is 2 or 3)
                     {
                         if (++count > MaxEntries) throw new InvalidDataException();
@@ -246,12 +244,12 @@ public sealed partial class LibraryStore
                             var next = checked(file.Position + extraLength);
                             if (next > end || extraLength == 0) throw new InvalidDataException();
                             var extraType = RarInt(reader);
-                            if (extraType == 1) throw new ArchiveFeatureException("Encrypted archives are not supported.");
-                            if (extraType == 5) throw new InvalidDataException("Archive links are not supported.");
+                            if (extraType == 1) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
+                            if (extraType == 5) throw new InvalidDataException("Comicbook links are not supported.");
                             file.Position = next;
                         }
                     }
-                    if (type == 5 && (RarInt(reader) & 1) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
+                    if (type == 5 && (RarInt(reader) & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                 }
                 else
                 {
@@ -264,21 +262,21 @@ public sealed partial class LibraryStore
                     if ((flags & 0x8000) != 0) packed = reader.ReadUInt32();
                     if (type == 0x73)
                     {
-                        if ((flags & 1) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
-                        if ((flags & 0x80) != 0) throw new ArchiveFeatureException("Encrypted archives are not supported.");
+                        if ((flags & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
+                        if ((flags & 0x80) != 0) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                     }
                     if (type is 0x74 or 0x7a)
                     {
                         if (++count > MaxEntries || length < 32) throw new InvalidDataException();
-                        if ((flags & 3) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
-                        if ((flags & 4) != 0) throw new ArchiveFeatureException("Encrypted archives are not supported.");
+                        if ((flags & 3) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
+                        if ((flags & 4) != 0) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                         reader.ReadUInt32(); reader.ReadByte(); reader.ReadUInt32(); reader.ReadUInt32();
                         reader.ReadByte(); reader.ReadByte();
                         if (reader.ReadUInt16() > 4096) throw new InvalidDataException();
                         if ((reader.ReadUInt32() & 0xf000) == 0xa000) throw new InvalidDataException();
                         if ((flags & 0x100) != 0) packed = checked(packed + ((long)reader.ReadUInt32() << 32));
                     }
-                    if (type == 0x7b && (flags & 1) != 0) throw new ArchiveFeatureException("Multipart archives are not supported.");
+                    if (type == 0x7b && (flags & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                 }
                 headerBytes = checked(headerBytes + end - start);
                 if (headerBytes > MaxHeaderBytes || file.Position > end || packed < 0 || packed > file.Length - end) throw new InvalidDataException();
@@ -404,7 +402,7 @@ public sealed partial class LibraryStore
                     if (idLength is 0 or > 8 || (flags & 0xc0) != 0) throw new InvalidDataException();
                     ulong id = 0;
                     for (var j = 0; j < idLength; j++) id = (id << 8) | ReadByte();
-                    if (id == 0x06f10701) throw new ArchiveFeatureException("Encrypted archives are not supported.");
+                    if (id == 0x06f10701) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                     if ((flags & 16) != 0 && (Number() != 1 || Number() != 1))
                         throw new NotSupportedException("Unsupported multi-input 7z codec.");
                     var properties = (flags & 32) != 0 ? ReadBytes(Count(16)) : [];

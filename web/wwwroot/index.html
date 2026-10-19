@@ -12,20 +12,36 @@
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#library" aria-label="Panel Haven library"><img class="brand-mark" src="/icon.svg" width="40" height="40" alt=""><img class="brand-wordmark" src="/wordmark.svg" width="176" height="28" alt=""></a>
-    <div id="account" class="account" hidden><span id="username"></span><button id="change-password" class="quiet" type="button">Change password</button><button id="logout" class="quiet" type="button">Sign out</button></div>
+    <a id="catalog-home" class="brand" href="#library" aria-label="Panel Haven library"><img class="brand-mark" src="/icon.svg" width="40" height="40" alt=""><img class="brand-wordmark" src="/wordmark.svg" width="176" height="28" alt=""></a>
+    <div id="account" class="account" hidden>
+      <span id="username"></span>
+      <details id="account-menu">
+        <summary aria-label="Account and administration menu" title="Menu"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></summary>
+        <div class="account-menu-panel">
+          <button id="change-password" class="quiet" type="button">Change password</button>
+          <section id="admin-actions" aria-labelledby="admin-menu-title" hidden>
+            <h2 id="admin-menu-title">Administration</h2>
+            <button id="scan" type="button">Scan libraries</button>
+            <button id="maintenance" type="button">Library maintenance</button>
+            <button id="metadata-report" type="button">Validate metadata</button>
+            <button id="server-settings" type="button">Server settings</button>
+            <button id="manage-users" type="button">Manage accounts</button>
+          </section>
+        </div>
+      </details>
+      <button id="logout" class="quiet" type="button">Sign out</button>
+    </div>
   </header>
   <main id="main" tabindex="-1">
     <div id="error" class="notice error" role="alert" hidden></div>
     <p id="startup" class="empty" role="status">Connecting to your library…</p>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
-      <div class="eyebrow">YOUR COLLECTION. ANYWHERE.</div>
-      <h1 id="login-title">A home for your stories.</h1>
-      <p class="muted">Sign in to browse your collection and pick up where you left off.</p>
+      <h1 id="login-title">Sign in to Panel Haven</h1>
+      <p class="muted">Browse your collection and continue reading.</p>
       <p id="login-message" role="status"></p>
       <form id="login-form" class="panel form-stack">
-        <label>Username<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
-        <label>Password<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <label>Username (required)<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
+        <label>Password (required)<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
         <button class="primary" type="submit">Sign in</button>
       </form>
     </section>
@@ -33,9 +49,9 @@
       <h1 id="password-title">Change password</h1>
       <p id="password-explanation">Choose a different password of 12–256 characters. All your sessions will end after this change.</p>
       <form id="password-form" class="panel form-stack">
-        <label>Current password<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label>
-        <label>New password<input name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
-        <label>Confirm new password<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <label>Current password (required)<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <label>New password (required)<input name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-explanation"></label>
+        <label>Confirm new password (required)<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-explanation"></label>
         <p id="password-status" role="alert"></p>
         <button type="submit" class="primary">Change password and sign out</button>
         <button id="cancel-password" type="button" class="quiet">Cancel</button>
@@ -44,42 +60,62 @@
     <section id="scan-panel" class="notice" aria-label="Library scan" hidden>
       <p id="scan-result" role="status"></p>
       <p id="scan-error" class="scan-error" role="alert" hidden></p>
-      <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button></div>
+      <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button><button id="dismiss-scan" type="button" hidden>Dismiss scan result</button></div>
       <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
     </section>
     <section id="library-view" aria-labelledby="library-title" hidden>
-      <div class="section-heading"><div><div class="eyebrow">THE NEXT STORY IS WAITING</div><h1 id="library-title">Your library</h1></div><div class="actions" id="admin-actions" hidden><button id="scan" type="button">Scan libraries</button><button id="maintenance" type="button">Library maintenance</button><button id="metadata-report" type="button">Validate metadata</button><button id="manage-users" type="button" class="quiet">Manage accounts</button></div></div>
+      <div class="section-heading"><h1 id="library-title" tabindex="-1">Your library</h1><nav class="catalog-navigation" aria-label="Comicbook areas"><a id="library-navigation" href="#library" aria-current="page">Library</a><a id="unsorted-navigation" href="#unsorted">Unsorted</a></nav></div>
+      <p id="catalog-help" class="muted">Browse your organized comicbooks. Archived comicbooks are hidden unless you choose Archived below.</p>
       <p id="watch-status" class="muted" role="status" hidden></p>
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search your library</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button></form>
+      <div class="library-layout">
+        <aside class="reading-list-sidebar" aria-labelledby="reading-lists-title">
+          <h2 id="reading-lists-title">Reading lists</h2>
+          <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
+          <div class="reading-list-actions">
+            <button id="create-list" type="button" class="primary">New list</button>
+            <button id="edit-list" type="button" disabled>Edit list</button>
+            <button id="delete-list" type="button" class="danger" disabled>Delete list</button>
+            <button id="manage-list-folders" type="button">Manage list folders</button>
+          </div>
+        </aside>
+        <div class="library-content">
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
       <div class="library-filters" role="group" aria-label="Sort and filter books">
-        <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number">Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
-        <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+        <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option></select></label>
+        <label>Group by<select id="group-by"><option value="none">Flat books</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
         <label>Reading status<select id="book-status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In progress</option><option value="completed">Completed</option></select></label>
+      </div>
+      <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display</summary><div class="library-filters">
+        <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
         <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
-        <label>Availability<select id="book-availability"><option value="all">All locations</option><option value="available">Available</option><option value="missing">Missing</option><option value="unavailable">Unavailable</option></select></label>
-        <label>Group by<select id="group-by"><option value="none">Flat books</option><option value="series">Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Availability<select id="book-availability"><option value="all">All availability</option><option value="available">Available</option><option value="missing">Missing</option><option value="unavailable">Unavailable</option></select></label>
         <label>Publisher<select id="publisher"><option value="">All publishers</option></select></label>
         <label>Items per page<select id="page-size"><option value="24">24</option><option value="48" selected>48</option><option value="96">96</option></select></label>
-        <label>Reading list<select id="reading-list"><option value="">All books</option></select></label>
-      </div>
-      <div id="group-navigation" class="actions list-actions" hidden><button id="back-to-groups" type="button">Back to groups</button><span id="group-label"></span></div>
-      <div class="actions list-actions" aria-label="Manage reading lists"><button id="create-list" type="button">New list</button><button id="edit-list" type="button" disabled>Edit list</button><button id="delete-list" type="button" disabled>Delete list</button><button id="manage-list-folders" type="button">Manage list folders</button></div>
-      <div class="selection-toolbar" role="group" aria-label="Selected books">
-        <span id="selection-count" role="status">0 of 100 selected</span><button id="select-page" type="button">Select this page</button><button id="clear-selection" type="button" disabled>Clear selection</button><button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
+      </div></details>
+      <div class="selection-toolbar" role="group" aria-label="Selected books" hidden>
+        <button id="select-page" type="button">Select page</button>
+        <span id="selection-count" role="status">0 of 100 selected</span><button id="clear-selection" type="button" disabled>Clear selection</button><button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
+        <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
         <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
-        <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" hidden disabled>Remove selected from this list</button>
+        <button id="export-selected-comics" type="button" disabled>Export selected comics</button>
+        <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
       </div>
       <p id="management-status" role="status"></p>
       <p id="library-status" class="muted" role="status"></p>
+      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button">Home</button><span id="group-label"></span></div>
       <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
       <div id="books" class="book-grid" aria-label="Books"></div>
+      <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+        </div>
+      </div>
     </section>
     <section id="reader-view" aria-labelledby="reader-title" hidden>
-      <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet">← Library</button><h1 id="reader-title"></h1><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button></div>
+      <div class="reader-toolbar"><h1 id="reader-title"></h1><button id="close-reader" type="button" class="quiet">← Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
       <div id="reader-error" class="notice error" role="alert" hidden></div>
       <div class="reader-controls">
-        <div class="page-controls"><button id="previous-page" type="button" aria-label="Previous page">← Previous</button><form id="page-form"><label for="page-number">Page</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" aria-label="Next page">Next →</button></div>
-        <div class="display-controls">
+        <div class="page-controls"><button id="previous-page" type="button" aria-label="Previous page">← Previous</button><form id="page-form"><label for="page-number">Position</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" aria-label="Next page">Next →</button></div>
+        <details class="reader-display compact-disclosure"><summary>Display settings</summary><div class="display-controls">
           <label for="reader-mode">Mode</label><select id="reader-mode"><option value="single">Single page</option><option value="continuous">Continuous</option><option value="spread">Two-page spread</option></select>
           <label for="fit">Fit</label><select id="fit"><option value="page">Page</option><option value="width">Width</option></select>
           <label for="zoom">Zoom %</label><input id="zoom" type="number" min="50" max="300" step="1" value="100" inputmode="numeric"><button id="reset-zoom" type="button">100%</button>
@@ -87,9 +123,13 @@
           <label for="rotation">Rotation</label><select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
           <label for="brightness">Brightness %</label><input id="brightness" type="number" min="50" max="200" step="1" value="100" inputmode="numeric">
           <label for="contrast">Contrast %</label><input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"><button id="reset-visuals" type="button">Reset visuals</button>
-        </div>
+        </div></details>
         <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
       </div>
+      <p id="current-page-type" class="reader-hint" role="status"></p>
+      <p id="skip-status" class="reader-hint" role="status" hidden></p>
+      <p id="page-status" role="status">Loading book…</p>
+      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages" aria-describedby="reader-hint"><div id="reader-pages" class="reader-pages"></div></div>
       <details class="reader-options"><summary>Bookmarks and page types</summary>
         <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
           <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit">Add / update bookmark</button></form>
@@ -97,38 +137,143 @@
           <ul id="personal-bookmarks" aria-label="Personal bookmarks"></ul>
         </section>
         <section id="embedded-bookmarks-section" aria-labelledby="embedded-bookmarks-title" hidden><h2 id="embedded-bookmarks-title">Embedded bookmarks (read-only)</h2><ul id="embedded-bookmarks" aria-label="Embedded bookmarks"></ul></section>
-        <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original archive. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
+        <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original comicbook. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
       </details>
-      <p id="current-page-type" class="reader-hint" role="status"></p>
-      <p id="skip-status" class="reader-hint" role="status" hidden></p>
-      <p id="page-status" role="status">Loading book…</p>
-      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages" aria-describedby="reader-hint"><div id="reader-pages" class="reader-pages"></div></div>
       <p id="reader-hint" class="reader-hint muted">Scroll or pan natively; pinch to zoom on touch screens. In paged modes, Page Up/Down turn pages; left/right arrows or horizontal swipes also turn pages at 100%. Progress saves after a page is visible.</p>
       <p id="spread-hint" class="reader-hint muted" hidden>Spreads use fixed pairs after the optional cover; skipped members do not regroup later pages. A pair containing a landscape page after rotation is shown as two separate pages.</p>
     </section>
+  <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
+    <div class="section-heading"><h1 id="server-settings-title" tabindex="-1">Server settings</h1><a id="settings-catalog-back" href="#library">Back to library</a></div>
+    <nav class="settings-jumps actions" aria-label="Settings sections">
+      <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-comic-vine">Comic Vine</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Save changes</button>
+    </nav>
+    <p id="server-settings-help">These are saved server settings, not browser preferences. Application, library, network, TLS, and secret changes take effect only after restart. Backup scheduling is applied when saved; check its actual status below.</p>
+    <p id="server-settings-restart" class="notice" role="status"></p>
+    <p id="server-settings-draft" class="muted" role="status"></p>
+    <button id="reload-server-settings" type="button">Reload saved settings and status</button>
+    <details class="settings-running"><summary>Running configuration and recovery paths</summary>
+      <p class="muted">Running values below do not change when you save a restart-required setting. Recovery files are private server files; if a network change locks you out, restore the prior settings file on the server and restart.</p>
+      <dl id="server-settings-running"></dl>
+    </details>
+    <form id="server-settings-form" class="form-stack">
+      <fieldset id="server-settings-controls" disabled><legend>Saved configuration</legend>
+        <fieldset id="settings-section-libraries" tabindex="-1"><legend>Libraries</legend>
+          <label>Library roots — one absolute server path per line<textarea id="settings-libraries" rows="3" spellcheck="false" aria-describedby="settings-libraries-help"></textarea></label>
+          <p id="settings-libraries-help" class="muted">Removing a root does not delete comicbooks or catalog entries. Access to those files may be lost after restart until the root is added again. Scan libraries after restarting to discover newly added files.</p>
+          <label>Archived — optional absolute server path<input id="settings-archive-path" spellcheck="false" autocomplete="off" aria-describedby="settings-area-paths-help"></label>
+          <label>Unsorted intake — optional absolute server path<input id="settings-unsorted-path" spellcheck="false" autocomplete="off" aria-describedby="settings-area-paths-help"></label>
+          <p id="settings-area-paths-help" class="muted">Leave blank to disable an area. Use separate, non-overlapping folders outside regular library roots. Archived comicbooks appear only with the Archived filter; Unsorted is a separate intake for comicbooks awaiting organization. Save, restart, then scan to discover files. Changing paths never moves files automatically; use Move / rename or Organize selected to review and confirm moves between areas.</p>
+        </fieldset>
+        <fieldset id="settings-section-comic-vine" tabindex="-1"><legend>Comic Vine</legend>
+          <p id="settings-comic-vine-state" class="muted"></p>
+          <label>Replacement API key<input id="settings-comic-vine-key" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
+          <label class="checkbox"><input id="settings-clear-comic-vine" type="checkbox">Clear the saved Comic Vine API key</label>
+          <p id="settings-secret-help" class="muted">Leave a secret blank to keep it, enter a replacement to set it, or explicitly select Clear to remove it. Existing secrets are never displayed. Secret changes require restart.</p>
+        </fieldset>
+        <fieldset id="settings-section-network" tabindex="-1"><legend>Network and TLS</legend>
+          <label>Listen URLs (required) — one per line<textarea id="settings-urls" rows="2" required spellcheck="false" placeholder="http://127.0.0.1:5000" aria-describedby="settings-network-help"></textarea></label>
+          <label class="checkbox"><input id="settings-require-https" type="checkbox">Require HTTPS for requests</label>
+          <label>Allowed hosts — one hostname per line; required with HTTPS enforcement<textarea id="settings-allowed-hosts" rows="2" spellcheck="false" aria-describedby="settings-network-help"></textarea></label>
+          <label>Trusted proxy IP addresses — one per line<textarea id="settings-known-proxies" rows="2" spellcheck="false" aria-describedby="settings-network-help"></textarea></label>
+          <p id="settings-network-help" class="muted">Trust only proxies you control. Listen URLs are server bindings, not necessarily browser addresses. Changing the protocol, host, port, or certificate can disconnect you after restart. Make sure the new address and HTTPS/proxy setup work before restarting.</p>
+          <label>Certificate file — absolute server path<input id="settings-certificate-path" spellcheck="false" autocomplete="off"></label>
+          <label>PEM private key file — absolute server path, if separate<input id="settings-certificate-key-path" spellcheck="false" autocomplete="off"></label>
+          <p id="settings-certificate-state" class="muted"></p>
+          <label>Replacement certificate password<input id="settings-certificate-password" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
+          <label class="checkbox"><input id="settings-clear-certificate-password" type="checkbox">Clear the saved certificate password</label>
+        </fieldset>
+        <fieldset id="settings-section-backups" tabindex="-1"><legend>Scheduled backups</legend>
+          <label class="checkbox"><input id="settings-backup-enabled" type="checkbox">Enable daily backups</label>
+          <label>Destination — absolute, dedicated private server directory<input id="settings-backup-destination" spellcheck="false" autocomplete="off"></label>
+          <div class="settings-columns">
+            <label>Daily time (required) — server local time<input id="settings-backup-time" type="time" required></label>
+            <label>Backups to keep (required, 1–3650)<input id="settings-backup-keep" type="number" min="1" max="3650" step="1" required></label>
+          </div>
+          <p class="notice">Scheduled backups contain the database and data-protection keys only. They do not include comicbooks, the comicbook-backup vault, or this server settings file. Back up those separately. Scheduling requires Linux user systemd; a saved schedule is not proof that its timer is active.</p>
+        </fieldset>
+      </fieldset>
+      <div id="settings-save" class="form-stack" tabindex="-1">
+      <label>Current administrator password — required for every save or service action<input id="settings-current-password" type="password" autocomplete="current-password" required maxlength="256"></label>
+      <button id="save-server-settings" type="submit" class="primary" disabled>Save server settings</button>
+    <p id="server-settings-status" role="status"></p>
+      </div>
+    </form>
+    <section id="settings-section-service" class="settings-section" aria-labelledby="settings-service-title" tabindex="-1">
+      <h2 id="settings-service-title">Service and startup</h2>
+      <p id="settings-service-status" role="status"></p>
+      <p id="settings-backup-status" role="status"></p>
+      <p class="muted">Startup controls install or update this installation's owned Linux user service. They do not apply unsaved edits or immediately restart the application. Availability after a reboot also depends on your user service manager and login/lingering configuration.</p>
+      <div class="actions"><button id="settings-enable-startup" type="button" disabled>Enable startup</button><button id="settings-disable-startup" type="button" disabled>Disable startup</button><button id="settings-restart-service" type="button" disabled>Restart server</button></div>
+      <p id="settings-reconnect" class="notice">After restarting, reconnect manually at the saved address (or your reverse proxy address). This page will not redirect or retry a restart automatically. Wildcard bindings such as 0.0.0.0 or * must be replaced with the server's reachable hostname.</p>
+    </section>
+    <section id="settings-section-data" class="settings-section" aria-labelledby="settings-data-title" tabindex="-1">
+      <h2 id="settings-data-title">Data location</h2>
+      <p id="settings-data-path"></p>
+      <p id="settings-relocation-status" role="status"></p>
+      <p class="muted">Data relocation is separate from configuration saving. It copies all application state, including the database, keys, and comicbook-backup vault, on the next startup. Comic libraries stay where they are. The original data is preserved for recovery.</p>
+      <button id="open-data-relocation" type="button" disabled>Relocate application data…</button>
+    </section>
+  </section>
   </main>
+  <footer class="muted">Metadata searches powered by <a href="https://comicvine.gamespot.com/" target="_blank" rel="noopener noreferrer">Comic Vine</a>.</footer>
   <dialog id="details-dialog" aria-labelledby="details-title">
     <div class="dialog-heading"><h2 id="details-title">Book details</h2><button type="button" data-close="details-dialog" class="quiet" aria-label="Close book details">Close</button></div>
+    <div class="details-primary"><button id="read-book" class="primary" type="button">Read book</button></div>
     <div id="details-content"></div>
     <div id="details-bookmarks"></div>
     <form id="rating-form" class="actions list-actions" hidden>
-      <label>My private rating<select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+      <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
       <button id="save-rating" type="submit">Save rating</button>
     </form>
     <p id="rating-status" role="status"></p>
-    <button id="read-book" class="primary" type="button">Read book</button>
-    <button id="edit-metadata" type="button" hidden>Edit metadata</button>
+    <div class="actions list-actions details-secondary">
+      <button id="export-comic" type="button" disabled>Export CBZ</button>
+      <button id="edit-metadata" type="button" hidden>Edit metadata</button>
+      <button id="find-metadata" type="button" hidden>Find metadata</button>
+      <button id="move-archive" type="button" hidden>Move / reorganize</button>
+    </div>
+    <details class="details-advanced"><summary>Page and comicbook tools</summary><div class="actions list-actions">
+      <button id="edit-page-metadata" type="button" hidden>Edit page types and embedded bookmarks</button>
+      <button id="organize-pages" type="button" hidden>Organize page order</button>
+      <button id="write-archive" type="button" hidden>Write metadata to comicbook</button>
+    </div></details>
     <p id="details-status" role="status"></p>
+  </dialog>
+  <dialog id="comic-export-dialog" aria-labelledby="comic-export-title" aria-describedby="comic-export-scope">
+    <div class="dialog-heading"><h2 id="comic-export-title">Export comics</h2><button id="close-comic-export" type="button" class="quiet">Close</button></div>
+    <p id="comic-export-selection"></p>
+    <p id="comic-export-scope">Downloads supported page images in saved page order with shared catalog metadata, including custom values and embedded page metadata. No private reading progress, ratings, bookmarks, lists, or preferences are included. Original files, catalog, and access permissions remain untouched.</p>
+    <p class="muted">One book downloads as a CBZ; multiple books download as a ZIP containing CBZs. Up to 100 books and 1 GiB per download. The complete file is prepared and verified on the server before transfer, then received by your browser before saving. Allow enough free space. Closing this dialog or pressing Escape cancels an active download.</p>
+    <progress id="comic-export-progress" aria-label="Comic export transfer" aria-describedby="comic-export-status" hidden></progress>
+    <p id="comic-export-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <div class="actions list-actions"><button id="download-comics" type="button" class="primary">Download</button><button id="cancel-comic-export" type="button" hidden>Cancel download</button></div>
   </dialog>
   <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">
     <div class="dialog-heading"><h2 id="maintenance-title">Library maintenance</h2><button type="button" data-close="maintenance-dialog" class="quiet">Close</button></div>
+    <details>
+      <summary id="archive-export-title">Comicbook original backups</summary>
+      <p class="muted">Export originals for every book, including books removed from the catalog. The unencrypted ZIP contains complete original comicbooks and manifests, including sensitive private paths. It can be large. Application state is excluded: protect this ZIP separately and keep it with an application-state snapshot.</p>
+      <p class="muted">To recover backups, restore a trusted export's archive-backups directory into the stopped application's state directory alongside its matching state snapshot. Keep directories private (0700) and files private (0600) on Linux. Export does not import or delete anything.</p>
+      <button id="preview-archive-export" type="button">Export all comicbook backups</button>
+      <p id="archive-export-status" role="status"></p>
+      <a id="download-archive-export" hidden target="_blank" rel="noopener">Download all comicbook backups (ZIP; opens a new tab)</a>
+    </details>
     <p class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
     <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
     <p id="maintenance-status" role="status"></p>
     <p id="maintenance-error" class="scan-error" role="alert" hidden></p>
-    <p id="duplicate-note" class="muted" hidden>Exact duplicates share the SHA-256 of their file contents, not just a title or cover. Groups can continue across pages. Present duplicates cannot be removed here.</p>
+    <p id="duplicate-note" class="muted" hidden>Exact duplicate groups share the SHA-256 recorded by the last scan, not just a title or cover. This is not a fresh file-identity check. Groups can continue across pages. Compare copies is read-only; present duplicates cannot be removed here.</p>
     <nav class="library-pagination" aria-label="Maintenance pages"><button id="previous-maintenance" type="button" disabled>Previous</button><span id="maintenance-page" role="status">Page 1 of 1</span><button id="next-maintenance" type="button" disabled>Next</button></nav>
     <div id="maintenance-items"></div>
+  </dialog>
+  <dialog id="duplicate-dialog" aria-labelledby="duplicate-title">
+    <div class="dialog-heading"><h2 id="duplicate-title">Compare exact copies</h2><button type="button" data-close="duplicate-dialog" class="quiet">Close</button></div>
+    <p id="duplicate-comparison-note" class="muted">Read-only comparison of catalog records using SHA-256 hashes from the last scan, not a fresh proof of file identity. No comicbooks are read or changed here. Reading progress and ratings are yours only. Highlighted cells differ from the selected copy; missing values and empty values are distinct.</p>
+    <p id="duplicate-status" role="status"></p>
+    <p id="duplicate-hash" class="duplicate-key"></p>
+    <div class="actions list-actions"><button id="refresh-duplicates" type="button">Refresh comparison</button></div>
+    <nav class="library-pagination" aria-label="Comparison peer pages"><button id="previous-duplicates" type="button" disabled>Previous copies</button><span id="duplicate-page" role="status">Page 1 of 1</span><button id="next-duplicates" type="button" disabled>Next copies</button></nav>
+    <div id="duplicate-table-scroll" class="comparison-scroll" role="region" aria-label="Side-by-side copies; scroll horizontally for more columns" tabindex="0"><table id="duplicate-table" aria-describedby="duplicate-comparison-note"></table></div>
   </dialog>
   <dialog id="metadata-report-dialog" aria-labelledby="metadata-report-title">
     <div class="dialog-heading"><h2 id="metadata-report-title">Metadata validation</h2><button type="button" data-close="metadata-report-dialog" class="quiet">Close</button></div>
@@ -138,38 +283,200 @@
     <nav class="library-pagination" aria-label="Metadata validation pages"><button id="previous-metadata-report" type="button" disabled>Previous</button><span id="metadata-report-page" role="status">Page 1 of 1</span><button id="next-metadata-report" type="button" disabled>Next</button></nav>
     <div id="metadata-report-items"></div>
   </dialog>
+  <dialog id="comic-vine-dialog" aria-labelledby="comic-vine-title" aria-describedby="comic-vine-scope">
+    <div class="dialog-heading"><h2 id="comic-vine-title">Find metadata</h2><button type="button" data-close="comic-vine-dialog" class="quiet">Close</button></div>
+    <p id="comic-vine-scope">Search <a href="https://comicvine.gamespot.com/" target="_blank" rel="noopener noreferrer">Comic Vine</a>, choose a volume and issue, then review suggested fields. Browsing changes nothing. Applying checked changes updates only the catalog, never the comicbook or private reading data.</p>
+    <p id="comic-vine-book"></p>
+    <form id="comic-vine-form" class="form-stack">
+      <fieldset id="comic-vine-terms" disabled><legend>Search terms</legend>
+        <label>Series<input id="comic-vine-series" required maxlength="200"></label>
+        <label>Issue number (optional)<input id="comic-vine-number" maxlength="40"></label>
+        <label>Publication year (matching hint only)<input id="comic-vine-year" type="number" min="1" max="9999" aria-describedby="comic-vine-year-note"></label>
+      </fieldset>
+      <p id="comic-vine-year-note" class="muted">Compare this year with issue dates yourself. A volume may have started years earlier; this hint never filters volume runs.</p>
+      <div class="actions list-actions"><button id="comic-vine-search" type="submit" disabled>Search volumes</button><button id="comic-vine-back" type="button" hidden>Choose another volume</button></div>
+    </form>
+    <p id="comic-vine-volume" class="muted"></p>
+    <p id="comic-vine-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
+    <div id="comic-vine-results" aria-busy="false"></div>
+    <div class="actions list-actions"><button id="comic-vine-previous" type="button" disabled>Previous results</button><span id="comic-vine-page"></span><button id="comic-vine-next" type="button" disabled>Next results</button></div>
+  </dialog>
   <dialog id="metadata-dialog" aria-labelledby="metadata-title">
     <div class="dialog-heading"><h2 id="metadata-title">Edit metadata</h2><button type="button" data-close="metadata-dialog" class="quiet">Close</button></div>
-    <p class="muted">Changes are stored only in this library database, never written to source archives. Only checked fields and custom values are applied. Blank means an explicit empty value; Remove resets a field.</p>
+    <p class="muted">Only checked fields and custom values are saved to the library database, never automatically to source comicbooks.</p>
+    <details class="compact-disclosure"><summary>How metadata changes work</summary><p class="muted">To deliberately write saved metadata to a CBZ/ZIP, use Write metadata to comicbook in Book details. Blank means an explicit empty value; Remove resets a field.</p></details>
+    <p id="metadata-source" class="muted" hidden></p>
+    <div class="metadata-tools form-stack"><label for="metadata-field-search">Find a field</label><input id="metadata-field-search" type="search" placeholder="Title, writer, publisher…"><label class="checkbox"><input id="metadata-changed-only" type="checkbox">Checked fields only</label><p id="metadata-change-summary" role="status"></p></div>
     <form id="metadata-form" class="form-stack">
-      <fieldset id="metadata-controls"><legend>Metadata changes</legend><div id="metadata-fields" class="metadata-grid"></div><h3>Custom values</h3><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></fieldset>
       <button id="save-metadata" type="submit">Save checked changes</button>
+    <p id="metadata-status" role="status"></p>
+      <fieldset id="metadata-controls"><legend>Metadata changes</legend><div id="metadata-fields"></div><details class="custom-values-group"><summary>Custom values</summary><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></details></fieldset>
       <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
       <button id="apply-metadata" type="submit" class="primary" hidden disabled>Apply reviewed changes</button>
     </form>
-    <p id="metadata-status" role="status"></p>
+  </dialog>
+  <dialog id="page-order-dialog" aria-labelledby="page-order-title">
+    <div class="dialog-heading"><h2 id="page-order-title">Organize page order</h2><button type="button" data-close="page-order-dialog" class="quiet">Close</button></div>
+    <p>Shared reading order for all readers. Comicbooks, physical page numbers, private bookmarks, and progress are unchanged. Drag a thumbnail onto another position, or use Move earlier / Move later with keyboard or touch. Changes remain a draft until saved.</p>
+    <p class="muted">Changed comicbook bytes invalidate custom order, including metadata write-back or restore. Rescan externally changed sources first; unchanged scans and moves keep saved order.</p>
+    <div class="actions">
+      <button id="save-page-order" type="button" class="primary" disabled>Save page order</button>
+      <button id="reset-page-order" type="button" disabled>Reset to comicbook order (draft)</button>
+      <button id="reload-page-order" type="button">Discard draft / Reload saved order</button>
+    </div>
+    <p id="page-order-status" role="status" aria-live="polite"></p>
+    <p id="page-order-draft-state" class="muted"></p>
+    <ol id="page-order-pages" aria-label="Pages in reading order"></ol>
+  </dialog>
+  <dialog id="page-metadata-dialog" aria-labelledby="page-metadata-title">
+    <div class="dialog-heading"><h2 id="page-metadata-title">Page types and embedded bookmarks</h2><button type="button" data-close="page-metadata-dialog" class="quiet">Close</button></div>
+    <p class="muted">Shared embedded metadata, not your private bookmarks. Physical page numbers always refer to the original comicbook. Save updates only the catalog; use Write metadata to comicbook in Book details to deliberately preview, write, or restore a source comicbook.</p>
+    <form id="page-metadata-form" class="form-stack">
+      <fieldset id="page-metadata-controls" disabled><legend>Physical page metadata</legend>
+        <label>Physical page<select id="page-metadata-page"></select></label>
+        <label>Page type<select id="page-metadata-type"></select></label>
+        <label>Embedded bookmark<input id="page-metadata-bookmark" maxlength="200"></label>
+        <p class="muted">Blank removes the bookmark or explicit type (the reader defaults to Story). Other pages and unknown source attributes stay unchanged.</p>
+      </fieldset>
+      <button id="preview-page-metadata" type="submit" disabled>Preview page changes</button>
+      <section id="page-metadata-preview" tabindex="-1" hidden aria-label="Review page metadata changes"><h3>Review exact changes</h3><div id="page-metadata-changes"></div></section>
+      <button id="save-page-metadata" type="submit" disabled>Save reviewed changes to catalog</button>
+    </form>
+    <button id="reload-page-metadata" type="button">Reload saved page metadata</button>
+    <p id="page-metadata-status" role="status"></p>
+  </dialog>
+  <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-safety">
+    <div class="dialog-heading"><h2 id="archive-title">Write metadata to comicbook</h2><button type="button" data-close="archive-dialog" class="quiet" aria-label="Close comicbook write and restore">Close</button></div>
+    <p id="archive-book"></p>
+    <p id="archive-safety" class="notice">Only CBZ/ZIP sources support write-back and restore; other formats remain read-only. Preview checks the source and saved catalog metadata. Nothing is written until you explicitly confirm and apply. A write keeps a verified complete original comicbook backup first.</p>
+    <p class="muted">Writing may change XML formatting/encoding and ZIP compression, but keeps non-metadata entry contents. Stop other programs from changing this source: portable file APIs cannot atomically coordinate with noncooperating external writers.</p>
+    <p class="muted">Restoring replaces the whole comicbook with the selected original bytes; it does not undo catalog metadata edits. Book identity, private progress, ratings, bookmarks, and list memberships stay unchanged. Comicbook backups are retained separately, are never automatically deleted, and their payloads are excluded from application-state backups.</p>
+    <div class="actions list-actions"><button id="preview-archive" type="button">Preview metadata write</button><button id="refresh-archive-backups" type="button">Refresh backup history</button></div>
+    <p id="archive-status" role="status"></p>
+    <section id="archive-preview" aria-labelledby="archive-preview-title" tabindex="-1" hidden>
+      <h3 id="archive-preview-title">Review comicbook changes</h3>
+      <p id="archive-preview-summary"></p>
+      <p id="archive-source-hash" class="duplicate-key"></p>
+      <h4>Scalar and custom metadata changes</h4>
+      <p class="muted">Compared with the current source comicbook, not unsaved editor drafts. Quoted values preserve whitespace; absent and empty values are distinct.</p>
+      <div id="archive-changes"></div>
+      <h4>Metadata XML entry changes</h4>
+      <p id="archive-xml-note" class="muted"></p>
+      <div id="archive-entries"></div>
+    </section>
+    <form id="archive-form" class="form-stack">
+      <label class="archive-confirm"><input id="confirm-archive" type="checkbox" required disabled><span id="archive-confirm-label">I reviewed the preview and confirm replacing this source comicbook.</span></label>
+      <button id="apply-archive" type="submit" class="primary" disabled>Apply reviewed metadata write</button>
+    </form>
+    <section aria-labelledby="archive-backups-title">
+      <h3 id="archive-backups-title">Original comicbook backup history</h3>
+      <p class="muted">Each record identifies the original bytes and the written version. Restore re-verifies the backup and refuses to overwrite a later or externally changed source. Preview a backup before confirming its restore.</p>
+      <p id="archive-backups-status" role="status"></p>
+      <div id="archive-backups" role="region" aria-labelledby="archive-backups-title" tabindex="0"></div>
+    </section>
+  </dialog>
+  <dialog id="file-operation-dialog" aria-labelledby="file-operation-title">
+    <div class="dialog-heading"><h2 id="file-operation-title">Rename / move comicbook</h2><button type="button" data-close="file-operation-dialog" class="quiet">Close</button></div>
+    <p id="file-operation-book"></p>
+    <form id="file-operation-draft" class="form-stack">
+      <fieldset id="file-operation-controls" disabled><legend>Destination</legend>
+        <label for="file-operation-root">Destination area / root</label><select id="file-operation-root" required></select>
+        <label for="file-operation-folder">Destination folder relative to this root</label><input id="file-operation-folder" autocomplete="off" aria-describedby="file-operation-folder-help">
+        <button id="create-file-operation-folder" type="button" disabled>Create folder</button>
+        <p id="file-operation-folder-help" class="muted">Use an existing folder, or enter a new path and choose Create folder. This creates the folder and any missing parent folders immediately, without moving the comicbook. Leave blank for the selected root. Use / between folders; no absolute paths, parent traversal, or symbolic links.</p>
+        <label for="file-operation-name">Filename, including unchanged extension</label><input id="file-operation-name" required autocomplete="off" aria-describedby="file-operation-extension">
+        <p id="file-operation-extension" class="muted"></p>
+      </fieldset>
+      <button id="preview-file-operation" type="submit" disabled>Preview rename / move</button>
+    </form>
+    <p id="file-operation-status" role="status"></p>
+    <section id="file-operation-preview" aria-labelledby="file-operation-preview-title" tabindex="-1" hidden>
+      <h3 id="file-operation-preview-title">Review exact move</h3>
+      <dl><dt>From</dt><dd id="file-operation-source"></dd><dt>To</dt><dd id="file-operation-destination"></dd><dt>Source SHA-256</dt><dd id="file-operation-hash"></dd></dl>
+      <ul id="file-operation-conflicts" class="scan-error"></ul>
+    </section>
+    <form id="file-operation-apply-form" class="form-stack">
+      <button id="apply-file-operation" type="submit" class="primary" disabled>Apply reviewed move</button>
+    </form>
+    <section aria-labelledby="file-operation-history-title">
+      <h3 id="file-operation-history-title">Move and undo history</h3>
+      <button id="refresh-file-operation-history" type="button">Refresh history</button>
+      <p id="file-operation-history-status" role="status"></p>
+      <div id="file-operation-history" role="region" aria-labelledby="file-operation-history-title" tabindex="0"></div>
+    </section>
+  </dialog>
+  <dialog id="organization-dialog" aria-labelledby="organization-title" aria-describedby="organization-safety">
+    <div class="dialog-heading"><h2 id="organization-title">Organize selected books</h2><button type="button" data-close="organization-dialog" class="quiet">Close</button></div>
+    <p id="organization-selection"></p>
+    <p id="organization-safety" class="notice">Only existing folders within configured libraries are allowed; no folders are created. Comicbooks keep their extension and contents, identity, metadata, list memberships, and private reading progress. Nothing moves until you preview and explicitly confirm.</p>
+    <p class="muted">This batch runs sequentially, not all-or-nothing: it stops at the first execution failure and keeps earlier completed moves. No overwriting, path swaps, or cycles. Stop other programs from editing these files. Nothing is retried automatically.</p>
+    <form id="organization-draft" class="form-stack">
+      <fieldset id="organization-controls" disabled><legend>Destination templates</legend>
+        <label>Destination area / root<select id="organization-root" required></select></label>
+        <label>Existing folder template, relative to this root<input id="organization-folder" autocomplete="off" aria-describedby="organization-template-help"></label>
+        <label>Filename template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
+        <p id="organization-template-help" class="muted">Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} is the original filename without its extension. The server appends the unchanged source extension. For a simple bulk move, keep {FileName} and choose a folder; blank folder means the root. Use / between folders. Missing metadata, unknown or malformed tokens, unsafe values, and invalid paths are conflicts, never silently sanitized.</p>
+      </fieldset>
+      <button id="generate-organization" type="submit" disabled>Generate template preview</button>
+    </form>
+    <p id="organization-status" role="status"></p>
+    <section id="organization-review" aria-labelledby="organization-review-title" tabindex="-1" hidden>
+      <h3 id="organization-review-title">Review every destination</h3>
+      <p class="muted">Edit a row's folder or complete filename (including its unchanged extension), then explicitly re-preview edited destinations. Displayed paths and hashes describe the last preview, not unpreviewed edits. Changing the root or either template discards row edits.</p>
+      <div id="organization-rows"></div>
+      <button id="preview-organization" type="button" disabled>Re-preview edited destinations</button>
+    </section>
+    <form id="organization-apply-form" class="form-stack">
+      <label class="archive-confirm"><input id="confirm-organization" type="checkbox" required disabled><span>I reviewed every exact path, hash, and conflict and confirm this sequential batch, including the possibility of partial completion.</span></label>
+      <button id="apply-organization" type="submit" class="primary" disabled>Apply reviewed batch</button>
+    </form>
+    <section id="organization-result" aria-labelledby="organization-result-title" tabindex="-1" hidden>
+      <h3 id="organization-result-title">Batch outcome</h3><div id="organization-outcome"></div>
+    </section>
+    <section aria-labelledby="organization-history-title">
+      <h3 id="organization-history-title">Per-book move history and recovery</h3>
+      <p class="muted">After a partial failure or lost connection, inspect each book's journal before doing anything else; do not assume an unconfirmed move failed. These history buttons work even when a book is unavailable. Undo and pending recovery require their own fresh preview and confirmation.</p>
+      <div id="organization-history" class="organization-history"></div>
+    </section>
   </dialog>
   <dialog id="list-dialog" aria-labelledby="list-title">
     <div class="dialog-heading"><h2 id="list-title">New reading list</h2><button type="button" data-close="list-dialog" class="quiet">Close</button></div>
     <form id="list-form" class="form-stack">
       <fieldset id="list-controls"><legend>Private reading list</legend><label>Name<input id="list-name" required maxlength="200"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
         <label>Folder<select id="list-folder"><option value="">Unfiled</option></select></label>
-        <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules</option><option value="any">Any rule</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><p class="muted">Smart lists update automatically as metadata, your reading progress, and your private ratings change. Use 1–20 rules. Year uses 0–9999; unknown years do not match. My rating uses 0–5 (0 means unrated).</p></fieldset>
+        <p class="muted">Smart-rule previews show the regular library only. When browsing a saved list, the selected Library, Archived, or Unsorted area still applies.</p>
+        <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules (AND)</option><option value="any">Any rule (OR)</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><button id="add-list-group" type="button">Add group</button><p class="muted">Smart lists update automatically as metadata, your reading progress, and private ratings change. Use 1–20 total rules in at most 20 groups and 4 levels (including this root). Groups cannot be empty. Use Is empty for unknown dates or other optional numbers. My rating uses 0–5 (0 means unrated). Text comparisons treat % and _ literally. Preview current rules before saving; changing the name or folder does not require another preview.</p><button id="preview-list" type="button">Preview matches</button><p id="list-preview-status" role="status"></p><nav class="library-pagination" aria-label="Smart list preview pages"><button id="previous-list-preview" type="button" disabled>Previous matches</button><span id="list-preview-page" role="status">Page 1 of 1</span><button id="next-list-preview" type="button" disabled>Next matches</button></nav><div id="list-preview-items"></div></fieldset>
       </fieldset>
+      <p id="list-rule-status" role="status"></p><button id="retry-list-rules" type="button" hidden>Retry loading rule fields</button>
       <button id="save-list" type="submit">Save list</button>
     </form><p id="list-status" role="status"></p>
   </dialog>
   <dialog id="folder-dialog" aria-labelledby="folder-title">
     <div class="dialog-heading"><h2 id="folder-title">Private list folders</h2><button type="button" data-close="folder-dialog" class="quiet">Close</button></div>
-    <p class="muted">Organize your reading lists in one level of private folders. Deleting a folder only unfiles its lists.</p>
+    <p class="muted">Organize private lists in nested folders. Deleting a folder unfiles only its direct lists and moves its immediate child folders to the top level, keeping their contents. No lists, books, or private reading data are deleted.</p>
     <form id="folder-form" class="form-stack">
       <fieldset id="folder-controls"><legend>Folder</legend>
         <label>Choose folder<select id="folder-choice"><option value="">New folder</option></select></label>
         <label>Name<input id="folder-name" required maxlength="200"></label>
+        <label>Parent folder<select id="folder-parent"><option value="">Top level</option></select></label>
       </fieldset>
-      <div class="actions list-actions"><button id="save-folder" type="submit">Create folder</button><button id="delete-folder" type="button" disabled>Delete folder</button></div>
+      <div class="actions list-actions"><button id="save-folder" type="submit">Create folder</button><button id="delete-folder" type="button" class="danger" disabled>Delete folder</button></div>
     </form>
     <p id="folder-status" role="status"></p>
+  </dialog>
+  <dialog id="data-relocation-dialog" aria-labelledby="data-relocation-title" aria-describedby="data-relocation-help">
+    <div class="dialog-heading"><h2 id="data-relocation-title">Relocate application data</h2><button type="button" data-close="data-relocation-dialog" class="quiet">Cancel</button></div>
+    <p id="data-relocation-source"></p>
+    <p id="data-relocation-help" class="notice">The server validates the destination before queuing a move for the next startup. Its parent must already exist, but the destination itself must not exist. Use a separate absolute path outside library roots, application files, settings, and the current data directory; symlinks and overwriting existing contents are not allowed. Allow enough free disk space for the complete copy. The source is preserved. A failed copy keeps the old data location active.</p>
+    <form id="data-relocation-form" class="form-stack">
+      <fieldset id="data-relocation-controls"><legend>Validated relocation request</legend>
+        <label>Destination — absolute server directory<input id="data-relocation-destination" required spellcheck="false" autocomplete="off"></label>
+        <label class="checkbox"><input id="data-relocation-confirm" type="checkbox" required>I understand this queues a copy for the next startup, not an immediate move.</label>
+        <label>Current administrator password<input id="data-relocation-password" type="password" autocomplete="current-password" required maxlength="256"></label>
+      </fieldset>
+      <button id="queue-data-relocation" type="submit" class="primary">Validate and queue relocation</button>
+    </form>
+    <p id="data-relocation-status" role="status"></p>
   </dialog>
   <dialog id="user-dialog" aria-labelledby="user-title">
     <div class="dialog-heading"><h2 id="user-title">Manage accounts</h2><button type="button" data-close="user-dialog" class="quiet">Close</button></div>
@@ -178,8 +485,10 @@
     <fieldset id="user-controls"><legend>Library accounts</legend><div id="user-list"></div>
       <h3>Create account</h3>
       <form id="user-form" class="form-stack">
-        <label>Username<input name="username" autocomplete="off" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens."></label>
-        <label>Password<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label>
+        <label>Username (required)<input name="username" autocomplete="off" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" aria-describedby="account-username-help"></label>
+        <p id="account-username-help" class="muted">Up to 64 letters, numbers, underscores, periods, or hyphens.</p>
+        <label>Password (required)<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="account-password-help"></label>
+        <p id="account-password-help" class="muted">Use 12–256 characters.</p>
         <label>Role<select name="role"><option value="reader">Reader</option><option value="admin">Administrator</option></select></label>
         <p class="muted">Administrators can scan libraries, edit metadata, and manage accounts. New accounts can sign in normally.</p>
         <button type="submit" class="primary">Create account</button>

@@ -4,7 +4,14 @@ namespace PanelHaven.Web;
 
 public sealed record BookGroup(string Key, string Label, int Count, string? CoverId,
     int Unread, int InProgress, int Completed, int CompletionPercent);
-public sealed record BookGroupPage(List<BookGroup> Items, int Total, int Page, int PageSize);
+public sealed record BookGroupPage(List<BookGroup> Items, int Total, int Page, int PageSize)
+{
+    public IReadOnlyList<BookSection> Sections { get; init; } = Array.Empty<BookSection>();
+}
+public sealed record BookSection(string Key, string Label, int Start)
+{
+    public int Count { get; internal set; } = 1;
+}
 
 public sealed partial class LibraryStore
 {
@@ -19,92 +26,290 @@ public sealed partial class LibraryStore
     public BookPage ListBooks(string user, string? query, int page = 1, int pageSize = 48,
         string sort = "series", string direction = "asc", string status = "all", string? publisher = null,
         string? listId = null, string availability = "all", string groupBy = "none", string? groupKey = null,
-        int? rating = null, string location = "library")
+        int? rating = null, string location = "library", string sectionBy = "none", string? sectionKey = null,
+        SmartListPreview? advancedFilter = null)
     {
         var groupColumn = GroupColumn(groupBy);
         if (groupKey is not null && groupColumn is null)
             throw new ArgumentException("A group key requires a grouping.");
+        var sectionColumn = GroupColumn(sectionBy);
+        if (sectionKey is not null && sectionColumn is null)
+            throw new ArgumentException("A section key requires a section grouping.");
         if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
         using var db = Open();
         using var transaction = db.BeginTransaction(deferred: true);
         var list = listId is null ? null : LoadList(db, transaction, user, listId);
-        var order = sort switch
-        {
-            "series" => "b.series COLLATE NOCASE",
-            "list" => list?.Kind == "manual"
-                ? "(SELECT lb.position FROM list_books lb WHERE lb.list_id=$list AND lb.book_id=b.id)"
-                : "b.series COLLATE NOCASE",
-            "title" => "b.title COLLATE NOCASE",
-            "number" => "b.number COLLATE NATURAL_NUMBER",
-            "publisher" => "b.publisher COLLATE NOCASE",
-            "pageCount" => "b.page_count",
-            "personalRating" => "COALESCE(r.rating,0)",
-            _ => throw new ArgumentException("Invalid sort.")
-        };
-        var ordering = direction switch
-        {
-            "asc" => " ASC", "desc" => " DESC", _ => throw new ArgumentException("Invalid sort direction.")
-        };
+        var (expression, collation) = ArrangeColumn(sort, list);
+        var order = expression + collation + SortDirection(direction);
+        if (sectionColumn is not null)
+            order = sectionColumn + " COLLATE NOCASE," + sectionColumn + "," + order;
         using var command = Command(db, "");
         command.Transaction = transaction;
-        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location);
+        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location, advancedFilter);
         if (groupKey is not null)
         {
             filter += " AND " + groupColumn + "=$groupKey";
             command.Parameters.AddWithValue("$groupKey", groupKey);
         }
-        var result = ReadBookPage(command, filter, order + ordering, page, pageSize);
+        if (sectionKey is not null)
+        {
+            filter += " AND " + sectionColumn + "=$sectionKey";
+            command.Parameters.AddWithValue("$sectionKey", sectionKey);
+        }
+        var result = ReadBookPage(command, filter, order, page, pageSize, sectionBy, sectionColumn);
+        if (groupBy == "series" && !string.IsNullOrWhiteSpace(groupKey) && result.Items.Count > 0)
+            foreach (var (_, gap) in ReadMissingIssues(db, transaction, location, groupKey,
+                sort == "number" && direction == "desc"))
+                if (result.Items.Exists(book => book.Id == gap.BeforeBookId))
+                    result.MissingIssues.Add(gap);
         transaction.Commit();
         return result;
     }
 
-    private static BookPage ReadBookPage(SqliteCommand command, string filter, string order, int page, int pageSize)
+    public string? GetNextIssue(string id)
+    {
+        using var db = Open();
+        using var transaction = db.BeginTransaction(deferred: true);
+        using var command = Command(db, "SELECT series,number,path FROM books WHERE id=$id", ("$id", id));
+        command.Transaction = transaction;
+        string series, number, path;
+        using (var current = command.ExecuteReader())
+        {
+            if (!current.Read()) throw new KeyNotFoundException();
+            series = current.GetString(0);
+            number = current.GetString(1);
+            path = current.GetString(2);
+        }
+        if (string.IsNullOrWhiteSpace(series) || string.IsNullOrWhiteSpace(number)) return null;
+        var location = archivePath is not null && IsContained(archivePath, path) ? "archived"
+            : unsortedPath is not null && IsContained(unsortedPath, path) ? "unsorted" : "library";
+        command.CommandText = """
+            SELECT b.id,b.number FROM books b
+            WHERE b.series=$series AND b.number COLLATE NATURAL_NUMBER>$number
+                AND b.availability='available' AND
+            """ + LocationFilter(command, location) + " ORDER BY b.number COLLATE NATURAL_NUMBER,b.id";
+        command.Parameters.AddWithValue("$series", series);
+        command.Parameters.AddWithValue("$number", number);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var candidate = reader.GetString(1);
+            // The catalog's ordinal tie-break sorts variants like 02 and 2, not different issues.
+            if (!string.IsNullOrWhiteSpace(candidate) && NaturalCompare(candidate, number, ordinalTieBreak: false) > 0)
+                return reader.GetString(0);
+        }
+        return null;
+    }
+
+    private static int? WholeIssueNumber(string value) =>
+        int.TryParse(value.Trim(), System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : null;
+
+    private IEnumerable<(string Series, MissingIssue Gap)> ReadMissingIssues(SqliteConnection db,
+        SqliteTransaction transaction, string location, string? series = null, bool descending = false)
+    {
+        using var command = Command(db, "");
+        command.Transaction = transaction;
+        command.CommandText = "SELECT b.series,b.id,b.number FROM books b WHERE "
+            + LocationFilter(command, location) + (series is null ? "" : " AND b.series=$series")
+            + " ORDER BY b.series,b.id";
+        if (series is not null) command.Parameters.AddWithValue("$series", series);
+        using var reader = command.ExecuteReader();
+        var numbers = new SortedDictionary<int, string>();
+        string? currentSeries = null;
+        while (reader.Read())
+        {
+            var name = reader.GetString(0);
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (name != currentSeries)
+            {
+                foreach (var gap in Gaps()) yield return (currentSeries!, gap);
+                numbers.Clear();
+                currentSeries = name;
+            }
+            if (WholeIssueNumber(reader.GetString(2)) is { } number)
+                numbers.TryAdd(number, reader.GetString(1));
+        }
+        foreach (var gap in Gaps()) yield return (currentSeries!, gap);
+
+        IEnumerable<MissingIssue> Gaps()
+        {
+            KeyValuePair<int, string>? previous = null;
+            foreach (var issue in numbers)
+            {
+                if (previous is { } lower && (long)issue.Key - lower.Key > 1)
+                    yield return new(descending ? lower.Value : issue.Value, lower.Key + 1, issue.Key - 1);
+                previous = issue;
+            }
+        }
+    }
+
+    private static BookPage ReadBookPage(SqliteCommand command, string filter, string order, int page, int pageSize,
+        string sectionBy = "none", string? sectionColumn = null)
     {
         command.CommandText = "SELECT COUNT(*)" + filter;
         var total = Convert.ToInt32(command.ExecuteScalar());
         page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
-        command.CommandText = "SELECT " + BookColumns + filter + " ORDER BY " + order
+        command.CommandText = "SELECT " + BookColumns + (sectionColumn is null ? "" : "," + sectionColumn)
+            + filter + " ORDER BY " + order
             + ",b.id LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * (long)pageSize);
-        var result = new List<Book>(Math.Min(pageSize, total));
+        var sections = sectionColumn is null ? null : new List<BookSection>();
+        var result = new BookPage(new List<Book>(Math.Min(pageSize, total)), total, page, pageSize)
+        {
+            Sections = sections is null ? Array.Empty<BookSection>() : sections
+        };
         using (var reader = command.ExecuteReader())
-            while (reader.Read()) result.Add(ReadBook(reader, false));
-        return new BookPage(result, total, page, pageSize);
+            while (reader.Read())
+            {
+                if (sections is not null)
+                    AppendSection(sections, reader.GetString(13), sectionBy, result.Items.Count);
+                result.Items.Add(ReadBook(reader, false));
+            }
+        return result;
     }
 
     public BookGroupPage ListGroups(string user, string? query, string groupBy, int page = 1,
         int pageSize = 48, string status = "all", string? publisher = null, string? listId = null,
-        string availability = "all", int? rating = null, string location = "library")
+        string availability = "all", int? rating = null, string location = "library",
+        string sectionBy = "none", string? sort = null, string direction = "asc", string? sectionKey = null,
+        SmartListPreview? advancedFilter = null)
     {
         var column = GroupColumn(groupBy) ?? throw new ArgumentException("A grouping is required.");
+        var sectionColumn = GroupColumn(sectionBy);
+        if (sectionKey is not null && sectionColumn is null)
+            throw new ArgumentException("A section key requires a section grouping.");
+        var ordering = SortDirection(direction);
         if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
         using var db = Open();
         using var transaction = db.BeginTransaction(deferred: true);
         var list = listId is null ? null : LoadList(db, transaction, user, listId);
+        var order = "label COLLATE NOCASE," + column;
+        if (sort is not null)
+        {
+            var (expression, collation) = ArrangeColumn(sort, list);
+            // Apply the collation both inside MIN/MAX and to its result: aggregates do not inherit it.
+            order = (direction == "asc" ? "MIN(" : "MAX(") + expression + collation + ")"
+                + collation + ordering + "," + order;
+        }
+        if (sectionColumn is not null)
+            order = sectionColumn + " COLLATE NOCASE," + sectionColumn + "," + order;
         using var command = Command(db, "");
         command.Transaction = transaction;
-        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location);
-        var grouped = filter + " GROUP BY " + column;
+        var filter = BrowseFilter(command, user, query, status, publisher, availability, list, rating, location, advancedFilter);
+        if (sectionKey is not null)
+        {
+            filter += " AND " + sectionColumn + "=$sectionKey";
+            command.Parameters.AddWithValue("$sectionKey", sectionKey);
+        }
+        var grouped = filter + " GROUP BY " + (sectionColumn is null ? "" : sectionColumn + ",") + column;
         command.CommandText = "SELECT COUNT(*) FROM (SELECT " + column + grouped + ")";
         var total = Convert.ToInt32(command.ExecuteScalar());
         page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
         command.CommandText = "SELECT " + column + ",CASE WHEN " + column
             + "='' THEN $unknown ELSE " + column + " END AS label,COUNT(*),"
             + "MIN(CASE WHEN b.availability='available' THEN b.id END),"
-            + "SUM(p.book_id IS NULL),SUM(p.book_id IS NOT NULL AND p.completed=0),SUM(COALESCE(p.completed,0))" + grouped
-            + " ORDER BY label COLLATE NOCASE," + column + " LIMIT $limit OFFSET $offset";
+            + "SUM(p.book_id IS NULL),SUM(p.book_id IS NOT NULL AND p.completed=0),SUM(COALESCE(p.completed,0))"
+            + (sectionColumn is null ? "" : "," + sectionColumn) + grouped
+            + " ORDER BY " + order + " LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$unknown", "Unknown " + groupBy);
+        command.Parameters.AddWithValue("$limit", pageSize);
+        command.Parameters.AddWithValue("$offset", (page - 1) * (long)pageSize);
+        var sections = sectionColumn is null ? null : new List<BookSection>();
+        var result = new BookGroupPage(new List<BookGroup>(Math.Min(pageSize, total)), total, page, pageSize)
+        {
+            Sections = sections is null ? Array.Empty<BookSection>() : sections
+        };
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+            {
+                if (sections is not null)
+                    AppendSection(sections, reader.GetString(7), sectionBy, result.Items.Count);
+                result.Items.Add(new BookGroup(reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4), reader.GetInt32(5),
+                    reader.GetInt32(6), (int)(reader.GetInt64(6) * 100 / reader.GetInt64(2))));
+            }
+        transaction.Commit();
+        return result;
+    }
+
+    public BookGroupPage ListSeriesShelf(string user, string kind, int page = 1, int pageSize = 12)
+    {
+        if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
+        var eligibility = kind switch
+        {
+            "on-deck" => """
+                unread<count AND completed<count AND
+                (last_activity >= $now-30*86400 OR last_added >= $now-7*86400 OR last_activity IS NULL)
+                """,
+            "recently-updated" => "last_added >= $now-12*86400",
+            "newly-added" => "1",
+            _ => throw new ArgumentException("Invalid series shelf.")
+        };
+        var order = kind switch
+        {
+            "on-deck" => "last_activity DESC,last_added DESC,",
+            "recently-updated" => "last_added DESC,",
+            _ => "first_added DESC,"
+        };
+        using var db = Open();
+        using var transaction = db.BeginTransaction(deferred: true);
+        using var command = Command(db, "", ("$user", user), ("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        command.Transaction = transaction;
+        var grouped = """
+            WITH series AS (
+                SELECT b.series AS key,COUNT(*) AS count,
+                    MIN(CASE WHEN b.availability='available' THEN b.id END) AS cover,
+                    SUM(p.book_id IS NULL) AS unread,
+                    SUM(p.book_id IS NOT NULL AND p.completed=0) AS in_progress,
+                    SUM(COALESCE(p.completed,0)) AS completed,
+                    MAX(p.updated_at) AS last_activity,MAX(b.added_at) AS last_added,
+                    CASE WHEN COUNT(b.added_at)=COUNT(*) THEN MIN(b.added_at) END AS first_added
+                FROM books b LEFT JOIN progress p ON p.book_id=b.id AND p.user_id=$user
+                WHERE trim(b.series)<>'' AND
+            """ + LocationFilter(command, "library") + " GROUP BY b.series) ";
+        command.CommandText = grouped + "SELECT COUNT(*) FROM series WHERE " + eligibility;
+        var total = Convert.ToInt32(command.ExecuteScalar());
+        page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
+        command.CommandText = grouped
+            + "SELECT key,count,cover,unread,in_progress,completed FROM series WHERE " + eligibility
+            + " ORDER BY " + order + "key COLLATE NOCASE,key LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", pageSize);
         command.Parameters.AddWithValue("$offset", (page - 1) * (long)pageSize);
         var result = new List<BookGroup>(Math.Min(pageSize, total));
         using (var reader = command.ExecuteReader())
             while (reader.Read())
-                result.Add(new BookGroup(reader.GetString(0), reader.GetString(1), reader.GetInt32(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4), reader.GetInt32(5),
-                    reader.GetInt32(6), (int)(reader.GetInt64(6) * 100 / reader.GetInt64(2))));
+                result.Add(new BookGroup(reader.GetString(0), reader.GetString(0), reader.GetInt32(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetInt32(3), reader.GetInt32(4),
+                    reader.GetInt32(5), (int)(reader.GetInt64(5) * 100 / reader.GetInt64(1))));
         transaction.Commit();
         return new BookGroupPage(result, total, page, pageSize);
+    }
+
+    private static (string Expression, string Collation) ArrangeColumn(string sort, NativeList? list) => sort switch
+    {
+        "series" => ("b.series", " COLLATE NOCASE"),
+        "list" => list?.Kind == "manual"
+            ? ("(SELECT lb.position FROM list_books lb WHERE lb.list_id=$list AND lb.book_id=b.id)", "")
+            : ("b.series", " COLLATE NOCASE"),
+        "title" => ("b.title", " COLLATE NOCASE"),
+        "number" => ("b.number", " COLLATE NATURAL_NUMBER"),
+        "publisher" => ("b.publisher", " COLLATE NOCASE"),
+        "pageCount" => ("b.page_count", ""),
+        "personalRating" => ("COALESCE(r.rating,0)", ""),
+        _ => throw new ArgumentException("Invalid sort.")
+    };
+
+    private static string SortDirection(string direction) => direction switch
+    {
+        "asc" => " ASC", "desc" => " DESC", _ => throw new ArgumentException("Invalid sort direction.")
+    };
+
+    private static void AppendSection(List<BookSection> sections, string key, string sectionBy, int index)
+    {
+        if (sections.Count > 0 && sections[^1].Key == key) sections[^1].Count++;
+        else sections.Add(new(key, key.Length == 0 ? "Unknown " + sectionBy : key, index));
     }
 
     private static string? GroupColumn(string groupBy) => groupBy switch
@@ -114,7 +319,7 @@ public sealed partial class LibraryStore
     };
 
     private string BrowseFilter(SqliteCommand command, string user, string? query, string status,
-        string? publisher, string availability, NativeList? list, int? rating, string location)
+        string? publisher, string availability, NativeList? list, int? rating, string location, SmartListPreview? advancedFilter)
     {
         if (query?.Length > 2000) throw new ArgumentException("Search is too long.");
         if (publisher?.Length > 2000) throw new ArgumentException("Publisher is too long.");
@@ -149,10 +354,15 @@ public sealed partial class LibraryStore
             command.Parameters.AddWithValue("$rating", rating.Value);
         }
         if (list is not null) filter += " AND " + ListMembershipFilter(command, list);
+        if (advancedFilter is not null)
+        {
+            ValidateSmartRules(advancedFilter.Match, advancedFilter.Rules);
+            filter += " AND " + SmartListFilter(command, advancedFilter.Match, advancedFilter.Rules);
+        }
         return filter;
     }
 
-    private string LocationFilter(SqliteCommand command, string location)
+    private string LocationFilter(SqliteCommand command, string location, string parameterPrefix = "$")
     {
         string Within(string? root, string parameter)
         {
@@ -166,9 +376,9 @@ public sealed partial class LibraryStore
         }
         return location switch
         {
-            "library" => "(NOT " + Within(archivePath, "$archived") + " AND NOT " + Within(unsortedPath, "$unsorted") + ")",
-            "archived" => Within(archivePath, "$archived"),
-            "unsorted" => Within(unsortedPath, "$unsorted"),
+            "library" => "(NOT " + Within(archivePath, parameterPrefix + "archived") + " AND NOT " + Within(unsortedPath, parameterPrefix + "unsorted") + ")",
+            "archived" => Within(archivePath, parameterPrefix + "archived"),
+            "unsorted" => Within(unsortedPath, parameterPrefix + "unsorted"),
             _ => throw new ArgumentException("Invalid library location.")
         };
     }

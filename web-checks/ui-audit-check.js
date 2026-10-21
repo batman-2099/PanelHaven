@@ -19,7 +19,7 @@
   const originalConfirm = window.confirm;
   const pageRequests = [];
   let release, holdCatalog = false, failCatalog = false;
-  let scanOverride = false, watchOverride = false, scanPolls = 0;
+  let scanOverride = false, scanPolls = 0;
   assert(!$("library-view").hidden && !document.querySelector("dialog[open]"), "Start on the idle Library page.");
   window.fetch = async (input, options = {}) => {
     const url = new URL(input instanceof Request ? input.url : input, location.href);
@@ -31,10 +31,6 @@
       scanPolls++;
       return new Response(JSON.stringify({ ...status, state: "running", errorCount: 1, errors: ["Audit-only simulated scan error"] }), { headers: { "Content-Type": "application/json" } });
     }
-    if (method === "GET" && url.pathname === "/api/watch-status" && watchOverride) {
-      const status = await originalFetch(input, options).then(response => response.json());
-      return new Response(JSON.stringify({ ...status, unavailableRoots: 1 }), { headers: { "Content-Type": "application/json" } });
-    }
     if (url.pathname === "/api/books") {
       if (holdCatalog) { holdCatalog = false; await new Promise(resolve => { release = resolve; }); }
       if (failCatalog) { failCatalog = false; throw new TypeError("Simulated catalog failure"); }
@@ -43,7 +39,8 @@
   };
   try {
     $("clear-selection").click();
-    change("group-by", "series");
+    $("group-by").value = "none";
+    change("stack-by", "series");
     await waitFor(idle);
     const group = $("books").querySelector(".group-card .cover-button");
     assert(group, "A series group is required.");
@@ -66,6 +63,9 @@
     const checkbox = $("books").querySelector(".book-selection input");
     assert(checkbox, "The series must contain a selectable comicbook.");
     const bookId = checkbox.dataset.bookId;
+    const bookPath = `/api/books/${encodeURIComponent(bookId)}`;
+    const book = await originalFetch(bookPath).then(response => response.json());
+    const order = await originalFetch(`${bookPath}/page-order`).then(response => response.json());
     checkbox.click();
     $("clear-selection").focus();
     $("clear-selection").click();
@@ -100,35 +100,37 @@
     if (!$("cover-alone").checked) $("cover-alone").click();
     $("page-number").value = "1";
     $("page-form").requestSubmit();
-    await waitFor(() => $("reader-pages").querySelector("img")?.naturalWidth > 0 && $("page-number").value === "1");
-    const coverPath = `/api/books/${encodeURIComponent(bookId)}/pages/0`;
-    const before = pageRequests.filter(path => path === coverPath).length;
+    const physicalPage = order.pages[0];
+    const visibleImage = () => $("reader-pages").querySelector(`[data-page="${physicalPage}"] img`);
+    await waitFor(() => visibleImage()?.naturalWidth > 0 && $("page-number").value === "1");
+    const image = visibleImage();
+    const pagePath = `${bookPath}/pages/${physicalPage}`;
+    const before = pageRequests.filter(path => path === pagePath).length;
+    assert(before > 0, "Image reuse needs a positive request baseline for the displayed physical page.");
     change("reader-mode", "spread");
-    await waitFor(() => $("reader-pages").querySelector("img")?.naturalWidth > 0);
-    assert(pageRequests.filter(path => path === coverPath).length === before, "Changing layout must reuse an already loaded visible page without fetching it again.");
+    await waitFor(() => visibleImage()?.naturalWidth > 0);
+    assert(visibleImage() === image && pageRequests.filter(path => path === pagePath).length === before,
+      "Changing layout must reuse the displayed physical image without fetching it again, including custom reading order.");
     $("close-reader").click();
     await waitFor(() => $("reader-view").hidden);
-    scanOverride = watchOverride = true;
-    await waitFor(() => $("scan-summary").textContent.includes("1 error") && $("watch-status").textContent.includes("1 unavailable"));
-    assert($("scan-panel").open && $("watch-status").closest("details").open, "New scan and watcher errors must reveal their details.");
+    scanOverride = true;
+    await waitFor(() => $("scan-summary").textContent.includes("1 error"));
+    assert($("scan-panel").open, "New scan errors must reveal their details.");
     $("scan-panel").open = false;
-    $("watch-status").closest("details").open = false;
     const polls = scanPolls;
     await waitFor(() => scanPolls > polls);
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    assert(!$("scan-panel").open && !$("watch-status").closest("details").open, "Unchanged polling must preserve manually collapsed details.");
+    assert(!$("scan-panel").open, "Unchanged polling must preserve manually collapsed scan details.");
     // A fresh real document/module retains reload coverage without source extraction or a fake DOM.
     const html = await originalFetch("/").then(response => response.text());
     const identity = await originalFetch("/api/session").then(response => response.json());
-    const bookPath = `/api/books/${encodeURIComponent(bookId)}`;
-    const book = await originalFetch(bookPath).then(response => response.json());
-    const order = await originalFetch(`${bookPath}/page-order`).then(response => response.json());
     assert(book.pageCount >= 4, "The selected series book must have at least four pages.");
     const storageKey = `panelhaven.dismissed-scan:${identity.username}`;
     const savedDismissal = localStorage.getItem(storageKey);
     const scanResult = { state: "completed", scanned: 987654, added: 0, updated: 0, skipped: 987654, errorCount: 0, errors: [], revision: 1 };
     const failedPages = new Set();
     let frame, win, doc, holdPath, releaseRequest, heldPage, releaseImage, allowMove = false, confirmCalls = 0;
+    let sourceOrder = null, sourceWrites = 0, sourceLocation = book.location, nextLookups = 0, failProgress = false;
     const element = id => doc.getElementById(id);
     const close = id => element(id).querySelector("[data-close]").click();
     const clean = () => {
@@ -176,7 +178,33 @@
           const preferences = await originalFetch(input, options).then(response => response.json());
           return json({ ...preferences, mode: "spread", coverAlone: false, rotation: 0, skipPageTypes: 0 });
         }
-        if (path === bookPath) return json({ ...book, started: false });
+        if (path === bookPath) return json({ ...book, started: false, location: sourceLocation });
+        if (sourceOrder && path === `${bookPath}/page-order`) return json({ bookId, revision: `audit-${sourceWrites}`, pages: sourceOrder });
+        if (sourceOrder && path === `${bookPath}/page-info`) return json(sourceOrder.map(page => ({
+          page, type: sourceWrites ? "Story" : "", typeMask: 0, bookmark: sourceWrites ? `Source revision ${sourceWrites}` : ""
+        })));
+        if (sourceOrder && path === `${bookPath}/next-issue`) {
+          nextLookups++;
+          return json({ id: sourceLocation === book.location ? "audit-next-issue" : null });
+        }
+        if (sourceOrder && path === `${bookPath}/archive-backups`) return json([{
+          id: "audit-backup", createdAt: new Date().toISOString(), originalSize: 1, originalHash: "audit", writtenHash: "audit"
+        }]);
+        if (sourceOrder && (path === `${bookPath}/archive-write/preview` || path === `${bookPath}/archive-backups/audit-backup/preview`))
+          return json({ bookId, operation: path.includes("archive-backups") ? "restore" : "write", backupId: "audit-backup",
+            revision: "audit", canApply: true, title: book.title, location: sourceLocation, sourceHash: "audit", changes: [], entries: [] });
+        if (sourceOrder && (path === `${bookPath}/archive-write` || path === `${bookPath}/archive-backups/audit-backup/restore`)) {
+          sourceWrites++;
+          sourceOrder = Array.from({ length: book.pageCount }, (_, page) => page);
+          if (sourceWrites === 2) sourceOrder.reverse();
+          return json({ backupId: "audit-backup", message: "Simulated source replacement." });
+        }
+        if (sourceOrder && path === `${bookPath}/file-operations` && method === "POST") {
+          sourceLocation = book.location === "archived" ? "library" : "archived";
+          return new win.Response(null, { status: 204 });
+        }
+        if (failProgress && path.endsWith("/progress") && method === "POST")
+          return new win.Response("Simulated progress save failure", { status: 503 });
         if (path.startsWith(`${bookPath}/pages/`)) {
           const page = Number(path.split("/").at(-1));
           if (page === heldPage) {
@@ -184,7 +212,7 @@
             await new Promise(resolve => { releaseImage = resolve; });
           }
           if (failedPages.has(page)) return new win.Response("Simulated page failure", { status: 500 });
-          return new win.Response('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="white"/></svg>', { headers: { "Content-Type": "image/svg+xml" } });
+          return new win.Response(`<svg xmlns="http://www.w3.org/2000/svg" width="${600 + sourceWrites}" height="900"><rect width="100%" height="100%" fill="white"/></svg>`, { headers: { "Content-Type": "image/svg+xml" } });
         }
         if (path === `${bookPath}/file-operations/preview`) return json({
           bookId, operation: "move", revision: "audit-preview", canApply: allowMove, conflicts: [],
@@ -254,17 +282,29 @@
       close("details-dialog");
       await waitFor(clean);
 
-      for (const [state, errorCount, hidden] of [["completed", 0, true], ["cancelled", 0, true], ["running", 0, false], ["failed", 0, false], ["completed", 1, false]]) {
+      for (const [state, errorCount] of [["completed", 0], ["cancelled", 0], ["running", 0], ["failed", 0], ["completed", 1]]) {
+        element("account-menu").open = false;
         Object.assign(scanResult, { state, errorCount, errors: errorCount ? ["Audit-only scan error"] : [] });
         await pollScan();
-        assert(element("scan-panel").hidden === hidden, `${state}/${errorCount}: reader scan visibility.`);
+        assert(!element("scan-panel").hidden && !element("scan-panel").checkVisibility(), `${state}/${errorCount}: scan results must stay inside the closed menu.`);
+        element("account-menu").open = true;
+        assert(element("scan-panel").checkVisibility(), `${state}/${errorCount}: reader scan results must be available from the menu.`);
+        if (state === "running") {
+          element("scan-panel").open = true;
+          element("cancel-scan").focus();
+        }
+        await pollScan();
+        assert(element("account-menu").open, "Checking scan status closed the menu.");
+        if (state === "running") assert(doc.activeElement === element("scan-summary"), "A disabled scan action must leave focus on the scan summary.");
       }
+      element("account-menu").open = false;
       Object.assign(scanResult, { state: "completed", errorCount: 0, errors: [] });
       await pollScan();
       await closeReader();
       assert(!element("scan-panel").hidden, "Successful scan results remain visible in the library.");
       element("group-by").value = "none";
-      element("group-by").dispatchEvent(new win.Event("change", { bubbles: true }));
+      element("stack-by").value = "none";
+      element("stack-by").dispatchEvent(new win.Event("change", { bubbles: true }));
       await waitFor(() => element("books").getAttribute("aria-busy") !== "true");
       element("books").querySelector(".book-selection input").click();
       holdPath = "/api/file-operation-roots";
@@ -315,8 +355,63 @@
       await waitFor(() => element("page-number").value === "3");
       await closeReader();
       failedPages.clear();
+      sourceOrder = [...order.pages.slice(1), order.pages[0]];
+      await openReader();
+      element("reader-mode").value = "single";
+      element("reader-mode").dispatchEvent(new win.Event("change", { bubbles: true }));
+      failProgress = true;
+      element("page-number").value = "2";
+      element("page-form").requestSubmit();
+      const physical = sourceOrder[1];
+      const sourceImage = () => element("reader-pages").querySelector(`[data-page="${physical}"] img`);
+      await waitFor(() => sourceImage()?.naturalWidth > 0 && !element("retry-save").hidden);
+      element("reader-details").click();
+      await waitFor(() => !element("write-archive").hidden);
+      element("write-archive").click();
+      await waitFor(() => !element("preview-archive").disabled);
+      for (const restoring of [false, true]) {
+        const previous = sourceImage();
+        if (restoring) element("archive-backups").querySelector('[data-backup-id="audit-backup"]').click();
+        else element("preview-archive").click();
+        await waitFor(() => !element("archive-preview").hidden && !element("confirm-archive").disabled);
+        element("confirm-archive").click();
+        element("archive-form").requestSubmit();
+        await waitFor(() => !element("preview-archive").disabled && sourceImage()?.naturalWidth === 600 + sourceWrites && sourceImage() !== previous);
+        assert(sourceWrites === (restoring ? 2 : 1) && element("page-number").value === String(sourceOrder.indexOf(physical) + 1),
+          "Write/restore must reload saved reading order while retaining the physical page.");
+        assert(element("embedded-bookmarks").textContent.includes(`Source revision ${sourceWrites}`),
+          "Write/restore must refresh source-dependent page metadata and embedded bookmarks.");
+        assert(!element("retry-save").hidden, "Source refresh must not clear a failed progress save.");
+      }
+      close("archive-dialog");
+      close("details-dialog");
+      element("close-reader").click();
+      await waitFor(() => win.location.hash.startsWith("#reader/") && !element("reader-error").hidden && !element("reader-details").disabled);
+      assert(!element("reader-view").hidden && !element("retry-save").hidden, "Source refresh must retain the unsaved-progress route guard.");
+      failProgress = false;
+      element("retry-save").click();
+      await waitFor(() => element("retry-save").hidden);
+      element("page-number").value = String(book.pageCount);
+      element("page-form").requestSubmit();
+      await waitFor(() => element("next-page").getAttribute("aria-label") === "Next issue" && !element("next-page").disabled);
+      const lookups = nextLookups;
+      element("reader-details").click();
+      await waitFor(() => !element("move-archive").hidden);
+      element("move-archive").click();
+      await waitFor(() => !element("file-operation-dialog").querySelector("[data-close]").disabled);
+      element("file-operation-draft").requestSubmit();
+      await waitFor(() => !element("apply-file-operation").disabled);
+      element("file-operation-apply-form").requestSubmit();
+      await waitFor(() => !element("file-operation-dialog").querySelector("[data-close]").disabled &&
+        element("next-page").getAttribute("aria-label") === "No more issues");
+      assert(nextLookups > lookups && element("next-page").disabled, "Moving the current issue must invalidate its cached location-dependent successor.");
+      close("file-operation-dialog");
+      close("details-dialog");
+      await closeReader();
+      sourceOrder = null;
 
       element("dismiss-scan").click();
+      assert(!element("account-menu").open && frame.contentDocument.activeElement === element("account-menu").querySelector("summary"), "Dismissing scan results must restore focus to the menu trigger.");
       scanResult.revision++;
       await pollScan();
       assert(element("scan-panel").hidden, "An identical automatic scan stays dismissed despite a new revision.");
@@ -330,6 +425,18 @@
       scanResult.errors = ["Audit-only scan error"];
       await pollScan();
       assert(!element("scan-panel").hidden, "A saved success must never hide errors.");
+      assert(!element("dismiss-scan").hidden, "Finished scans with errors must offer dismissal.");
+      element("dismiss-scan").click();
+      await pollScan();
+      assert(element("scan-panel").hidden, "Acknowledged scan errors stay dismissed.");
+      await loadPage();
+      assert(element("scan-panel").hidden, "Dismissed scan errors stay dismissed after reload.");
+      scanResult.errors = ["A different scan error"];
+      await pollScan();
+      assert(!element("scan-panel").hidden, "Changed errors must reappear even when the error count is unchanged.");
+      scanResult.state = "failed";
+      await pollScan();
+      assert(!element("dismiss-scan").hidden, "Failed scans must offer dismissal.");
       Object.assign(scanResult, { state: "running", errorCount: 0, errors: [] });
       await pollScan();
       assert(!element("scan-panel").hidden, "A saved success must never hide an active scan.");
@@ -364,7 +471,7 @@
   } finally {
     try {
       release?.();
-      scanOverride = watchOverride = false;
+      scanOverride = false;
       window.confirm = () => true;
       for (const dialog of [...document.querySelectorAll("dialog[open]")].reverse()) dialog.querySelector("[data-close]")?.click();
       if (!$("reader-view").hidden) {

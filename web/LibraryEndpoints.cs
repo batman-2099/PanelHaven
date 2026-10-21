@@ -64,16 +64,25 @@ public static class LibraryEndpoints
         });
         api.MapGet("/books", (LibraryStore store, ClaimsPrincipal user, string? q, int? page, int? pageSize,
             string? sort, string? direction, string? status, string? publisher, string? listId,
-            string? availability, string? groupBy, string? groupKey, int? rating, string? location) =>
+            string? availability, string? groupBy, string? groupKey, int? rating, string? location,
+            string? sectionBy, string? sectionKey, string? filter) =>
             Results.Ok(store.ListBooks(UserId(user), q, page ?? 1, pageSize ?? 48, sort ?? "series",
-                direction ?? "asc", status ?? "all", publisher, listId, availability ?? "all", groupBy ?? "none", groupKey, rating, location ?? "library")));
+                direction ?? "asc", status ?? "all", publisher, listId, availability ?? "all", groupBy ?? "none",
+                groupKey, rating, location ?? "library", sectionBy ?? "none", sectionKey, LibraryStore.ParseCatalogFilter(filter))));
         api.MapGet("/book-filters", (LibraryStore store, string? location) => Results.Ok(new { publishers = store.ListPublishers(location ?? "library") }));
         api.MapGet("/book-groups", (LibraryStore store, ClaimsPrincipal user, string? q, string groupBy,
-            int? page, int? pageSize, string? status, string? publisher, string? listId, string? availability, int? rating, string? location) =>
+            int? page, int? pageSize, string? status, string? publisher, string? listId, string? availability,
+            int? rating, string? location, string? sectionBy, string? sort, string? direction, string? sectionKey, string? filter) =>
             Results.Ok(store.ListGroups(UserId(user), q, groupBy, page ?? 1, pageSize ?? 48,
-                status ?? "all", publisher, listId, availability ?? "all", rating, location ?? "library")));
+                status ?? "all", publisher, listId, availability ?? "all", rating, location ?? "library",
+                sectionBy ?? "none", sort, direction ?? "asc", sectionKey, LibraryStore.ParseCatalogFilter(filter))));
+        api.MapGet("/series-shelf", (LibraryStore store, ClaimsPrincipal user, string kind, int? page, int? pageSize) =>
+            Results.Ok(store.ListSeriesShelf(UserId(user), kind, page ?? 1, pageSize ?? 12)));
         api.MapGet("/maintenance", (LibraryStore store, string kind, int? page, int? pageSize) =>
-            Results.Ok(store.ListMaintenance(kind, page ?? 1, pageSize ?? 48)))
+        {
+            if (kind == "missing-issues") return Results.Ok((object)store.ListMissingIssues(page ?? 1, pageSize ?? 48));
+            return Results.Ok((object)store.ListMaintenance(kind, page ?? 1, pageSize ?? 48));
+        })
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/duplicates/{id}", (LibraryStore store, ClaimsPrincipal user, string id, int? page, int? pageSize) =>
             Results.Ok(store.CompareDuplicates(UserId(user), id, page ?? 1, pageSize ?? 3)))
@@ -83,10 +92,62 @@ public static class LibraryEndpoints
             store.RemoveMissingBook(id);
             return Results.NoContent();
         }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/delete-preview", (LibraryStore store, BookDeletePreviewRequest request, CancellationToken cancellationToken) =>
+            Results.Ok(store.PreviewBookDeletion(request, cancellationToken)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/delete", (LibraryStore store, BookDeleteRequest request, CancellationToken cancellationToken) =>
+            Results.Ok(store.DeleteBooks(request, cancellationToken)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/books/{id}/thumbnail", async (ThumbnailStore thumbnails, string id, CancellationToken cancellationToken) =>
             Results.Bytes(await thumbnails.GetAsync(id, cancellationToken), "image/jpeg"));
         api.MapGet("/books/{id}", (LibraryStore store, ClaimsPrincipal user, string id) =>
             Results.Ok(store.GetBook(UserId(user), id)));
+        api.MapGet("/books/{id}/next-issue", (LibraryStore store, string id) =>
+            Results.Ok(new { id = store.GetNextIssue(id) }));
+        api.MapGet("/books/{id}/intake", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/intake/matches", async (LibraryStore store, ComicVine provider, string id, HttpRequest request) =>
+        {
+            if (!request.HasJsonContentType()) return Error(400, "Intake matching requires a JSON hints object.");
+            try
+            {
+                var hints = await request.ReadFromJsonAsync<IntakeHints>(request.HttpContext.RequestAborted);
+                var source = store.GetIntake(id);
+                var matches = await provider.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
+                if (store.GetIntake(id).Source != source.Source)
+                    return Error(409, "The comicbook moved during matching. Refresh the review queue.");
+                return Results.Ok(matches);
+            }
+            catch (JsonException) { return Error(400, "Intake hints require series, number, publisher and nullable integer year and volume only."); }
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, ComicVine provider, string id,
+            IntakePrepareRequest request, CancellationToken cancellationToken) =>
+        {
+            store.GetIntake(id);
+            var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
+            return Results.Ok(store.PrepareIntake(id, request, metadata, cancellationToken));
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/intake/process", async (LibraryStore store, ComicVine provider, string id,
+            IntakeProcessRequest request, CancellationToken cancellationToken) =>
+        {
+            if (!request.Confirmed) return Error(400, "Explicit confirmation is required.");
+            store.GetIntake(id);
+            var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
+            return Results.Ok(store.ProcessIntake(id, request, metadata, cancellationToken));
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapGet("/books/{id}/intake-processing", (LibraryStore store, string id) => Results.Ok(store.GetIntakeProcessing(id)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/intake-processing/recover", (LibraryStore store, string id,
+            FileOperationRequest request, CancellationToken cancellationToken) =>
+            Results.Ok(store.RecoverIntakeProcessing(id, request, cancellationToken)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapGet("/books/{id}/intake-processing/original", (LibraryStore store, string id, HttpContext context) =>
+        {
+            var original = store.ExportIntakeOriginal(id);
+            context.Response.Headers.CacheControl = "private, no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            return Results.File(original.Stream, "application/octet-stream", original.Name);
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/books/{id}/pages/{page:int}", (LibraryStore store, HttpContext context, string id, int page) =>
         {
             var image = store.GetPage(id, page, context.RequestAborted);

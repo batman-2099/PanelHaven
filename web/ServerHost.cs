@@ -101,15 +101,30 @@ public sealed class ServerHost(string settingsPath, string bootstrapDataPath)
         {
             var state = await PreflightAsync(AppUnit);
             var installed = File.Exists(UnitPath(AppUnit));
-            var timer = await PreflightAsync(TimerUnit);
             var enabled = state.GetValueOrDefault("UnitFileState") == "enabled";
-            var timerEnabled = timer.GetValueOrDefault("UnitFileState") == "enabled" && timer.GetValueOrDefault("ActiveState") == "active";
-            return new(true, installed, state.GetValueOrDefault("ActiveState") == "active", enabled,
-                backupError ?? "User service startup requires a login session or administrator-enabled linger for boot startup.", timerEnabled, backupError);
+            return await ReadBackupStatusAsync(new(true, installed, state.GetValueOrDefault("ActiveState") == "active", enabled,
+                "User service startup requires a login session or administrator-enabled linger for boot startup."));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return new(false, false, false, false, error.Message, false, backupError);
+        }
+    }
+
+    private async Task<ServerHostStatus> ReadBackupStatusAsync(ServerHostStatus status)
+    {
+        try
+        {
+            var timer = await PreflightAsync(TimerUnit);
+            return status with
+            {
+                BackupEnabled = timer.GetValueOrDefault("UnitFileState") == "enabled" && timer.GetValueOrDefault("ActiveState") == "active",
+                BackupMessage = backupError
+            };
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return status with { BackupMessage = backupError is null ? error.Message : backupError + " " + error.Message };
         }
     }
 

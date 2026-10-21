@@ -35,7 +35,7 @@ internal static class ComicVineChecks
                         new { id = 34, name = (string?)null, issue_number = "1/2", cover_date = "2001-02-03", site_detail_url = issueUrl } } });
                 case "/api/issue/4000-34/":
                     return Json(new { status_code = 1, results = new {
-                        id = 34, volume = new { id = 12 }, name = "<b>A title</b>", issue_number = "1/2", cover_date = "2001-02-03",
+                        id = 34, volume = new { id = 12 }, name = "<b>A title</b>", issue_number = "1/2", cover_date = "2001-02-03", store_date = "2001-01-17",
                         description = "<p>Hello &amp; welcome</p><script>doNotImport()</script><p>Second\u0001 paragraph 😀</p>",
                         site_detail_url = issueUrl + "?tracking=ignored#fragment", person_credits = new[] {
                             new { name = "Creator", role = "writer, penciler, cover" }, new { name = "Creator", role = "writer" },
@@ -44,7 +44,7 @@ internal static class ComicVineChecks
                         story_arc_credits = new[] { new { name = "Story" } }
                     } });
                 case "/api/volume/4050-12/":
-                    return Json(new { status_code = 1, results = new { id = 12, name = "Example", publisher = new { name = "Publisher" } } });
+                    return Json(new { status_code = 1, results = new { id = 12, name = "Example", start_year = "1999", publisher = new { name = "Publisher" } } });
                 default: throw new Exception("Unexpected provider resource.");
             }
         });
@@ -71,6 +71,10 @@ internal static class ComicVineChecks
                 "Metadata includes HTML, invalid XML, invented fields, or empty replacements.");
             await provider.MetadataAsync(34, 12);
             Check(handler.Calls == 4, "Metadata cache did not reuse issue and volume responses.");
+            var processing = await provider.MetadataAsync(34, 12, intake: true);
+            Check(processing.Fields["Year"] == "2001" && processing.Fields["Month"] == "1"
+                && processing.Fields["Day"] == "17" && processing.Fields["Volume"] == "1999" && handler.Calls == 4,
+                "Intake processing lost release-date precedence, volume start year, or shared provider cache.");
             Check(handler.Times.Zip(handler.Times.Skip(1)).All(pair => pair.Second - pair.First >= TimeSpan.FromMilliseconds(900)), "Global velocity throttle was bypassed.");
             await Error(() => provider.MetadataAsync(34, 99), 409);
             Check(handler.Calls == 4, "Volume mismatch fetched an unrelated volume.");

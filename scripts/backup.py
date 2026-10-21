@@ -84,7 +84,9 @@ def configuration():
         raise ValueError("The configured runtime, application and state directory must exist.")
     excluded = [data, Path(str(data) + ".state.lock"), Path(str(data) + ".backup.lock"),
                 settings_path, Path(str(settings_path) + ".previous"), application.parent,
-                Path(__file__).absolute(), *map(absolute_path, settings["libraries"])]
+                Path(__file__).absolute(), *map(absolute_path, settings["libraries"]),
+                *(absolute_path(settings[key]) for key in ("archivePath", "unsortedPath")
+                  if settings.get(key) is not None)]
     if (root == Path("/") or root == Path.home()
             or any(root.is_relative_to(path) or path.is_relative_to(root) for path in excluded)):
         raise ValueError("Use a dedicated backup root separate from state, libraries, settings and application files.")
@@ -115,9 +117,19 @@ def main():
         destination.mkdir(mode=0o700)
         subprocess.run([*command, "--DataPath", str(data),
                         "--backup-live", str(destination / "snapshot")], check=True)
-        (destination / ".complete").write_text(MARKER)
+        with (destination / ".complete").open("x") as marker:
+            marker.write(MARKER)
+            marker.flush()
+            os.fsync(marker.fileno())
         if not owned_backup(destination):
             raise RuntimeError("Unexpected backup layout; retention was not run.")
+        # Publish the marker and snapshot container durably before deleting any recovery point.
+        for directory in (destination, root, root.parent):
+            descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
         backups = sorted(p for p in root.iterdir() if owned_backup(p))
         # Always retain this successful snapshot, even if the wall clock moved backward.
         older = [p for p in backups if p != destination]

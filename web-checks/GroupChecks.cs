@@ -42,7 +42,10 @@ public static class GroupChecks
                 using var writer = new StreamWriter(archive.CreateEntry("ComicInfo.xml").Open());
                 writer.Write(new XElement("ComicInfo", new XElement("Title", fixture.Title),
                     new XElement("Series", fixture.Series), new XElement("Publisher", fixture.Publisher),
-                    new XElement("Summary", "marker")));
+                    new XElement("Summary", "marker"), new XElement("Number", fixture.Title switch
+                    {
+                        "Alpha" => "2", "Beta" => "10", "Gamma" => "3", "Delta" => "20", "Empty" => "1", _ => "11"
+                    })));
             }
             var store = new LibraryStore(Path.Combine(directory, "groups.sqlite"), [firstRoot, secondRoot]);
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == fixtures.Length, "Group fixtures failed to import.");
@@ -81,6 +84,79 @@ public static class GroupChecks
             var empty = store.ListGroups("alice", "absent", "series", int.MaxValue, 1);
             Check(empty.Total == 0 && empty.Page == 1 && empty.Items.Count == 0, "Empty groups were not normalized.");
 
+            Check(groups.Sections.Count == 0 && store.ListBooks("alice", null).Sections.Count == 0,
+                "Omitted section grouping changed the old API.");
+            foreach (var direction in new[] { "asc", "desc" })
+            {
+                var arranged = store.ListGroups("alice", null, "series", sort: "number", direction: direction);
+                Check(arranged.Items.Select(group => group.Key).SequenceEqual(direction == "asc"
+                    ? new[] { "", "One", "Two", "one" } : new[] { "Two", "one", "One", "" }),
+                    "Stack arrangement lost natural MIN/MAX issue ordering.");
+                var sectioned = store.ListGroups("alice", null, "series", sectionBy: "publisher",
+                    sort: "number", direction: direction);
+                Check(sectioned.Total == 5 && sectioned.Items.Count(group => group.Key == "Two") == 2
+                    && sectioned.Sections.Select(section => (section.Key, section.Start, section.Count))
+                        .SequenceEqual(new[] { ("", 0, 1), ("Other", 1, 1), ("Press", 2, 3) })
+                    && sectioned.Sections[0].Label == "Unknown publisher",
+                    "Independent sections merged stacks or changed exact section ordering.");
+                var paged = Enumerable.Range(1, 3).Select(page => store.ListGroups("alice", null, "series",
+                    page, 2, sectionBy: "publisher", sort: "number", direction: direction)).ToArray();
+                Check(paged.SelectMany(page => page.Items).SequenceEqual(sectioned.Items)
+                    && paged.All(page => page.Total == 5 && page.Sections.Sum(section => section.Count) == page.Items.Count)
+                    && paged[1].Sections.Single() is { Key: "Press", Start: 0, Count: 2 }
+                    && paged[2].Sections.Single() is { Key: "Press", Start: 0, Count: 1 },
+                    "Section ranges were not contiguous and page-local.");
+                foreach (var section in sectioned.Sections)
+                foreach (var stack in sectioned.Items.Skip(section.Start).Take(section.Count))
+                {
+                    var members = store.ListBooks("alice", null, groupBy: "series", groupKey: stack.Key,
+                        sectionBy: "publisher", sectionKey: section.Key);
+                    Check(members.Total == stack.Count && members.Items.All(book => book.Publisher == section.Key
+                        && book.Series == stack.Key) && members.Items.Any(book => book.Id == stack.CoverId),
+                        "Dual-key stack drilldown leaked another section or selected its cover.");
+                }
+                var books = store.ListBooks("alice", null, sectionBy: "publisher", sort: "number", direction: direction);
+                Check(books.Items.Select(book => book.Title).SequenceEqual(direction == "asc"
+                    ? new[] { "Empty", "Gamma", "Alpha", "Beta", "Lower", "Delta" }
+                    : new[] { "Empty", "Gamma", "Delta", "Lower", "Beta", "Alpha" }),
+                    "Book arrangement overrode section ordering or sorted issue numbers lexically.");
+                var bookPages = Enumerable.Range(1, 3).Select(page => store.ListBooks("alice", null,
+                    page, 2, "number", direction, sectionBy: "publisher")).ToArray();
+                Check(bookPages.SelectMany(page => page.Items).SequenceEqual(books.Items)
+                    && bookPages.All(page => page.Sections.Sum(section => section.Count) == page.Items.Count),
+                    "Sectioned book pagination skipped members or returned global ranges.");
+            }
+            foreach (var sectionBy in new[] { "series", "publisher", "folder" })
+            foreach (var groupBy in new[] { "series", "publisher", "folder" })
+            {
+                var sectioned = store.ListGroups("alice", null, groupBy, sectionBy: sectionBy);
+                Check(sectioned.Items.Sum(group => group.Count) == 6
+                    && sectioned.Sections.All(section => !section.Key.Contains(directory)),
+                    "Section/stack combinations lost members or leaked an absolute folder.");
+                foreach (var section in sectioned.Sections)
+                foreach (var stack in sectioned.Items.Skip(section.Start).Take(section.Count))
+                    Check(store.ListBooks("alice", null, groupBy: groupBy, groupKey: stack.Key,
+                        sectionBy: sectionBy, sectionKey: section.Key).Total == stack.Count,
+                        "A section/stack combination could not drill down exactly.");
+            }
+            store.EditMetadata(ids["Lower"], new(new() { ["Publisher"] = "press" }));
+            Check(store.ListGroups("alice", null, "series", sectionBy: "publisher").Sections
+                .Select(section => section.Key).SequenceEqual(["", "Other", "Press", "press"])
+                && store.ListBooks("alice", null, sectionBy: "publisher", sectionKey: "Press").Total == 3
+                && store.ListBooks("alice", null, sectionBy: "publisher", sectionKey: "press").Total == 1,
+                "Section keys merged case variants or lost their binary tie-break.");
+            store.EditMetadata(ids["Lower"], new(new() { ["Publisher"] = "Press" }));
+            store.EditMetadata(ids["Gamma"], new(new() { ["Title"] = "a" }));
+            store.EditMetadata(ids["Delta"], new(new() { ["Title"] = "Z" }));
+            Check(store.ListGroups("alice", null, "series", sort: "title").Items.Select(group => group.Key)
+                    .SequenceEqual(["Two", "One", "", "one"])
+                && store.ListGroups("alice", null, "series", sort: "title", direction: "desc").Items
+                    .Select(group => group.Key).SequenceEqual(["Two", "one", "", "One"])
+                && store.ListGroups("alice", null, "series", sort: "pageCount").Items.SequenceEqual(groups.Items),
+                "Text MIN/MAX ignored NOCASE or numeric arrangement lost stable label/key ties.");
+            store.EditMetadata(ids["Gamma"], new(new() { ["Title"] = "Gamma" }));
+            store.EditMetadata(ids["Delta"], new(new() { ["Title"] = "Delta" }));
+
             var manual = store.CreateList("alice", new("Manual", "manual", "all", []));
             store.AddListBooks("alice", manual.Id, [ids["Alpha"], ids["Beta"], ids["Gamma"], ids["Delta"]]);
             var smart = store.CreateList("alice", new("Smart", "smart", "all", [new("Publisher", "equals", "Press")]));
@@ -102,6 +178,31 @@ public static class GroupChecks
             Check(store.ListGroups("alice", null, "series", status: "completed").Items.Single().CoverId == ids["Alpha"]
                 && store.ListGroups("bob", null, "series", status: "completed").Total == 0,
                 "Grouped progress leaked across users.");
+            var privateStack = store.ListGroups("alice", null, "series", sectionBy: "publisher",
+                sectionKey: "Press").Items.Single(group => group.Key == "One");
+            Check(privateStack is { Count: 2, Completed: 1, Unread: 1, InProgress: 0, CompletionPercent: 50 }
+                && store.ListGroups("bob", null, "series", sectionBy: "publisher").Items.All(group => group.Completed == 0
+                    && group.InProgress == 0 && group.Unread == group.Count),
+                "Sectioned stack counts were paged early or leaked private progress.");
+            var filteredSections = store.ListGroups("alice", "marker", "series", pageSize: 1, status: "unread",
+                listId: manual.Id, sectionBy: "publisher", sort: "number");
+            Check(filteredSections.Total == 2 && filteredSections.Items.Single().CoverId == ids["Gamma"]
+                && filteredSections.Sections.Single() is { Key: "Other", Start: 0, Count: 1 }
+                && store.ListBooks("alice", "marker", pageSize: 1, status: "unread", listId: manual.Id,
+                    sectionBy: "publisher", sectionKey: "Other", groupBy: "series", groupKey: "Two").Items.Single().Id == ids["Gamma"],
+                "Search/list/status filtering happened after section ordering, aggregation or paging.");
+            Check(store.ListGroups("alice", null, "series", listId: manual.Id, sort: "list")
+                    .Items.Select(group => group.Key).SequenceEqual(["One", "Two"])
+                && store.ListGroups("alice", null, "series", listId: manual.Id, sort: "list", direction: "desc")
+                    .Items.Select(group => group.Key).SequenceEqual(["Two", "One"]),
+                "Manual-list stack arrangement did not use minimum/maximum member positions.");
+            store.SaveRating("alice", ids["Gamma"], new(5));
+            Check(store.ListGroups("alice", null, "series", sectionBy: "publisher", rating: 5).Items.Single().Count == 1
+                && store.ListGroups("bob", null, "series", sectionBy: "publisher", rating: 5).Total == 0
+                && store.ListGroups("alice", null, "series", sort: "personalRating", direction: "desc").Items[0].Key == "Two",
+                "Sectioned ratings leaked between accounts or failed numeric arrangement.");
+            Reject<KeyNotFoundException>(() => store.ListGroups("bob", null, "series", listId: manual.Id, sectionBy: "publisher"));
+            Reject<KeyNotFoundException>(() => store.ListBooks("bob", null, listId: smart.Id, sectionBy: "publisher", sectionKey: "Press"));
             store.EditMetadata(ids["Delta"], new(new() { ["Series"] = "One" }));
             Check(store.ListGroups("alice", null, "series").Items.Single(group => group.Key == "One").Count == 3
                 && store.ListBooks("alice", null, groupBy: "series", groupKey: "Two").Items.Single().Id == ids["Gamma"],
@@ -111,6 +212,13 @@ public static class GroupChecks
             Check(store.ListBooks("alice", null, groupBy: "series", groupKey: sqlLikeKey).Items.Single().Id == ids["Gamma"]
                 && store.ListGroups("alice", null, "series").Items.Any(group => group.Key == sqlLikeKey),
                 "Group keys were interpreted as SQL.");
+            store.EditMetadata(ids["Gamma"], new(new() { ["Publisher"] = sqlLikeKey }));
+            Check(store.ListBooks("alice", null, groupBy: "series", groupKey: sqlLikeKey,
+                    sectionBy: "publisher", sectionKey: sqlLikeKey).Items.Single().Id == ids["Gamma"]
+                && store.ListGroups("alice", null, "series", sectionBy: "publisher", sectionKey: sqlLikeKey).Total == 1
+                && store.ListBooks("alice", null, sectionBy: "publisher", sectionKey: "unknown").Total == 0
+                && store.ListGroups("alice", null, "series", sectionBy: "publisher", sectionKey: "unknown").Sections.Count == 0,
+                "Section keys were interpreted as SQL or unknown sections did not stay empty.");
 
             File.Delete(Path.Combine(firstRoot, "Stacks", "Alpha.cbz"));
             File.Delete(Path.Combine(firstRoot, "Empty.cbz"));
@@ -141,6 +249,74 @@ public static class GroupChecks
             Reject<ArgumentException>(() => store.ListBooks("alice", null, availability: "unknown"));
             Reject<ArgumentException>(() => store.ListBooks("alice", null, groupBy: "unknown"));
             Reject<ArgumentException>(() => store.ListBooks("alice", null, groupKey: ""));
+            Reject<ArgumentException>(() => store.ListBooks("alice", null, sectionBy: "publisher; DROP TABLE books"));
+            Reject<ArgumentException>(() => store.ListGroups("alice", null, "series", sectionBy: "unknown"));
+            Reject<ArgumentException>(() => store.ListBooks("alice", null, sectionKey: ""));
+            Reject<ArgumentException>(() => store.ListGroups("alice", null, "series", sectionKey: ""));
+            Reject<ArgumentException>(() => store.ListGroups("alice", null, "series", sort: "number; DROP TABLE books"));
+            Reject<ArgumentException>(() => store.ListGroups("alice", null, "series", direction: "sideways"));
+
+            var issueNumbers = new[] { "30", "36", "38", "39", "038", "Annual" };
+            for (var index = 0; index < all.Count; index++)
+                store.EditMetadata(all[index].Id, new(new() { ["Series"] = "Gap checks", ["Number"] = issueNumbers[index] }));
+            var numbered = store.ListBooks("alice", null, sort: "number", groupBy: "series", groupKey: "Gap checks");
+            Check(numbered.Total == 6 && numbered.MissingIssues.Select(gap => (gap.First, gap.Last))
+                .SequenceEqual([(31, 35), (37, 37)]), "Series gaps lost whole numbers or treated variants as missing.");
+            var report = store.ListMissingIssues();
+            Check(report.Total == 2 && report.Items.SequenceEqual(new[] {
+                new MissingIssueReport("Gap checks", "library", 31, 35),
+                new MissingIssueReport("Gap checks", "library", 37, 37) }),
+                "Maintenance report disagreed with the series placeholders.");
+            Check(store.ListMissingIssues(1, 1).Items.Single() == report.Items[0]
+                && store.ListMissingIssues(int.MaxValue, 1).Items.Single() == report.Items[1]
+                && store.ListMissingIssues(int.MaxValue, 1).Page == 2,
+                "Missing issue report pagination skipped or duplicated a gap.");
+            Reject<ArgumentException>(() => store.ListMissingIssues(0));
+            Reject<ArgumentException>(() => store.ListMissingIssues(pageSize: 101));
+            foreach (var direction in new[] { "asc", "desc" })
+            {
+                var gaps = Enumerable.Range(1, 6).SelectMany(page => store.ListBooks("alice", null,
+                    page, 1, "number", direction, groupBy: "series", groupKey: "Gap checks").MissingIssues).ToArray();
+                Check(gaps.Length == 2 && gaps.Any(gap => gap.First == 37 && gap.Last == 37),
+                    "Page boundaries lost or duplicated missing issues.");
+                foreach (var gap in gaps)
+                {
+                    var anchor = numbered.Items.Single(book => book.Id == gap.BeforeBookId);
+                    Check(int.Parse(anchor.Number) == (direction == "asc" ? gap.Last + 1 : gap.First - 1),
+                        "Missing issues were attached to the wrong side of descending or ascending results.");
+                }
+            }
+            var filteredGaps = store.ListBooks("alice", all[2].Title, sort: "number",
+                groupBy: "series", groupKey: "Gap checks").MissingIssues;
+            Check(filteredGaps.All(gap => gap.First == 37 && gap.Last == 37),
+                "Search-hidden issues were falsely marked missing.");
+            Check(store.ListBooks("alice", null).MissingIssues.Count == 0
+                && store.ListBooks("alice", null, groupBy: "publisher", groupKey: "Press").MissingIssues.Count == 0,
+                "Placeholders escaped series drilldown.");
+            store.EditMetadata(all[2].Id, new(new() { ["Number"] = "2147483647" }));
+            store.EditMetadata(all[4].Id, new(new() { ["Number"] = "38.5" }));
+            var largeGap = store.ListBooks("alice", null, groupBy: "series", groupKey: "Gap checks").MissingIssues;
+            Check(largeGap.Any(gap => gap.First == 40 && gap.Last == 2147483646)
+                && largeGap.Any(gap => gap.First == 37 && gap.Last == 38),
+                "Large gaps overflowed or decimal issue numbers were treated as whole numbers.");
+
+            var scoped = new LibraryStore(Path.Combine(directory, "groups.sqlite"), [secondRoot],
+                Path.Combine(firstRoot, "Other"), Path.Combine(firstRoot, "Stacks"));
+            foreach (var location in new[] { "library", "archived", "unsorted" })
+            {
+                var area = scoped.ListGroups("alice", null, "series", sectionBy: "folder", location: location);
+                Check(area.Items.Sum(group => group.Count) == 2
+                    && area.Sections.All(section => !section.Key.Contains(directory)),
+                    "Sectioned folder stacks ignored location boundaries or exposed a root path.");
+                foreach (var section in area.Sections)
+                foreach (var stack in area.Items.Skip(section.Start).Take(section.Count))
+                    Check(scoped.ListBooks("alice", null, groupBy: "series", groupKey: stack.Key,
+                        sectionBy: "folder", sectionKey: section.Key, location: location).Total == stack.Count,
+                        "Sectioned location drilldown escaped its area.");
+                Check(scoped.ListGroups("alice", null, "series", sectionBy: "folder", location: location,
+                    listId: manual.Id).Items.Sum(group => group.Count) == (location == "library" ? 0 : 2),
+                    "Private-list section grouping bypassed location filtering.");
+            }
         }
         finally
         {

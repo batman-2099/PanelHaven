@@ -96,6 +96,7 @@ public static class StateMaintenance
         {
             CopyState(source, stage, restoring: false);
             Directory.Move(stage, destination);
+            LibraryStore.FlushArchivePath(Path.GetDirectoryName(destination)!, true);
         }
         finally { if (Directory.Exists(stage)) Directory.Delete(stage, recursive: true); }
     }
@@ -112,6 +113,7 @@ public static class StateMaintenance
             Directory.Delete(destination);
             try { Directory.Move(stage, destination); }
             catch { CreatePrivateDirectory(destination); throw; }
+            LibraryStore.FlushArchivePath(Path.GetDirectoryName(destination)!, true);
         }
         finally { if (Directory.Exists(stage)) Directory.Delete(stage, recursive: true); }
     }
@@ -144,15 +146,17 @@ public static class StateMaintenance
         var keys = SafePath(Path.Combine(source, "keys"));
         if (!File.Exists(database) || !Directory.Exists(keys))
             throw new InvalidDataException("State must contain panelhaven.sqlite and its complete keys directory.");
-        // Reject sidecar links before SQLite can follow them, even for a read-only connection.
-        foreach (var suffix in new[] { "-wal", "-shm", "-journal" }) SafePath(database + suffix);
+        DataRelocation.RequireRegular(database);
+        // Reject links and special files before SQLite can open a sidecar.
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
+            if (Path.Exists(SafePath(database + suffix))) DataRelocation.RequireRegular(database + suffix);
         var targetKeys = Path.Combine(stage, "keys");
         CreatePrivateDirectory(targetKeys);
         var entries = Directory.GetFileSystemEntries(keys);
         foreach (var entry in entries)
         {
-            SafePath(entry);
-            if (Directory.Exists(entry) || !Path.GetExtension(entry).Equals(".xml", StringComparison.OrdinalIgnoreCase))
+            DataRelocation.RequireRegular(entry);
+            if (!Path.GetExtension(entry).Equals(".xml", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The keys directory must contain only Data Protection XML files.");
             var target = Path.Combine(targetKeys, Path.GetFileName(entry));
             File.Copy(entry, target, overwrite: false);
@@ -178,13 +182,19 @@ public static class StateMaintenance
         Span<byte> targetHash = stackalloc byte[SHA256.HashSizeInBytes];
         foreach (var entry in entries)
         {
-            using var original = File.OpenRead(SafePath(entry));
-            using var copied = File.OpenRead(Path.Combine(targetKeys, Path.GetFileName(entry)));
+            DataRelocation.RequireRegular(entry);
+            using var original = File.OpenRead(entry);
+            using var copied = File.Open(Path.Combine(targetKeys, Path.GetFileName(entry)), FileMode.Open, FileAccess.ReadWrite);
             SHA256.HashData(original, sourceHash);
             SHA256.HashData(copied, targetHash);
             if (!sourceHash.SequenceEqual(targetHash))
                 throw new IOException("The key ring changed during the snapshot; no backup was published.");
+            copied.Flush(flushToDisk: true);
         }
+        using (var databaseFile = File.Open(targetDatabase, FileMode.Open, FileAccess.Write))
+            databaseFile.Flush(flushToDisk: true);
+        LibraryStore.FlushArchivePath(targetKeys, true);
+        LibraryStore.FlushArchivePath(stage, true);
     }
 
     private static SqliteConnection Open(string path, SqliteOpenMode mode)

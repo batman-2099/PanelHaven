@@ -87,6 +87,15 @@ public static class ThumbnailChecks
             using (var restarted = new ThumbnailStore(library, cache))
                 Check(first.SequenceEqual(restarted.GetAsync(id, default).GetAwaiter().GetResult()), "Persistent cache was not reused.");
             Check(File.GetLastWriteTimeUtc(cacheFile) == stamp, "Cache hit regenerated the thumbnail.");
+            var validCache = File.ReadAllBytes(cacheFile);
+            foreach (var damaged in new[] { Array.Empty<byte>(), new byte[] { 0x80 },
+                new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff },
+                validCache[..(validCache.Length - first.Length)], validCache[..^2] })
+            {
+                File.WriteAllBytes(cacheFile, damaged);
+                CheckImage(Get(id), 320, 480, SKColors.Red);
+                Check(File.ReadAllBytes(cacheFile).SequenceEqual(validCache), "Damaged cache was not replaced.");
+            }
             Reject<ArgumentException>(() => Get("../outside"));
             using (var cancelled = new CancellationTokenSource())
             {

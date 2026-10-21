@@ -45,6 +45,13 @@ public static class LibraryLocationChecks
             var regularBook = normal.Items.Single(book => book.Title == "Regular");
             Check(saved.Title == "Archived" && intake.Title == "Intake", "Explicit area selection mixed locations.");
             Check(store.ListBooks("alice", "Archived").Total == 0, "Default search exposed archived comicbooks.");
+            store.EditMetadata(regularBook.Id, new(new() { ["Number"] = "30" }));
+            store.EditMetadata(normal.Items.Single(book => book.Title == "Nearby").Id, new(new() { ["Number"] = "32" }));
+            store.EditMetadata(saved.Id, new(new() { ["Number"] = "31" }));
+            store.EditMetadata(intake.Id, new(new() { ["Number"] = "40" }));
+            Check(store.ListMissingIssues().Items.SequenceEqual(new[] {
+                new MissingIssueReport("Shared series", "library", 31, 31) }),
+                "Missing issue report merged locations or inferred leading/trailing gaps.");
             foreach (var (area, count, publishers) in new[] {
                 ("library", 2, new[] { "Nearby publisher", "Regular publisher" }),
                 ("archived", 1, new[] { "Archived publisher" }), ("unsorted", 1, new[] { "Intake publisher" }) })

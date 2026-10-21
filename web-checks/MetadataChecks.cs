@@ -22,13 +22,13 @@ public static class MetadataChecks
         try
         {
             var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=");
-            void CreateArchive(string name)
+            void CreateArchive(string name, string? xml = null)
             {
                 using var archive = ZipFile.Open(Path.Combine(directory, name + ".cbz"), ZipArchiveMode.Create);
                 using (var stream = archive.CreateEntry("1.png").Open()) stream.Write(png);
                 using (var writer = new StreamWriter(archive.CreateEntry("ComicInfo.xml").Open()))
-                    writer.Write("<ComicInfo marker='root'><Title source='kept'>" + name + "</Title><Series>Original</Series>"
-                        + "<Unknown marker='kept'><Nested>value</Nested></Unknown><Pages><Page Image='0' Bookmark='kept'/></Pages></ComicInfo>");
+                    writer.Write(xml ?? ("<ComicInfo marker='root'><Title source='kept'>" + name + "</Title><Series>Original</Series>"
+                        + "<Unknown marker='kept'><Nested>value</Nested></Unknown><Pages><Page Image='0' Bookmark='kept'/></Pages></ComicInfo>"));
                 using (var writer = new StreamWriter(archive.CreateEntry("ComicBook.xml").Open()))
                     writer.Write("<ComicBook marker='book'><CurrentPage>9</CurrentPage><Other a='b'>keep</Other>"
                         + "<CustomValuesStore>,Original=retained,Escaped=a&amp;#44;b&amp;#61;c</CustomValuesStore></ComicBook>");
@@ -99,6 +99,59 @@ public static class MetadataChecks
                 && store.GetMetadata(first).Custom["New,=Name"] == "value,=<&>"
                 && !store.GetMetadata(first).Custom.ContainsKey("Original")
                 && store.GetBook("metadata-check", first).Publisher == "Bulk", "Rescan lost web metadata/custom edits.");
+
+            foreach (var namespaceName in new[] { "", "urn:comic" })
+            {
+                XNamespace ns = namespaceName, extension = "urn:extension";
+                var title = namespaceName.Length == 0 ? "Unqualified" : "Namespaced";
+                var scalars = new Dictionary<string, string>
+                {
+                    ["Title"] = title, ["Series"] = "Canonical series", ["Number"] = "7",
+                    ["Publisher"] = "Canonical publisher", ["Summary"] = "Canonical summary",
+                    ["Writer"] = "Canonical writer", ["Penciller"] = "", ["Genre"] = "Canonical genre", ["Year"] = "2024"
+                };
+                var root = new XElement(ns + "ComicInfo");
+                foreach (var (name, value) in scalars)
+                {
+                    root.Add(new XElement(extension + name, name == "Year" ? "1999" : "Extension " + name));
+                    if (value.Length != 0) root.Add(new XElement(ns + name, value));
+                }
+                var namespaceXml = root.ToString(SaveOptions.DisableFormatting);
+                CreateArchive(title, namespaceXml);
+                Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Namespace fixture failed to import.");
+                var id = store.ListBooks("metadata-check", null).Items.Single(item => item.Title == title).Id;
+                using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                    { DataSource = Path.Combine(directory, "metadata.sqlite") }.ToString());
+                db.Open();
+                db.CreateCollation("NATURAL_NUMBER", StringComparer.Ordinal.Compare);
+                void CheckProjection()
+                {
+                    using var command = db.CreateCommand();
+                    command.CommandText = "SELECT title,series,number,publisher,summary,writer,penciller,genre,year FROM books WHERE id=$id";
+                    command.Parameters.AddWithValue("$id", id);
+                    using var reader = command.ExecuteReader();
+                    Check(reader.Read() && scalars.Values.Select((value, index) => reader.GetValue(index).ToString() == value).All(equal => equal),
+                        "Scalar projection selected an extension namespace during import or migration.");
+                    var importedMetadata = store.GetMetadata(id);
+                    Check(scalars.All(pair => importedMetadata.Fields.GetValueOrDefault(pair.Key, "") == pair.Value)
+                        && XNode.DeepEquals(XDocument.Parse(namespaceXml).Root,
+                            XDocument.Parse((string)store.GetBook("metadata-check", id).Metadata!["comicInfoXml"]!).Root),
+                        "Namespace projection disagreed with metadata fields or modified extension XML.");
+                }
+                CheckProjection();
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText = """
+                        ALTER TABLE books DROP COLUMN writer;
+                        ALTER TABLE books DROP COLUMN penciller;
+                        ALTER TABLE books DROP COLUMN genre;
+                        ALTER TABLE books DROP COLUMN year;
+                        """;
+                    command.ExecuteNonQuery();
+                }
+                store = new LibraryStore(Path.Combine(directory, "metadata.sqlite"), [directory]);
+                CheckProjection();
+            }
         }
         finally
         {

@@ -33,8 +33,8 @@
     $("book-status").value = $("book-availability").value = "all";
     $("book-rating").value = $("publisher").value = "";
     $("group-by").value = "none";
+    $("stack-by").value = "none";
     $("library-location").value = "library";
-    $("library-navigation").click();
     change("library-location");
     await waitFor(idle);
     assert($("library-title").textContent === "Your library", "Library must be the default area.");
@@ -53,18 +53,20 @@
     release();
     await new Promise(resolve => setTimeout(resolve, 100));
     assert($("books").textContent === archivedResults && $("library-title").textContent === "Archived comicbooks", "A stale Library response replaced Archived results.");
-    $("unsorted-navigation").click();
+    $("library-location").value = "unsorted";
+    change("library-location");
     await waitFor(() => idle() && $("library-title").textContent === "Unsorted intake");
-    assert(location.hash === "#unsorted" && $("library-location-filter").hidden && $("catalog-home").hash === "#unsorted", "Intake navigation or Home lost its area.");
-    assert($("unsorted-navigation").getAttribute("aria-current") === "page", "Intake navigation lacks an accessible active state.");
+    assert(location.hash === "#unsorted" && $("library-location").checkVisibility() && $("library-location").value === "unsorted" && $("catalog-home").hash === "#unsorted", "Intake dropdown or Home lost its area.");
     const checkbox = $("books").querySelector("[data-book-id]");
     assert(checkbox, "A readable Unsorted comicbook is required.");
     checkbox.click();
     assert(!document.querySelector(".selection-toolbar").hidden, "Intake selection is unavailable.");
-    $("library-navigation").click();
+    $("library-location").value = "library";
+    change("library-location");
     await waitFor(() => idle() && $("library-title").textContent === "Your library");
     assert(document.querySelector(".selection-toolbar").hidden && $("group-navigation").hidden && $("library-page").textContent.startsWith("Page 1 "), "Changing areas retained selection, a group, or pagination.");
-    $("unsorted-navigation").click();
+    $("library-location").value = "unsorted";
+    change("library-location");
     await waitFor(() => idle() && $("library-title").textContent === "Unsorted intake");
     $("books").querySelector(".cover-button").click();
     await waitFor(() => !$('reader-view').hidden && $("page-stage").querySelector(".reader-page"));
@@ -75,8 +77,8 @@
     await waitFor(() => !$('reader-view').hidden && $("page-stage").querySelector(".reader-page"));
     $("catalog-home").click();
     await waitFor(() => idle() && location.hash === "#unsorted");
-    $("group-by").value = "series";
-    change("group-by");
+    $("stack-by").value = "series";
+    change("stack-by");
     await waitFor(idle);
     assert(requests.some(url => url.pathname === "/api/book-groups" && url.searchParams.get("location") === "unsorted"), "Grouped intake request lost its area.");
     for (const area of ["library", "archived", "unsorted"]) {

@@ -157,19 +157,10 @@ public sealed partial class LibraryStore
         {
             var desiredInfo = ParseXml(catalog.Xml, "ComicInfo");
             var desiredBook = catalog.BookXml is null ? null : ParseXml(catalog.BookXml, "ComicBook");
-            // Only edited page attributes are authoritative; untouched source pages and extensions survive.
             afterInfo = beforeInfo is null ? new XDocument(desiredInfo) : new XDocument(beforeInfo);
-            foreach (var field in MetadataFields)
-                PatchScalar(afterInfo.Root!, field.Name, desiredInfo.Root!.Element(desiredInfo.Root.Name.Namespace + field.Name)?.Value);
-            MergeEditedPages(afterInfo.Root!, desiredInfo.Root!, catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
             afterBook = beforeBook is null ? desiredBook is null ? null : new XDocument(desiredBook) : new XDocument(beforeBook);
-            if (afterBook is not null)
-            {
-                foreach (var field in MetadataFields)
-                    if (afterBook.Root!.Elements(afterBook.Root.Name.Namespace + field.Name).Any())
-                        PatchScalar(afterBook.Root, field.Name, desiredInfo.Root!.Element(desiredInfo.Root.Name.Namespace + field.Name)?.Value);
-                PatchScalar(afterBook.Root!, "CustomValuesStore", desiredBook?.Root?.Element(desiredBook.Root.Name.Namespace + "CustomValuesStore")?.Value);
-            }
+            MergeEmbeddedMetadata(afterInfo.Root!, afterBook?.Root, desiredInfo.Root!, desiredBook?.Root,
+                catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
         }
         var entries = new List<ArchiveMetadataEntry>();
         source.Position = 0;
@@ -231,7 +222,7 @@ public sealed partial class LibraryStore
                     using var original = OpenVerifiedBackup(plan.Catalog.Path, plan.Restore, cancellationToken);
                     CopyArchiveBytes(original, output, MaxArchiveBytes, cancellationToken);
                 }
-                else WriteArchiveStage(plan, output, cancellationToken);
+                else WriteArchiveStage(plan.Root, plan.Catalog.Path, plan.Replacements, output, cancellationToken);
                 output.Flush(true);
             }
             string writtenHash;
@@ -466,14 +457,15 @@ public sealed partial class LibraryStore
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
-    private static void WriteArchiveStage(ArchivePlan plan, FileStream output, CancellationToken cancellationToken)
+    private static void WriteArchiveStage(string root, string path, Dictionary<string, byte[]> replacements,
+        FileStream output, CancellationToken cancellationToken)
     {
-        using var input = OpenArchive(plan.Root, plan.Catalog.Path);
+        using var input = OpenArchive(root, path);
         using var source = new ZipArchive(input, ZipArchiveMode.Read, true);
         using (var destination = new ZipArchive(output, ZipArchiveMode.Create, true))
         {
             destination.Comment = source.Comment;
-            var pending = new Dictionary<string, byte[]>(plan.Replacements, StringComparer.OrdinalIgnoreCase);
+            var pending = new Dictionary<string, byte[]>(replacements, StringComparer.OrdinalIgnoreCase);
             foreach (var entry in source.Entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();

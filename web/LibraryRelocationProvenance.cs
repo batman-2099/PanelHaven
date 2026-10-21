@@ -39,7 +39,7 @@ public sealed partial class LibraryStore
         string id, string? mergedId, string source, string from, string to)
     {
         var paths = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) { source };
-        foreach (var table in new[] { "file_operations", "book_path_provenance" })
+        foreach (var table in new[] { "file_operations", "intake_operations", "book_path_provenance" })
         {
             if (!RelocationTableExists(db, table, transaction)) continue;
             using var command = Command(db, $"SELECT source,destination FROM {table} WHERE book_id IN ($id,$merged)",
@@ -82,6 +82,11 @@ public sealed partial class LibraryStore
                 command.CommandText = "UPDATE file_operations SET book_id=$id WHERE book_id=$merged";
                 command.ExecuteNonQuery();
             }
+            if (RelocationTableExists(db, "intake_operations", transaction))
+            {
+                command.CommandText = "UPDATE intake_operations SET book_id=$id WHERE book_id=$merged";
+                command.ExecuteNonQuery();
+            }
         }
         command.Parameters.AddWithValue("$source", "");
         command.Parameters.AddWithValue("$destination", "");
@@ -96,6 +101,14 @@ public sealed partial class LibraryStore
                 INSERT OR IGNORE INTO book_path_provenance(book_id,source,destination) VALUES($id,$source,$destination);
                 """;
             command.ExecuteNonQuery();
+            if (RelocationTableExists(db, "intake_operations", transaction))
+            {
+                command.CommandText = """
+                    UPDATE intake_operations SET source=CASE WHEN source=$source THEN $destination ELSE source END,
+                        destination=CASE WHEN destination=$source THEN $destination ELSE destination END WHERE book_id=$id;
+                    """;
+                command.ExecuteNonQuery();
+            }
             if (!hasJournal) continue;
             command.CommandText = """
                 UPDATE file_operations SET source=CASE WHEN source=$source THEN $destination ELSE source END,

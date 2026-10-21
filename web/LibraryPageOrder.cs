@@ -65,6 +65,7 @@ public sealed partial class LibraryStore
         try
         {
             using var db = Open();
+            RefusePendingFileOperation(db, id);
             var catalog = ReadPageOrderCatalog(db, null, id);
             var (path, count, size, ticks, hash, availability, savedHash, generation, json) = catalog;
             var revision = FileRevision(new { id, hash, count, generation });

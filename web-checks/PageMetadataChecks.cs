@@ -133,6 +133,26 @@ public static class PageMetadataChecks
             Check(store.GetPageInfo(id).Single(page => page.Page == 0) == new ReaderPageInfo(0, "BackCover", 256, "Edited"),
                 "Reader did not immediately reflect edited page metadata.");
             PrivateState();
+            var longBookmark = new string('x', 201);
+            SetXml(CatalogXml().Replace("Bookmark=\"Untouched\"", $"Bookmark=\"{longBookmark}\""));
+            var legacyTypeOnly = new[] { new PageMetadataRow(1, "Other", longBookmark) };
+            loaded = store.GetPageMetadata(id);
+            noOp = store.PreviewPageMetadata(id, new(loaded.Revision, [loaded.Pages[1]]));
+            Check(!noOp.CanApply, "An unchanged legacy bookmark was not a no-op.");
+            store.EditPageMetadata(id, new(noOp.Revision, [loaded.Pages[1]]));
+            foreach (var invalid in new[] { longBookmark + "x", new string('y', 201), "bad\n", "\ud800" })
+                Reject<ArgumentException>(() => store.PreviewPageMetadata(id, new(loaded.Revision, [new(1, "Other", invalid)])));
+            preview = store.PreviewPageMetadata(id, new(loaded.Revision, legacyTypeOnly));
+            Check(preview.Changes.Count == 1 && preview.Changes[0].Field == "Type", "An unchanged legacy bookmark created edit intent.");
+            saved = store.EditPageMetadata(id, new(preview.Revision, legacyTypeOnly));
+            Check(saved.Pages[1] == legacyTypeOnly[0]
+                && (long)Sql("SELECT fields FROM page_metadata_edits WHERE book_id=$id AND page=1")! == 1
+                && File.ReadAllBytes(path).SequenceEqual(original), "Type-only editing lost a legacy bookmark or marked it for write-back.");
+            var correctedBookmark = new[] { new PageMetadataRow(1, "Story", "Untouched") };
+            preview = store.PreviewPageMetadata(id, new(saved.Revision, correctedBookmark));
+            saved = store.EditPageMetadata(id, new(preview.Revision, correctedBookmark));
+            Check(saved.Pages[1] == correctedBookmark[0], "A legacy bookmark could not be replaced by a valid value.");
+            Sql("DELETE FROM page_metadata_edits WHERE book_id=$id AND page=1");
             var typeOnly = new[] { new PageMetadataRow(1, "Other", "Untouched") };
             preview = store.PreviewPageMetadata(id, new(store.GetPageMetadata(id).Revision, typeOnly));
             Check(preview.Changes.Count == 1 && preview.Changes[0].Field == "Type", "Unchanged bookmark created edit intent.");

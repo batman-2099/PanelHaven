@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Xml;
 using PanelHaven.Web;
 using Microsoft.AspNetCore.DataProtection;
@@ -8,6 +9,9 @@ using Microsoft.Extensions.Configuration;
 
 public static class StateMaintenanceChecks
 {
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int MakeFifo(string path, uint mode);
+
     public static void Run()
     {
         static void Check(bool condition, string message)
@@ -220,6 +224,33 @@ public static class StateMaintenanceChecks
                     Reject(() => StateMaintenance.Run(Options(("restore", invalid)), empty));
                     File.Delete(key);
                     Check(!Directory.EnumerateFileSystemEntries(empty).Any(), "Unsafe key left partial restored state.");
+                }
+            }
+            if (OperatingSystem.IsLinux())
+            {
+                foreach (var defect in new[] { "database", "key", "-wal", "-shm", "-journal" })
+                {
+                    var invalid = Path.Combine(root, "fifo-" + defect);
+                    CopyBackup(backup, invalid);
+                    var special = defect == "key" ? Directory.EnumerateFiles(Path.Combine(invalid, "keys")).First()
+                        : Path.Combine(invalid, "panelhaven.sqlite" + (defect == "database" ? "" : defect));
+                    File.Delete(special);
+                    Check(MakeFifo(special, 0x180) == 0, "Could not create maintenance FIFO fixture.");
+                    foreach (var operation in new[] { "backup", "backup-live", "restore" })
+                    {
+                        var target = Path.Combine(root, "fifo-target");
+                        if (operation == "restore") Directory.CreateDirectory(target);
+                        var configuration = Options((operation, operation == "restore" ? invalid : target));
+                        var rejection = Task.Run(() => Reject(() => StateMaintenance.Run(configuration,
+                            operation == "restore" ? target : invalid)));
+                        Check(rejection.Wait(TimeSpan.FromSeconds(5)), $"Maintenance blocked opening a {defect} FIFO.");
+                        Check(!Directory.Exists(target) || !Directory.EnumerateFileSystemEntries(target).Any(),
+                            "Special-file rejection published partial state.");
+                        if (Directory.Exists(target)) Directory.Delete(target);
+                        Check(!Directory.EnumerateDirectories(root, ".panelhaven-state-*").Any(),
+                            "Special-file rejection leaked staged private data.");
+                    }
+                    File.Delete(special);
                 }
             }
             // A failed backup is not published, and both maintenance paths clean their staging directory.

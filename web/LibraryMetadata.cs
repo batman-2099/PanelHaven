@@ -81,7 +81,7 @@ public sealed partial class LibraryStore
             while (reader.Read())
             {
                 var root = ParseXml(reader.GetString(1), "ComicInfo").Root!;
-                string Field(string name) => root.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value ?? "";
+                string Field(string name) => root.Element(root.Name.Namespace + name)?.Value ?? "";
                 update.Parameters["$id"].Value = reader.GetString(0);
                 update.Parameters["$writer"].Value = Field("Writer");
                 update.Parameters["$penciller"].Value = Field("Penciller");
@@ -122,6 +122,20 @@ public sealed partial class LibraryStore
             }
         }
         return new(fields, custom);
+    }
+
+    private static void MergeEmbeddedMetadata(XElement info, XElement? book, XElement desiredInfo, XElement? desiredBook,
+        string pageEdits, int catalogCount, int sourceCount)
+    {
+        foreach (var field in MetadataFields)
+            PatchScalar(info, field.Name, desiredInfo.Element(desiredInfo.Name.Namespace + field.Name)?.Value);
+        // Only edited page attributes are authoritative; untouched source pages and extensions survive.
+        MergeEditedPages(info, desiredInfo, pageEdits, catalogCount, sourceCount);
+        if (book is null) return;
+        foreach (var field in MetadataFields)
+            if (book.Element(book.Name.Namespace + field.Name) is not null)
+                PatchScalar(book, field.Name, desiredInfo.Element(desiredInfo.Name.Namespace + field.Name)?.Value);
+        PatchScalar(book, "CustomValuesStore", desiredBook?.Element(desiredBook.Name.Namespace + "CustomValuesStore")?.Value);
     }
 
     public void EditMetadata(string id, MetadataEdit edit) =>
@@ -225,6 +239,7 @@ public sealed partial class LibraryStore
         var originals = new List<(string Id, string Path, string Title, string Xml, string? BookXml)>(ids.Length);
         foreach (var id in ids)
         {
+            RefusePendingFileOperation(db, id, transaction);
             string path, xml, originalTitle;
             string? bookXml;
             using (var command = Command(db, "SELECT path,info_xml,book_xml,title FROM books WHERE id=$id", ("$id", id)))

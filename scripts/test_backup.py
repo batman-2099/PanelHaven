@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import tempfile
 from unittest.mock import patch
@@ -39,11 +41,12 @@ def check():
             dll.touch()
             settings = base / "settings.json"
 
-            def configure(**changes):
+            def configure(*, archivePath=None, unsortedPath=None, **changes):
                 values = dict(enabled=True, destination=str(root), time="03:00", keep=2)
                 values.update(changes)
                 settings.write_text(json.dumps({"settings": {
-                    "dataPath": str(data), "libraries": [], "backup": values}}))
+                    "dataPath": str(data), "libraries": [], "archivePath": archivePath,
+                    "unsortedPath": unsortedPath, "backup": values}}))
 
             configure()
             oldest, newest = successful(root, 1), successful(root, 2)
@@ -71,6 +74,32 @@ def check():
                     assert command[:4] == [str(dotnet), str(dll), "--DataPath", str(data)]
                     snapshot(Path(command[5]))
 
+                real_fsync = os.fsync
+                for failure_at in range(4):
+                    before = set(root.iterdir())
+                    flushed = []
+
+                    def fail_flush(descriptor):
+                        flushed.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+                        if len(flushed) - 1 == failure_at:
+                            raise OSError("injected durability failure")
+                        real_fsync(descriptor)
+
+                    with patch.object(backup.subprocess, "run", side_effect=publish), \
+                            patch.object(backup.os, "fsync", side_effect=fail_flush), \
+                            patch.object(backup.shutil, "rmtree") as remove:
+                        try:
+                            backup.main()
+                        except OSError as error:
+                            assert str(error) == "injected durability failure"
+                        else:
+                            raise AssertionError("Flush failure must stop retention")
+                        remove.assert_not_called()
+                    assert flushed == [False, True, True, True][:failure_at + 1]
+                    assert oldest.exists() and newest.exists(), "Flush failure removed a recovery point"
+                    for failed in set(root.iterdir()) - before:
+                        shutil.rmtree(failed)
+
                 with patch.object(backup.subprocess, "run", side_effect=publish):
                     backup.main()
                     assert not oldest.exists() and newest.exists()
@@ -93,6 +122,21 @@ def check():
                         else:
                             raise AssertionError("Unsafe configuration was accepted")
                         run.assert_not_called()
+                for special in ("archivePath", "unsortedPath"):
+                    comic_root = base / special / "comics"
+                    comic_root.mkdir(parents=True)
+                    for overlap in (comic_root, comic_root / "backups", comic_root.parent):
+                        configure(**{special: str(comic_root), "destination": str(overlap)})
+                        with patch.object(backup.subprocess, "run") as run:
+                            try:
+                                backup.main()
+                            except ValueError:
+                                pass
+                            else:
+                                raise AssertionError(f"Backup root overlaps {special}")
+                            run.assert_not_called()
+                    configure(**{special: str(comic_root)})
+                    assert backup.configuration()[2] == root, "Separate special comic roots must remain valid"
                 configure(enabled=False)
                 with patch.object(backup.subprocess, "run") as run:
                     backup.main()

@@ -104,12 +104,15 @@ public sealed partial class LibraryStore
             pages.TryGetValue(row.Page, out var page);
             var type = string.IsNullOrEmpty(row.Type) ? null : row.Type;
             var bookmark = string.IsNullOrEmpty(row.Bookmark) ? null : row.Bookmark;
-            // Existing legacy flags may be retained while editing the bookmark, but never introduced.
+            // Existing legacy values may be retained while editing another attribute, but never introduced.
             if (type is not null && type != page?.Attribute("Type")?.Value && !EditablePageTypes.Contains(type, StringComparer.Ordinal))
                 throw new ArgumentException("Invalid page type.");
-            if (bookmark is not null && (bookmark.Length > 200 || bookmark.Any(char.IsControl)))
-                throw new ArgumentException("Embedded bookmarks allow at most 200 characters and no control characters.");
-            ValidateMetadataText(bookmark);
+            if (bookmark != page?.Attribute("Bookmark")?.Value)
+            {
+                if (bookmark is not null && (bookmark.Length > 200 || bookmark.Any(char.IsControl)))
+                    throw new ArgumentException("Embedded bookmarks allow at most 200 characters and no control characters.");
+                ValidateMetadataText(bookmark);
+            }
             void Patch(string field, string? value)
             {
                 var before = page?.Attribute(field)?.Value;
@@ -136,6 +139,7 @@ public sealed partial class LibraryStore
         using var db = Open();
         using (var transaction = db.BeginTransaction(deferred: false))
         {
+            RefusePendingFileOperation(db, id, transaction);
             var staged = StagePageMetadata(ReadPageCatalog(db, transaction, id), edit, true);
             if (staged.Preview.CanApply)
             {

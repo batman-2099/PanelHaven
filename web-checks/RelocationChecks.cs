@@ -113,6 +113,13 @@ public static class RelocationChecks
             store.SaveProgress("alice", old["good"], new(1, false));
             store.SaveProgress("bob", fresh["good"], new(2, true));
             store.SaveProgress("alice", fresh["good"], new(1, false));
+            Sql("UPDATE progress SET updated_at=CASE WHEN book_id=$old THEN 100 ELSE 200 END WHERE user_id='alice'", ("$old", old["good"]));
+            Sql("UPDATE progress SET updated_at=NULL WHERE user_id='bob'");
+            foreach (var (user, oldTime, newTime) in new (string, long?, long?)[]
+                { ("unknown", null, null), ("older", 300, 200), ("old-null", null, 200), ("new-null", 300, null) })
+                Sql("""
+                    INSERT INTO progress(user_id,book_id,page,completed,updated_at) VALUES($user,$old,0,0,$oldTime),($user,$new,0,0,$newTime)
+                    """, ("$user", user), ("$old", old["good"]), ("$new", fresh["good"]), ("$oldTime", oldTime), ("$newTime", newTime));
             store.SaveRating("alice", old["good"], new(5));
             store.SaveRating("bob", fresh["good"], new(3));
             store.SaveBookmark("alice", old["good"], 0, new("Old bookmark"));
@@ -160,6 +167,10 @@ public static class RelocationChecks
                 && store.GetBookmarks("bob", old["good"]).Single().Name == "New bookmark"
                 && !store.GetBook("outsider", old["good"]).Started && store.GetBookmarks("outsider", old["good"]).Count == 0,
                 "Nonconflicting private data was lost or crossed account boundaries.");
+            foreach (var (user, expected) in new (string, long?)[]
+                { ("alice", 200), ("bob", null), ("unknown", null), ("older", 300), ("old-null", 200), ("new-null", 300) })
+                Check(Equals(Sql("SELECT updated_at FROM progress WHERE user_id=$user AND book_id=$id", ("$user", user), ("$id", old["good"])),
+                    (object?)expected ?? DBNull.Value), "Relocation lost or fabricated a progress timestamp for " + user);
             Check(store.GetList("alice", oldList.Id).BookIds!.SequenceEqual(new[] { old["good"], old["direct"] })
                 && store.GetList("bob", newList.Id).BookIds!.SequenceEqual(new[] { fresh["rating"], old["good"], fresh["bookmark"] })
                 && store.GetList("alice", conflictList.Id).BookIds!.SequenceEqual(new[] { old["list"], fresh["list"] }),
@@ -200,6 +211,7 @@ public static class RelocationChecks
             }
             // Offline maintenance must not require optional tables introduced after this catalog.
             Sql("DROP TABLE page_metadata_edits");
+            Sql("ALTER TABLE progress DROP COLUMN updated_at");
             Sql("DELETE FROM ratings WHERE book_id=$id", ("$id", fresh["rating"]));
             var oldSchema = Snapshot();
             Check(Run(false).Contains("mapped=1 ") && Snapshot() == oldSchema,

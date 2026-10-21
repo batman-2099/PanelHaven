@@ -12,7 +12,8 @@
   assert(!$("library-view").hidden && !document.querySelector("dialog[open]"), "Start on the idle library page.");
   $("clear-selection").click();
   $("group-by").value = "none";
-  $("group-by").dispatchEvent(new Event("change", { bubbles: true }));
+  $("stack-by").value = "none";
+  $("stack-by").dispatchEvent(new Event("change", { bubbles: true }));
   await waitFor(() => $("books").getAttribute("aria-busy") !== "true");
   const cards = [...$("books").querySelectorAll(".book-card:not(.group-card)")];
   assert(cards.length >= 2, "At least two books are required.");

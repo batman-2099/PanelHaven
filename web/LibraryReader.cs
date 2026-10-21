@@ -27,6 +27,13 @@ public sealed partial class LibraryStore
             );
             """);
         command.ExecuteNonQuery();
+        command.CommandText = "SELECT 1 FROM pragma_table_info('progress') WHERE name='updated_at'";
+        if (command.ExecuteScalar() is null)
+        {
+            // Unknown legacy activity stays unknown until the reader saves progress.
+            command.CommandText = "ALTER TABLE progress ADD COLUMN updated_at INTEGER";
+            command.ExecuteNonQuery();
+        }
     }
 
     public List<ReaderBookmark> GetBookmarks(string user, string id)

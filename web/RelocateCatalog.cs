@@ -52,6 +52,8 @@ public sealed partial class LibraryStore
             ForeignKeys = true, Pooling = false
         }.ToString());
         db.Open();
+        using var progressColumn = Command(db, "SELECT 1 FROM pragma_table_info('progress') WHERE name='updated_at'");
+        var hasProgressTimestamp = progressColumn.ExecuteScalar() is not null;
         RefuseFileOperationRelocation(db, from, to);
         db.CreateCollation("NATURAL_NUMBER", static (a, b) => NaturalCompare(a ?? "", b ?? ""));
         var prefix = PathKey(Path.EndsInDirectorySeparator(from) ? from : from + Path.DirectorySeparatorChar);
@@ -61,24 +63,25 @@ public sealed partial class LibraryStore
             while (reader.Read()) sources.Add((reader.GetString(0), reader.GetString(1)));
         var sourceIds = sources.Select(book => book.Id).ToHashSet(StringComparer.Ordinal);
         // A book may have moved out of this root while its undo destination still lives here.
-        foreach (var table in new[] { "file_operations", "book_path_provenance" })
+        foreach (var table in new[] { "file_operations", "intake_operations", "book_path_provenance" })
         {
             if (!RelocationTableExists(db, table)) continue;
             using var command = Command(db, $"""
                 SELECT DISTINCT b.id,b.path FROM books b JOIN {table} h ON h.book_id=b.id
-                WHERE {(table == "file_operations" ? "substr(h.source,1,length($prefix))=$prefix OR " : "")}substr(h.destination,1,length($prefix))=$prefix
+                WHERE {(table != "book_path_provenance" ? "substr(h.source,1,length($prefix))=$prefix OR " : "")}substr(h.destination,1,length($prefix))=$prefix
                 """, ("$prefix", prefix));
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 if (sourceIds.Add(reader.GetString(0))) sources.Add((reader.GetString(0), reader.GetString(1)));
         }
-        if (RelocationTableExists(db, "file_operations"))
-            foreach (var (id, _) in sources)
-            {
-                using var command = Command(db, "SELECT 1 FROM file_operations WHERE book_id=$id AND state='pending'", ("$id", id));
-                if (command.ExecuteScalar() is not null)
-                    throw new InvalidOperationException("Resolve pending file operations for books with relevant relocation history first.");
-            }
+        foreach (var table in new[] { "file_operations", "intake_operations" })
+            if (RelocationTableExists(db, table))
+                foreach (var (id, _) in sources)
+                {
+                    using var command = Command(db, $"SELECT 1 FROM {table} WHERE book_id=$id AND state='pending'", ("$id", id));
+                    if (command.ExecuteScalar() is not null)
+                        throw new InvalidOperationException("Resolve pending file operations for books with relevant relocation history first.");
+                }
         var mapped = 0;
         var skipped = 0;
         var conflicts = 0;
@@ -204,11 +207,19 @@ public sealed partial class LibraryStore
                     ApplyRelocationHistory(db, transaction, id, destinationId, historyPaths);
                     foreach (var (table, columns) in new[]
                     {
-                        ("progress", "user_id,page,completed"), ("ratings", "user_id,rating"),
+                        ("progress", "user_id,page,completed" + (hasProgressTimestamp ? ",updated_at" : "")), ("ratings", "user_id,rating"),
                         ("bookmarks", "user_id,page,name"), ("list_books", "list_id,position")
                     })
                     {
-                        command.CommandText = $"INSERT INTO {table}(book_id,{columns}) SELECT $old,{columns} FROM {table} WHERE book_id=$new ON CONFLICT DO NOTHING";
+                        command.CommandText = $"INSERT INTO {table}(book_id,{columns}) SELECT $old,{columns} FROM {table} WHERE book_id=$new "
+                            + (table == "progress" && hasProgressTimestamp
+                                ? """
+                                    ON CONFLICT(user_id,book_id) DO UPDATE SET updated_at=
+                                    CASE WHEN progress.updated_at IS NULL THEN excluded.updated_at
+                                        WHEN excluded.updated_at IS NULL THEN progress.updated_at
+                                        ELSE MAX(progress.updated_at,excluded.updated_at) END
+                                    """
+                                : "ON CONFLICT DO NOTHING");
                         command.ExecuteNonQuery();
                     }
                     if (RelocationTableExists(db, "page_orders", transaction))

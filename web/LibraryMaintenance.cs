@@ -4,6 +4,8 @@ namespace PanelHaven.Web;
 
 public sealed record MaintenanceBook(string Id, string Title, string Location, string Availability, string? DuplicateKey);
 public sealed record MaintenancePage(List<MaintenanceBook> Items, int Total, int Page, int PageSize);
+public sealed record MissingIssueReport(string Series, string Location, int First, int Last);
+public sealed record MissingIssueReportPage(List<MissingIssueReport> Items, int Total, int Page, int PageSize);
 public sealed record DuplicateComparisonBook(Book Book, BookMetadata Metadata);
 public sealed record DuplicateComparison(DuplicateComparisonBook Anchor, List<DuplicateComparisonBook> Items,
     int Total, int Page, int PageSize, string DuplicateKey);
@@ -166,6 +168,23 @@ public sealed partial class LibraryStore
                 reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
         transaction.Commit();
         return new(books, total, page, pageSize);
+    }
+
+    public MissingIssueReportPage ListMissingIssues(int page = 1, int pageSize = 48)
+    {
+        if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
+        using var db = Open();
+        using var transaction = db.BeginTransaction(deferred: true);
+        var gaps = new List<MissingIssueReport>();
+        foreach (var location in new[] { "library", "archived", "unsorted" })
+            foreach (var (series, gap) in ReadMissingIssues(db, transaction, location))
+                gaps.Add(new(series, location, gap.First, gap.Last));
+        page = Math.Min(page, Math.Max(1, (int)((gaps.Count + (long)pageSize - 1) / pageSize)));
+        var offset = (page - 1) * pageSize;
+        var result = new MissingIssueReportPage(gaps.GetRange(offset, Math.Min(pageSize, gaps.Count - offset)),
+            gaps.Count, page, pageSize);
+        transaction.Commit();
+        return result;
     }
 
     public DuplicateComparison CompareDuplicates(string user, string id, int page = 1, int pageSize = 3)

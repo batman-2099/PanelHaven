@@ -234,13 +234,23 @@ let unsavedProgress = null;
 let routeQueue = Promise.resolve();
 let routeGeneration = 0;
 let leavingReader = false;
+let nextIssue = { state: "idle", id: null };
 let libraryPage = 1;
 let libraryPages = 1;
 let libraryQuery = "";
 let catalogLocation = "library";
 let publisherGeneration = 0;
 let groupKey = null;
+let sectionKey = null;
+let closedSections = new Set();
 let groupLabel = "";
+let groupOrigin = null;
+let libraryReturnFocus = null;
+let catalogReturn = null;
+let advancedFilter = null;
+let listEditorMode = "list";
+let ruleManualLists = [];
+const catalogControls = ["reading-list", "group-by", "stack-by", "book-sort", "sort-direction", "book-status", "book-rating", "publisher", "page-size", "book-availability"];
 let maintenancePage = 1;
 let maintenancePages = 1;
 let maintenanceGeneration = 0;
@@ -296,6 +306,8 @@ let metadataReportPages = 1;
 let metadataReportGeneration = 0;
 let metadataExportBusy = false;
 let comicVine = null;
+let intake = null;
+let metadataIntake = null;
 let archiveBookId = null;
 let archiveGeneration = 0;
 let archiveBusy = false;
@@ -314,6 +326,8 @@ let organizationDraftGeneration = 0;
 let organizationBusy = false;
 let organizationPreview = null;
 let organizationInitialDraft = "";
+let deletion = null;
+let deletionBusy = false;
 let pageMetadata = null;
 let pageMetadataDraft = [];
 let pageMetadataGeneration = 0;
@@ -353,7 +367,7 @@ function showView(name) {
 }
 
 $("account-menu").addEventListener("click", (event) => {
-  if (!event.target.closest("button")) return;
+  if (!event.target.closest("button") || event.target.closest("#scan-panel")) return;
   $("account-menu").open = false;
   $("account-menu").querySelector("summary").focus();
 }, true);
@@ -390,12 +404,14 @@ function clearReader() {
   lastViewedPage = null;
   pageNumberDraft = false;
   currentBook = null;
+  nextIssue = { state: "idle", id: null };
   $("reader-pages").replaceChildren();
   const epoch = authEpoch;
   if (document.fullscreenElement === $("reader-view")) document.exitFullscreen().catch((error) => { if (epoch === authEpoch) showError(error); });
 }
 
 function showLogin() {
+  resetIntake();
   resetComicVine();
   authEpoch++;
   session = null;
@@ -457,8 +473,12 @@ function showLogin() {
   $("book-status").value = "all";
   $("book-rating").value = "";
   $("book-availability").value = "all";
-  $("group-by").value = "series";
-  groupKey = null;
+  $("group-by").value = "none";
+  $("stack-by").value = "series";
+  groupKey = sectionKey = null;
+  closedSections.clear();
+  catalogReturn = null;
+  advancedFilter = null;
   groupLabel = "";
   maintenanceGeneration++;
   maintenanceBusy = false;
@@ -485,6 +505,9 @@ function showLogin() {
   resetFileOperation();
   resetOrganization();
   $("organize-selected").hidden = true;
+  deletion = null;
+  deletionBusy = false;
+  $("delete-selected").hidden = true;
   $("move-archive").hidden = true;
   resetPageMetadata();
   $("edit-page-metadata").hidden = true;
@@ -503,6 +526,9 @@ function showLogin() {
   for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
   $("account").hidden = true;
   $("books").replaceChildren();
+  groupOrigin = null;
+  libraryReturnFocus = null;
+  updateReadingStatusControls();
   history.replaceState(null, "", ["#settings", "#unsorted"].includes(location.hash) ? location.hash : "#library");
   showView("login");
   $("login-form").elements.username.focus();
@@ -549,6 +575,7 @@ function signedIn(data) {
   authEpoch++;
   resetServerSettings();
   resetComicVine();
+  resetIntake();
   session = data;
   resetComicExport();
   resetPageOrder();
@@ -561,11 +588,13 @@ function signedIn(data) {
   $("account").hidden = false;
   $("change-password").hidden = false;
   $("admin-actions").hidden = data.role !== "admin";
-  $("watch-status").hidden = data.role !== "admin";
   $("login-form").reset();
   clearError();
   $("bulk-metadata").hidden = data.role !== "admin";
   $("organize-selected").hidden = data.role !== "admin";
+  $("delete-selected").hidden = data.role !== "admin";
+  deletion = null;
+  deletionBusy = false;
   loadLists();
   scheduleRoute();
   if (data.role === "admin") requestScan();
@@ -608,8 +637,13 @@ function setCatalogLocation(value) {
     finishLibraryLoading();
     publisherGeneration++;
     catalogLocation = value;
+    if (value !== "library" && seriesView()) $("book-status").value = "all";
+    if (value === "unsorted") $("stack-by").value = "none";
     libraryPage = 1;
-    groupKey = null;
+    groupKey = sectionKey = null;
+    closedSections.clear();
+    groupOrigin = null;
+    libraryReturnFocus = null;
     groupLabel = "";
     libraryItems = [];
     $("books").replaceChildren();
@@ -617,22 +651,15 @@ function setCatalogLocation(value) {
     clearSelection();
   }
   const intake = value === "unsorted";
+  $("process-unsorted").hidden = !intake || session?.role !== "admin";
   const label = intake ? "Unsorted" : value === "archived" ? "Archived" : "Library";
-  $("library-location").value = intake ? "library" : value;
-  $("library-location-filter").hidden = intake;
+  $("library-location").value = value;
   $("library-title").textContent = intake ? "Unsorted intake" : value === "archived" ? "Archived comicbooks" : "Your library";
-  $("catalog-help").textContent = intake
-    ? "Comicbooks awaiting organization, separate from your library. Read them here; an administrator can select comicbooks and use Organize selected to review a move. Nothing moves automatically."
-    : value === "archived" ? "Archived comicbooks are hidden from regular library browsing. Read them here or use the same move and organize actions to return them to your library."
-    : "Browse your organized comicbooks. Archived comicbooks are hidden unless you choose Archived below.";
-  for (const [id, active] of [["library-navigation", !intake], ["unsorted-navigation", intake]]) {
-    if (active) $(id).setAttribute("aria-current", "page");
-    else $(id).removeAttribute("aria-current");
-  }
   $("catalog-home").href = $("settings-catalog-back").href = intake ? "#unsorted" : "#library";
   $("catalog-home").setAttribute("aria-label", `Panel Haven ${label}`);
   $("settings-catalog-back").textContent = `Back to ${label}`;
   $("close-reader").textContent = `← ${label}`;
+  updateReadingStatusControls();
 }
 
 function finishLibraryLoading() {
@@ -640,37 +667,130 @@ function finishLibraryLoading() {
   $("books").removeAttribute("aria-busy");
   $("refresh-library").disabled = false;
 }
+for (const eventName of ["focusin", "click"]) $("library-view").addEventListener(eventName, (event) => {
+  const target = event.target.closest("[data-library-focus]");
+  if (target && libraryReturnFocus !== target.dataset.libraryFocus) {
+    libraryReturnFocus = target.dataset.libraryFocus;
+    rememberCatalogView();
+  }
+});
 
+function restoreLibraryFocus(key, generation) {
+  if (generation !== searchGeneration || $("library-view").hidden) return;
+  const target = key && $("library-view").querySelector(`[data-library-focus="${CSS.escape(key)}"]`);
+  const section = target?.closest("details.book-section");
+  if (section && target !== section.querySelector("summary") && !section.open) {
+    section.open = true;
+    closedSections.delete(section.dataset.sectionKey);
+    rememberCatalogView();
+  }
+  (target && !target.closest("[hidden]") ? target : $("library-status")).focus();
+}
+
+
+function seriesProgress(book) {
+  const progress = document.createElement("progress");
+  progress.max = 100;
+  progress.value = book.completionPercent;
+  progress.setAttribute("aria-label", `${book.label}: ${book.completionPercent}% of books completed`);
+  const meter = textElement("div", "", "series-progress");
+  const percentage = textElement("span", `${book.completionPercent}%`);
+  percentage.setAttribute("aria-hidden", "true");
+  meter.append(progress, percentage);
+  return meter;
+}
+
+function rememberCatalogView() {
+  if (!session || $("library-view").hidden || !["#library", "#unsorted"].includes(location.hash)) return;
+  catalogReturn = {
+    version: 2, username: session.username, hash: location.hash, location: catalogLocation,
+    page: libraryPage, query: libraryQuery, groupKey, sectionKey, groupLabel, groupOrigin, focus: libraryReturnFocus,
+    closedSections: [...closedSections], advancedFilter,
+    filters: Object.fromEntries(catalogControls.map(id => [id, $(id).value]))
+  };
+  history.replaceState({ catalog: catalogReturn }, "", location.href);
+}
+
+function openBookGroup(book, key, section) {
+  libraryReturnFocus = key;
+  rememberCatalogView();
+  history.pushState(null, "", location.href);
+  groupOrigin = { key, page: libraryPage, closedSections: [...closedSections], advancedFilter,
+    filters: Object.fromEntries(catalogControls.map(id => [id, $(id).value])) };
+  groupKey = book.key;
+  sectionKey = section;
+  groupLabel = book.label;
+  libraryPage = 1;
+  clearSelection();
+  loadLibrary(true);
+}
+
+function seriesView() {
+  return $("book-status").selectedOptions[0]?.hasAttribute("data-series-view") ? $("book-status").value : null;
+}
+
+function updateReadingStatusControls() {
+  const series = Boolean(seriesView());
+  const seriesRoot = series && groupKey === null;
+  for (const option of $("book-status").querySelectorAll("[data-series-view]")) option.disabled = catalogLocation !== "library";
+  for (const control of $("search-form").querySelectorAll("input, button:not(#refresh-library)")) control.disabled = series;
+  for (const id of ["book-rating", "publisher", "book-availability"]) $(id).disabled = series;
+  $("book-sort").disabled = seriesRoot;
+  for (const id of ["group-by", "stack-by"]) $(id).disabled = series;
+  $("sort-direction").disabled = seriesRoot || $("book-sort").value === "list";
+  for (const id of ["book-sort", "sort-direction"]) $(id).closest("label").hidden = seriesRoot;
+  $("reading-status-hint").hidden = !series;
+  $("edit-advanced-filters").disabled = series;
+  const countRules = rules => rules.reduce((count, rule) => count + (rule.rules ? countRules(rule.rules) : 1), 0);
+  const advancedCount = advancedFilter ? countRules(advancedFilter.rules) : 0;
+  const count = advancedCount + [libraryQuery, $("reading-list").value, $("publisher").value,
+    $("book-rating").value, $("book-status").value !== "all" && !series, $("book-availability").value !== "all"].filter(value => value !== "" && Boolean(value)).length;
+  $("active-filter-count").textContent = count ? `· ${count} active filter${count === 1 ? "" : "s"}` : "· No active filters";
+  $("advanced-filter-summary").textContent = series ? "Advanced filters are unavailable in fixed series discovery views."
+    : advancedCount ? `${advancedCount} advanced rule${advancedCount === 1 ? "" : "s"} applied (${advancedFilter.match === "all" ? "all" : "any"} must match), together with your basic filters.`
+    : "No advanced rules applied.";
+}
 
 async function loadLibrary(focusResults = false) {
   if (!session) return;
+  updateReadingStatusControls();
+  rememberCatalogView();
   const generation = ++searchGeneration;
-  const grouping = $("group-by").value !== "none" && groupKey === null;
+  const hash = location.hash;
+  const series = seriesView();
+  const seriesRoot = series && groupKey === null;
+  const grouping = seriesRoot || ($("stack-by").value !== "none" && groupKey === null);
   $("group-navigation").hidden = groupKey === null;
   $("group-label").textContent = groupLabel;
-  $("books").setAttribute("aria-label", grouping ? "Book groups" : "Books");
+  $("books").setAttribute("aria-label", grouping ? "Book stacks" : "Books");
   libraryItems = [];
   updateSelection();
   $("library-status").textContent = `Loading ${catalogLocation === "unsorted" ? "Unsorted intake" : catalogLocation === "archived" ? "Archived comicbooks" : "your library"}…`;
   $("books").setAttribute("aria-busy", "true");
-  if ($("books").contains(document.activeElement)) $("library-status").focus({ preventScroll: true });
+  if (focusResults && $("books").contains(document.activeElement)) $("library-status").focus({ preventScroll: true });
   $("books").inert = true;
   for (const id of ["previous-books", "next-books", "previous-books-bottom", "next-books-bottom", "refresh-library"]) $(id).disabled = true;
   const query = new URLSearchParams({
     location: catalogLocation, q: libraryQuery, page: libraryPage, pageSize: $("page-size").value,
     sort: $("book-sort").value, direction: $("sort-direction").value,
-    status: $("book-status").value, publisher: $("publisher").value,
-    availability: $("book-availability").value, groupBy: $("group-by").value
+    status: series ? "all" : $("book-status").value, publisher: $("publisher").value,
+    availability: $("book-availability").value, groupBy: $("stack-by").value, sectionBy: $("group-by").value
   });
   if ($("reading-list").value) query.set("listId", $("reading-list").value);
   if ($("book-rating").value !== "") query.set("rating", $("book-rating").value);
+  if (advancedFilter && !series) query.set("filter", JSON.stringify(advancedFilter));
   if (groupKey !== null) query.set("groupKey", groupKey);
+  if (sectionKey !== null) query.set("sectionKey", sectionKey);
   try {
-    const result = await api(`/api/${grouping ? "book-groups" : "books"}?${query}`);
-    if (generation !== searchGeneration || !session) return;
+    const url = seriesRoot
+      ? `/api/series-shelf?${new URLSearchParams({ kind: series, page: libraryPage, pageSize: $("page-size").value })}`
+      : `/api/${grouping ? "book-groups" : "books"}?${query}`;
+    if (url.length > 7500) throw new Error("The combined search, advanced rules and stack path exceed the request limit. Shorten the search or rule values, or leave the stack, then retry. Your filters are kept.");
+    const result = await api(url);
+    if (generation !== searchGeneration || hash !== location.hash || !session) return;
     libraryPage = result.page;
     libraryPages = Math.max(1, Math.ceil(result.total / result.pageSize));
-    if (libraryPage > libraryPages) { libraryPage = libraryPages; await loadLibrary(focusResults); return; }
+    if (libraryPage > libraryPages) { libraryPage = libraryPages; return await loadLibrary(focusResults); }
     libraryItems = grouping ? [] : result.items;
     for (const suffix of ["", "-bottom"]) {
       $("library-page" + suffix).textContent = `Page ${libraryPage} of ${libraryPages}`;
@@ -678,12 +798,20 @@ async function loadLibrary(focusResults = false) {
       $("next-books" + suffix).disabled = libraryPage >= libraryPages;
     }
     let checkedCoverSession = false;
-    const cards = result.items.map((book) => {
+    const sections = groupKey === null ? result.sections || [] : [];
+    const sectionKeys = [];
+    for (const section of sections)
+      for (let index = section.start; index < section.start + section.count; index++) sectionKeys[index] = section.key;
+    const cards = result.items.map((book, index) => {
       const card = textElement("article", "", grouping ? "book-card group-card" : "book-card");
       const title = grouping ? book.label : bookTitle(book);
       const coverId = grouping ? book.coverId : book.availability === "available" ? book.id : null;
       const cover = textElement("button", "", "cover-button");
       cover.type = "button";
+      const itemSection = sectionKeys[index] ?? null;
+      cover.dataset.libraryFocus = grouping
+        ? itemSection === null ? `group:${book.key}` : `group:${JSON.stringify([itemSection, book.key])}`
+        : `book:${book.id}`;
       cover.setAttribute("aria-label", `${grouping ? "View" : "Open"} ${title}`);
       const image = document.createElement("img");
       image.alt = "";
@@ -703,31 +831,19 @@ async function loadLibrary(focusResults = false) {
       cover.append(coverId && !failedCovers.has(coverId) ? image : textElement("span", "Cover unavailable", "cover-fallback"));
       cover.addEventListener("click", () => {
         if (!grouping) {
+          libraryReturnFocus = cover.dataset.libraryFocus;
+          rememberCatalogView();
           if (selectedBooks.size) card.querySelector("[data-book-id]").click();
           else if (book.availability === "available" && book.pageCount > 0) location.hash = `reader/${encodeURIComponent(book.id)}?location=${catalogLocation}`;
           else openDetails(book.id);
           return;
         }
-        groupKey = book.key;
-        groupLabel = book.label;
-        libraryPage = 1;
-        clearSelection();
-        loadLibrary(true);
+        openBookGroup(book, cover.dataset.libraryFocus, itemSection);
       });
-      card.append(cover, textElement("h2", title));
+      card.append(cover, textElement(sections.length ? "h3" : "h2", title));
       if (grouping) {
         card.append(textElement("p", `${book.count} ${book.count === 1 ? "book" : "books"}`, "book-status"));
-        if ($("group-by").value === "series") {
-          const progress = document.createElement("progress");
-          progress.max = 100;
-          progress.value = book.completionPercent;
-          progress.setAttribute("aria-label", `${title}: ${book.completionPercent}% of books completed`);
-          const meter = textElement("div", "", "series-progress");
-          const percentage = textElement("span", `${book.completionPercent}%`);
-          percentage.setAttribute("aria-hidden", "true");
-          meter.append(progress, percentage);
-          card.append(meter);
-        }
+        if ($("stack-by").value === "series") card.append(seriesProgress(book));
         return card;
       }
       if (book.availability !== "available") card.append(textElement("p", book.availability, "book-availability"));
@@ -738,6 +854,7 @@ async function loadLibrary(focusResults = false) {
       checkbox.checked = selectedBooks.has(book.id);
       checkbox.setAttribute("aria-label", `Select ${bookTitle(book)}`);
       checkbox.addEventListener("change", () => {
+        if (deletionBusy) { checkbox.checked = selectedBooks.has(book.id); return; }
         if (checkbox.checked && selectedBooks.size >= 100) {
           checkbox.checked = false;
           $("management-status").textContent = "Select at most 100 books. Clear some selections first.";
@@ -757,6 +874,7 @@ async function loadLibrary(focusResults = false) {
           const button = textElement("button", label);
           button.type = "button";
           button.disabled = managementBusy;
+          button.dataset.move = direction;
           button.setAttribute("aria-label", `${label}: ${bookTitle(book)}`);
           button.addEventListener("click", () => moveListBook(book.id, direction));
           moves.append(button);
@@ -765,19 +883,63 @@ async function loadLibrary(focusResults = false) {
       }
       return card;
     });
-    $("books").replaceChildren(...cards);
+    $("books").replaceChildren(...(sections.length ? sections.map((section) => {
+      const details = textElement("details", "", "book-section");
+      details.dataset.sectionKey = section.key;
+      details.open = !closedSections.has(section.key);
+      const summary = document.createElement("summary");
+      summary.dataset.libraryFocus = `section:${JSON.stringify(section.key)}`;
+      summary.append(textElement("h2", section.label));
+      const grid = textElement("div", "", "book-grid");
+      grid.append(...cards.slice(section.start, section.start + section.count));
+      details.append(summary, grid);
+      details.addEventListener("toggle", () => {
+        if (generation !== searchGeneration || hash !== location.hash || !details.isConnected || $("library-view").hidden) return;
+        if (details.open === !closedSections.has(section.key)) return;
+        if (details.open) closedSections.delete(section.key);
+        else {
+          closedSections.add(section.key);
+          if (grid.contains(document.activeElement)) summary.focus();
+        }
+        rememberCatalogView();
+      });
+      return details;
+    }) : cards));
+    for (const gap of result.missingIssues || []) {
+      const anchor = result.items.findIndex(book => book.id === gap.beforeBookId);
+      if (anchor < 0) continue;
+      const placeholders = [];
+      // ponytail: large numbering jumps use one range card instead of an unbounded DOM.
+      const range = gap.last - gap.first >= 100;
+      for (let number = gap.first; number <= gap.last; number++) {
+        const label = range ? `#${gap.first}–#${gap.last}` : `#${number}`;
+        const card = textElement("article", "", "book-card missing-issue");
+        const cover = textElement("div", "", "missing-issue-cover");
+        cover.append(textElement("strong", label), textElement("span", range ? "Missing issues" : "Missing issue"));
+        card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel} ${label}`),
+          textElement("p", "Not in this location", "muted"));
+        placeholders.push(card);
+        if (range) break;
+      }
+      if ($("book-sort").value === "number" && $("sort-direction").value === "desc") placeholders.reverse();
+      cards[anchor].before(...placeholders);
+    }
     updateSelection();
-    const filtered = libraryQuery || $("book-status").value !== "all" || $("book-rating").value !== "" || $("publisher").value || $("book-availability").value !== "all" || groupKey !== null;
-    const unit = grouping ? "group" : "book";
+    const filtered = advancedFilter || libraryQuery || $("book-status").value !== "all" || $("book-rating").value !== "" || $("publisher").value || $("book-availability").value !== "all" || groupKey !== null;
+    const unit = seriesRoot ? "series" : grouping ? "stack" : "book";
     $("library-status").textContent = result.total
-      ? `${result.total} ${unit}${result.total === 1 ? "" : "s"} · Showing ${(libraryPage - 1) * result.pageSize + 1}–${(libraryPage - 1) * result.pageSize + result.items.length}`
+      ? `${result.total} ${unit}${result.total === 1 || seriesRoot ? "" : "s"} · Showing ${(libraryPage - 1) * result.pageSize + 1}–${(libraryPage - 1) * result.pageSize + result.items.length}`
+      : seriesRoot ? series === "on-deck" ? "No series in Next Issue. Start reading a series from the library to continue it here."
+        : series === "recently-updated" ? "No series received new comicbooks in the last 12 days. Choose All books to browse your library."
+        : "No named series yet. Scan library comicbooks with Series metadata to see them here."
       : $("reading-list").value ? "No comicbooks in this reading list match the current area and filters. Choose All books or change the filters."
       : filtered ? "No comicbooks in this area match. Try another search or change the filters."
       : catalogLocation === "unsorted" ? "Unsorted intake is empty. An administrator can configure an Unsorted path in Server settings, restart, and scan incoming comicbooks. Nothing is moved automatically."
       : catalogLocation === "archived" ? "No Archived comicbooks. An administrator can configure an Archived path in Server settings, restart, and scan, or explicitly move comicbooks there. Regular library browsing keeps them hidden."
       : "Your library is empty. An administrator can scan the configured library folders to add comicbooks. Check Unsorted for comicbooks awaiting organization.";
+    rememberCatalogView();
   } catch (error) {
-    if (generation !== searchGeneration) return;
+    if (generation !== searchGeneration || hash !== location.hash) return;
     $("books").replaceChildren();
     libraryItems = [];
     updateSelection();
@@ -785,7 +947,7 @@ async function loadLibrary(focusResults = false) {
     $("library-status").textContent = "Could not load this area. Use Refresh to retry.";
     showError(error);
   } finally {
-    if (generation === searchGeneration) {
+    if (generation === searchGeneration && hash === location.hash) {
       finishLibraryLoading();
       if (focusResults && !$("library-view").hidden) {
         $("library-status").focus({ preventScroll: true });
@@ -793,6 +955,7 @@ async function loadLibrary(focusResults = false) {
       }
     }
   }
+  return generation;
 }
 
 async function loadPublishers() {
@@ -829,12 +992,10 @@ function resetScan() {
   $("retry-scan-status").hidden = true;
   $("cancel-scan").hidden = true;
   $("scan").disabled = false;
-  $("watch-status").textContent = "";
-  $("watch-status").hidden = true;
 }
 
 function scanResultSignature() {
-  return JSON.stringify([scanStatus.state, scanStatus.scanned, scanStatus.added, scanStatus.updated, scanStatus.skipped]);
+  return JSON.stringify([scanStatus.state, scanStatus.scanned, scanStatus.added, scanStatus.updated, scanStatus.skipped, scanStatus.errorCount, scanStatus.errors]);
 }
 
 function rememberScanDismissal(result) {
@@ -850,7 +1011,7 @@ function renderScan() {
   $("cancel-scan").hidden = !active;
   $("cancel-scan").disabled = scanBusy || scanStatus?.state === "cancelling";
   $("retry-scan-status").disabled = scanBusy;
-  const dismissible = scanStatus && ["completed", "cancelled"].includes(scanStatus.state) && scanStatus.errorCount === 0 && $("scan-error").hidden;
+  const dismissible = scanStatus && ["completed", "cancelled", "failed"].includes(scanStatus.state) && $("scan-error").hidden;
   $("dismiss-scan").hidden = !dismissible;
   const summary = !$("scan-error").hidden ? "Scan status needs attention" : {
     running: "Scanning libraries…", cancelling: "Cancelling scan…", completed: "Scan completed",
@@ -858,7 +1019,8 @@ function renderScan() {
   }[scanStatus?.state] || "Library scan";
   $("scan-summary").textContent = `${summary}${scanStatus?.errorCount ? ` · ${scanStatus.errorCount} error(s)` : ""}`;
   if (!scanStatus) return;
-  $("scan-panel").hidden = (scanStatus.state === "idle" && $("scan-error").hidden) || (dismissible && ($("library-view").hidden || dismissedScanResult === scanResultSignature()));
+  $("scan-panel").hidden = (scanStatus.state === "idle" && $("scan-error").hidden) ||
+    (dismissible && dismissedScanResult === scanResultSignature());
   const label = {
     idle: "No scan has started.", running: "Scanning libraries…", cancelling: "Cancelling scan…",
     completed: "Scan completed.", cancelled: "Scan cancelled. Changes already scanned were kept.", failed: "Scan failed. Review the errors and try scanning again."
@@ -874,9 +1036,12 @@ async function requestScan(action = "status") {
   if (action === "start") rememberScanDismissal(null);
   const epoch = authEpoch;
   clearTimeout(scanTimer);
+  const focused = document.activeElement;
   scanBusy = true;
   scanRequest = new AbortController();
   renderScan();
+  if ($("account-menu").open && $("scan-panel").contains(focused) && focused.disabled)
+    $("scan-summary").focus();
   let retry = false;
   try {
     const result = await api(action === "cancel" ? "/api/scan/cancel" : "/api/scan", {
@@ -902,19 +1067,6 @@ async function requestScan(action = "status") {
       loadPublishers();
       if ($("maintenance-dialog").open) loadMaintenance();
       if (detailBook && $("details-dialog").open) refreshDetailAvailability();
-    }
-    try {
-      const watch = await api("/api/watch-status", { signal: AbortSignal.any([scanRequest.signal, AbortSignal.timeout(15000)]) });
-      if (epoch !== authEpoch) return;
-      const message = `Folder watching: ${watch.watchingRoots} active · ${watch.unavailableRoots} unavailable${watch.pending ? " · Scan pending" : ""}.`;
-      if (watch.unavailableRoots > 0 && $("watch-status").textContent !== message) $("watch-status").closest("details").open = true;
-      $("watch-status").textContent = message;
-    } catch (error) {
-      if (epoch === authEpoch) {
-        const message = `Could not check folder watching: ${error.message}. Retrying with scan status.`;
-        if ($("watch-status").textContent !== message) $("watch-status").closest("details").open = true;
-        $("watch-status").textContent = message;
-      }
     }
   } catch (error) {
     if (epoch !== authEpoch) return;
@@ -944,6 +1096,8 @@ async function loadMaintenance() {
   $("previous-maintenance").disabled = true;
   $("next-maintenance").disabled = true;
   $("duplicate-note").hidden = kind !== "duplicates";
+  $("missing-issues-note").hidden = kind !== "missing-issues";
+  $("maintenance-file-note").hidden = kind === "missing-issues";
   try {
     const result = await api(`/api/maintenance?${new URLSearchParams({ kind, page: maintenancePage, pageSize: 48 })}`);
     if (generation !== maintenanceGeneration) return;
@@ -953,6 +1107,54 @@ async function loadMaintenance() {
     const rows = [];
     let duplicateKey = null;
     for (const book of result.items) {
+      if (kind === "missing-issues") {
+        const row = textElement("article", "", "maintenance-row");
+        const issues = book.first === book.last ? `Missing issue #${book.first}` : `Missing issues #${book.first}–#${book.last}`;
+        const location = { library: "Library", archived: "Archived", unsorted: "Unsorted" }[book.location];
+        row.append(textElement("h3", book.series), textElement("p", issues), textElement("p", location, "muted"));
+        const view = textElement("button", "View series");
+        view.type = "button";
+        view.setAttribute("aria-label", `View series: ${book.series} (${location})`);
+        view.addEventListener("click", async () => {
+          if (!leaveServerSettings()) return;
+          const epoch = authEpoch;
+          view.disabled = true;
+          try {
+            await leaveReader();
+            if (epoch !== authEpoch || generation !== maintenanceGeneration || !$("maintenance-dialog").open) return;
+            routeGeneration++;
+            setCatalogLocation(book.location);
+            advancedFilter = null;
+            $("search").value = libraryQuery = "";
+            $("reading-list").value = $("publisher").value = $("book-rating").value = "";
+            $("book-status").value = $("book-availability").value = "all";
+            $("group-by").value = "none";
+            $("stack-by").value = "series";
+            sectionKey = null;
+            closedSections.clear();
+            $("book-sort").value = "number";
+            $("sort-direction").value = "asc";
+            $("sort-direction").disabled = false;
+            groupKey = groupLabel = book.series;
+            groupOrigin = null;
+            libraryPage = 1;
+            clearSelection();
+            history.pushState(null, "", book.location === "unsorted" ? "#unsorted" : "#library");
+            $("maintenance-dialog").close();
+            showView("library");
+            loadPublishers();
+            await loadLibrary(true);
+          } catch (error) {
+            if (epoch === authEpoch) {
+              $("maintenance-error").textContent = error.message;
+              $("maintenance-error").hidden = false;
+            }
+          } finally { view.disabled = false; }
+        });
+        row.append(view);
+        rows.push(row);
+        continue;
+      }
       if (kind === "duplicates" && book.duplicateKey !== duplicateKey) {
         duplicateKey = book.duplicateKey;
         rows.push(textElement("h3", `SHA-256: ${duplicateKey}`, "duplicate-key"));
@@ -986,7 +1188,8 @@ async function loadMaintenance() {
     }
     $("maintenance-items").replaceChildren(...rows);
     $("maintenance-status").textContent = result.total
-      ? `${result.total} records · Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
+      ? `${result.total} ${kind === "missing-issues" ? "issue gaps" : "records"} · Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
+      : kind === "missing-issues" ? "No missing issue gaps found between known whole-number issues."
       : "No matching records. Scan the libraries to update availability and duplicate detection.";
     $("maintenance-page").textContent = `Page ${maintenancePage} of ${maintenancePages}`;
     $("previous-maintenance").disabled = maintenancePage <= 1;
@@ -1174,15 +1377,17 @@ function pageSelectionFull() {
 function updateSelection() {
   const count = selectedBooks.size;
   document.querySelector(".selection-toolbar").hidden = !count;
+  document.querySelector(".selection-toolbar").inert = deletionBusy;
   $("selection-count").textContent = `${count} of 100 selected`;
-  $("clear-selection").disabled = !count;
-  $("select-page").disabled = !libraryItems.length;
+  $("clear-selection").disabled = deletionBusy || !count;
+  $("select-page").disabled = deletionBusy || !libraryItems.length;
   $("select-page").textContent = pageSelectionFull() ? "Unselect all" : "Select page";
   $("bulk-metadata").disabled = !count;
   $("export-selected-comics").disabled = !session || session.mustChangePassword || !count || count > 100;
   $("mark-selected-read").disabled = $("mark-selected-unread").disabled = readingStatusBusy || !session || session.mustChangePassword || !count || count > 100;
   if (comicExport?.selection && !comicExportCurrent(comicExport)) resetComicExport();
   $("organize-selected").disabled = session?.role !== "admin" || !count || count > 100;
+  $("delete-selected").disabled = deletionBusy || session?.role !== "admin" || !count || count > 100;
   if ($("organization-dialog").open && (organizationBookIds.length !== count || organizationBookIds.some((id) => !selectedBooks.has(id)))) {
     invalidateOrganizationPreview(true);
     $("organization-status").textContent = "Selection changed. Close and reopen Organize selected to use the current selection.";
@@ -1195,10 +1400,11 @@ function updateSelection() {
   $("delete-list").disabled = managementBusy || !activeList();
   for (const checkbox of $("books").querySelectorAll("[data-book-id]")) {
     checkbox.checked = selectedBooks.has(checkbox.dataset.bookId);
+    checkbox.disabled = deletionBusy;
     const card = checkbox.closest(".book-card");
     const cover = card.querySelector(".cover-button");
     const action = count ? (checkbox.checked ? "Deselect" : "Select") : "Open";
-    cover.setAttribute("aria-label", `${action} ${card.querySelector("h2").textContent}`);
+    cover.setAttribute("aria-label", `${action} ${card.querySelector("h2, h3").textContent}`);
     if (count) cover.setAttribute("aria-pressed", String(checkbox.checked));
     else cover.removeAttribute("aria-pressed");
   }
@@ -1206,6 +1412,7 @@ function updateSelection() {
 }
 
 function clearSelection(announce = false) {
+  if (deletionBusy) return;
   selectedBooks.clear();
   updateSelection();
   if (announce) {
@@ -1228,15 +1435,6 @@ function folderOptions(excludedId = "") {
     .sort((a, b) => a.path.localeCompare(b.path))
     .map((folder) => new Option(folder.path, folder.id));
 }
-const mobileReadingLists = window.matchMedia("(max-width: 900px)");
-function updateReadingListsLayout() {
-  if (mobileReadingLists.matches && $("reading-lists-disclosure").contains(document.activeElement))
-    $("reading-lists-disclosure").querySelector("summary").focus();
-  $("reading-list").size = mobileReadingLists.matches ? 1 : 8;
-  $("reading-lists-disclosure").open = !mobileReadingLists.matches;
-}
-mobileReadingLists.addEventListener("change", updateReadingListsLayout);
-updateReadingListsLayout();
 
 async function loadLists() {
   const generation = ++listsGeneration;
@@ -1599,7 +1797,54 @@ $("data-relocation-form").addEventListener("submit", (event) => {
   mutateServerSettings("relocate", { destination: $("data-relocation-destination").value.trim() });
 });
 
+$("delete-selected").addEventListener("click", async () => {
+  if (session?.role !== "admin" || session.mustChangePassword || deletionBusy || !selectedBooks.size || selectedBooks.size > 100) return;
+  const state = deletion = { ids: [...selectedBooks], hash: location.hash };
+  const status = $("management-status");
+  let submitted = false;
+  deletionBusy = true;
+  status.textContent = "Checking selected files and catalog records before permanent deletion…";
+  status.focus({ preventScroll: true });
+  updateSelection();
+  try {
+    const preview = await api("/api/books/delete-preview", { method: "POST", body: JSON.stringify({ bookIds: state.ids }) });
+    if (deletion !== state) return;
+    if (!preview.canDelete) {
+      status.textContent = ["Nothing was deleted. Resolve the listed problems before trying again.",
+        ...preview.items.filter(item => !item.canDelete).map(item => `${item.title} (${item.source}): ${item.error || "Cannot delete this comicbook."}`)].join("\n");
+      return;
+    }
+    status.textContent = "Deleting selected files and catalog records. Do not close this page. Completed deletions cannot be undone…";
+    submitted = true;
+    const result = await api("/api/books/delete", { method: "POST", body: JSON.stringify({
+      bookIds: state.ids, expectedRevision: preview.revision, confirmed: true
+    }) });
+    if (deletion !== state) return;
+    for (const id of result.deletedIds) { selectedBooks.delete(id); failedCovers.delete(id); }
+    const failures = result.failures.map(item => `${preview.items.find(book => book.bookId === item.bookId)?.title || item.bookId}: ${item.error}`);
+    status.textContent = `${result.message}\nDeleted: ${result.deletedIds.length}. Failed: ${failures.length}.${failures.length ? `\n${failures.join("\n")}\nFailed comicbooks remain selected. Inspect them before trying again.` : ""}\nSeparately retained original backups were kept. Nothing will be retried automatically.`;
+  } catch (error) {
+    if (deletion !== state) return;
+    status.textContent = !submitted
+      ? `Safety check failed: ${error.message} Nothing was deleted. Resolve the problem before trying again.`
+      : error.status && error.status < 500
+        ? `Deletion rejected: ${error.message} Resolve the problem before trying again. Nothing will be retried automatically.`
+        : `Could not confirm deletion: ${error.message} Some files or catalog records may already be deleted. Refresh and inspect the library and files before another action. Missing-book cleanup can remove a catalog record left after its file was deleted. Nothing will be retried automatically.`;
+  } finally {
+    if (deletion === state) {
+      deletionBusy = false;
+      deletion = null;
+      updateSelection();
+      status.focus({ preventScroll: true });
+      loadLists();
+      loadPublishers();
+      loadLibrary();
+    }
+  }
+});
+
 function canCloseDialog(id) {
+  if (id === "intake-dialog") return !intake?.saving && !metadataBusy && !organizationBusy && !archiveBusy && !fileOperationBusy;
   if (id === "data-relocation-dialog") return !serverSettingsBusy && (!dataRelocationDirty() || confirm("Discard this unsubmitted relocation request?"));
   if (id === "user-dialog") return !accountBusy && (!accountDirty() || confirm("Discard unsaved account changes?"));
   const rating = id === "details-dialog";
@@ -1607,7 +1852,7 @@ function canCloseDialog(id) {
   if (id === "page-order-dialog") return !pageOrderBusy && (!pageOrderDirty() || confirm("Discard unsaved page order changes?"));
   if (id === "page-metadata-dialog") return !pageMetadataBusy && (!pageMetadataDirty || confirm("Discard unsaved page metadata changes?"));
   if (id === "metadata-dialog") return !metadataBusy && (!metadataDirty || confirm("Discard unsaved metadata changes?"));
-  if (id === "list-dialog") return !listBusy && !listPreviewBusy && (!listDirty || confirm("Discard unsaved reading list changes?"));
+  if (id === "list-dialog") return !listBusy && !listPreviewBusy && (!listDirty || confirm(listEditorMode === "list" ? "Discard unsaved reading list changes?" : "Discard unapplied advanced filter changes?"));
   if (id === "duplicate-dialog") return !duplicateBusy;
   if (id === "archive-dialog") return !archiveBusy && (!$("confirm-archive").checked || confirm("Discard this comicbook confirmation? Nothing is applied by closing."));
   if (id === "file-operation-dialog") return !fileOperationBusy && (!fileOperationDirty() || confirm("Discard this move draft? Nothing is applied by closing."));
@@ -1636,9 +1881,11 @@ async function loadMetadataSchema() {
   return metadataSchema;
 }
 
+let customValueNumber = 0;
+
 function metadataChangeRow(name, control, custom = false, value = "", label = name) {
   const row = textElement("fieldset", "", custom ? "custom-value metadata-change" : "metadata-change");
-  const context = custom ? name || "New custom value" : label;
+  const context = custom ? name || `New custom value ${++customValueNumber}` : label;
   row.dataset.label = context;
   row.append(textElement("legend", context));
   const apply = document.createElement("input");
@@ -1653,6 +1900,18 @@ function metadataChangeRow(name, control, custom = false, value = "", label = na
     key.maxLength = 128;
     key.readOnly = Boolean(name);
     row.append(labeledControl(`Name for ${context}`, key));
+    if (!name) {
+      const updateContext = () => {
+        const current = key.value.trim() || context;
+        row.dataset.label = current;
+        row.querySelector("legend").textContent = current;
+        for (const [selector, prefix] of [[".apply-change", "Apply"], [".custom-name", "Name for"], [".metadata-value", "New"], [".change-action", "Action for"]])
+          row.querySelector(selector).parentElement.firstChild.textContent = `${prefix} ${current}`;
+        row.querySelector("button").setAttribute("aria-label", `Discard row: ${current}`);
+      };
+      key.addEventListener("input", updateContext);
+      key.addEventListener("change", updateContext);
+    }
   } else row.dataset.field = name;
   control.classList.add("metadata-value");
   control.value = value;
@@ -1670,7 +1929,12 @@ function metadataChangeRow(name, control, custom = false, value = "", label = na
   if (custom && !name) {
     const discard = textElement("button", "Discard row");
     discard.type = "button";
-    discard.addEventListener("click", () => { row.remove(); metadataChanged(); });
+    discard.setAttribute("aria-label", `Discard row: ${context}`);
+    discard.addEventListener("click", () => {
+      row.remove();
+      metadataChanged();
+      $("add-custom-value").focus();
+    });
     row.append(discard);
   }
   update();
@@ -1935,6 +2199,333 @@ function comicVineLink(url, label = "Comic Vine") {
   return link;
 }
 
+function intakeCurrent(state, row = state?.row) {
+  return !!state && intake === state && state.epoch === authEpoch && state.hash === location.hash
+    && session?.role === "admin" && $("intake-dialog").open && state.row === row;
+}
+
+function cancelIntakeRequest() {
+  if (intake?.saving) return;
+  intake?.controller?.abort();
+  if (!intake) return;
+  intake.controller = null;
+  intake.busy = false;
+  updateIntakeControls();
+}
+
+function resetIntake() {
+  cancelIntakeRequest();
+  intake = null;
+  metadataIntake = null;
+  if ($("intake-dialog").open) $("intake-dialog").close();
+  $("intake-queue").replaceChildren();
+  $("intake-root").replaceChildren();
+  $("intake-candidates").replaceChildren();
+  $("intake-current-cover").replaceChildren();
+  $("intake-form").reset();
+  for (const id of ["intake-source", "intake-outcome", "intake-status", "intake-scope"]) $(id).textContent = "";
+}
+
+function updateIntakeControls() {
+  const row = intake?.row;
+  const busy = !!intake?.busy;
+  const processing = row?.processing;
+  const blocked = intake?.historyOnly || !processing || processing.state === "pending" || processing.state === "completed" || processing.canRecover;
+  $("intake-hints").disabled = busy || !row?.hints || blocked;
+  $("intake-match").disabled = $("intake-manual").disabled = busy || !row?.hints || blocked;
+  $("intake-cancel").hidden = !busy || !!intake?.saving;
+  $("intake-queue").disabled = !!intake?.saving;
+  $("intake-root").disabled = busy || !$("intake-root").options.length;
+  $("intake-dialog").querySelector("[data-close]").disabled = !!intake?.saving;
+  $("intake-refresh").disabled = busy;
+  $("intake-recover").hidden = !processing?.canRecover;
+  $("intake-recover").disabled = busy;
+  $("intake-original").hidden = !processing?.originalAvailable;
+  if (processing?.originalAvailable) $("intake-original").href = `/api/books/${encodeURIComponent(row.id)}/intake-processing/original`;
+  else $("intake-original").removeAttribute("href");
+  $("intake-outcome").textContent = row?.outcome || "Processing status has not been checked. Refresh status before accepting.";
+  for (const option of $("intake-queue").options) {
+    const item = intake?.rows.find((entry) => entry.id === option.value);
+    if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" ? "needs review" : item.processing?.state || "status unknown"}`;
+  }
+  for (const button of $("intake-candidates").querySelectorAll("button")) button.disabled = busy || blocked || !$("intake-root").value;
+}
+
+function setIntakeProcessing(row, result) {
+  if (!result || !["none", "pending", "completed", "failed"].includes(result.state)) throw new Error("The server returned an unknown processing status");
+  row.processing = result;
+  row.outcome = result.state === "none" ? "Not processed. Accept a candidate to save metadata and organize the comicbook."
+    : [result.message, result.destination ? `Destination: ${result.destination}` : "",
+      result.state === "completed" ? result.converted ? "Converted CBR to CBZ; original CBR removed after verification." : "Comicbook format preserved." : "",
+      result.originalAvailable ? "Verified original backup available to download." : "",
+      result.canRecover ? "Use Recover interrupted processing to finish committed cleanup or roll back uncommitted changes safely." : ""].filter(Boolean).join("\n");
+  if (result.state === "completed") {
+    selectedBooks.delete(row.id);
+    updateSelection();
+  }
+}
+
+async function intakeRequest(message, work, saving = false, checkProcessing = false) {
+  const state = intake;
+  const row = state?.row;
+  if (!intakeCurrent(state, row) || state.busy) return;
+  const controller = state.controller = new AbortController();
+  state.busy = true;
+  state.saving = saving;
+  $("intake-status").textContent = message;
+  updateIntakeControls();
+  const current = () => intakeCurrent(state, row) && state.controller === controller && !controller.signal.aborted;
+  try {
+    await work({ signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60000)]) }, current, state, row);
+  } catch (error) {
+    if (!current()) return;
+    if (state.saving || checkProcessing) {
+      row.processing = null;
+      row.outcome = "Processing outcome unknown. Refresh status before taking any further action; do not retry processing.";
+      try {
+        const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake-processing`, { signal: AbortSignal.timeout(30000) });
+        if (!current()) return;
+        setIntakeProcessing(row, result);
+        loadLibrary();
+        loadPublishers();
+        loadLists();
+        $("intake-status").textContent = result.state === "completed" ? row.outcome
+          : `${error.message}. Persisted status checked; processing was not retried. ${result.state === "none" || result.state === "failed" && !result.canRecover ? "You may explicitly accept again after resolving the error." : "Use the status and recovery controls below."}`;
+      } catch {
+        if (current()) $("intake-status").textContent = row.outcome;
+      }
+    } else $("intake-status").textContent = `${error.message}. Nothing was saved by this request. Refresh status or retry the search.`;
+  } finally {
+    if (current()) {
+      const focusStatus = state.saving || checkProcessing || document.activeElement?.disabled;
+      state.busy = state.saving = false;
+      state.controller = null;
+      updateIntakeControls();
+      if (checkProcessing && row.processing?.state === "completed") {
+        const index = state.rows.indexOf(row);
+        const next = state.rows.find((item, position) => position > index && item.processing?.state !== "completed")
+          || state.rows.find(item => item.processing?.state !== "completed");
+        if (next) {
+          $("intake-queue").value = next.id;
+          await showIntakeRow();
+          if (intakeCurrent(state, next)) $("intake-queue").focus({ preventScroll: true });
+        } else {
+          $("intake-dialog").close();
+          $("library-status").focus({ preventScroll: true });
+        }
+      } else if (focusStatus) $("intake-status").focus({ preventScroll: true });
+    }
+  }
+}
+
+function renderIntakeCandidates() {
+  $("intake-candidates").replaceChildren();
+  for (const candidate of intake?.row?.candidates || []) {
+    const article = textElement("article", "", "maintenance-row intake-candidate");
+    const cover = textElement("div", "Cover unavailable", "intake-cover");
+    if (candidate.coverUrl) {
+      const image = document.createElement("img");
+      image.alt = `Cover of ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`;
+      image.width = 120;
+      image.height = 180;
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("error", () => cover.replaceChildren("Cover unavailable"), { once: true });
+      image.src = candidate.coverUrl;
+      cover.replaceChildren(image);
+    }
+    const details = document.createElement("div");
+    details.append(textElement("h3", `${candidate.series} #${candidate.number} — ${candidate.title || "Untitled"}`),
+      textElement("p", `${candidate.publisher || "Unknown publisher"} · Run ${candidate.startYear || "unknown"} · Cover ${candidate.coverDate || "unknown"}`),
+      textElement("p", `Rank score ${candidate.score}/100`));
+    const accept = textElement("button", "Accept and process", "primary");
+    accept.type = "button";
+    accept.setAttribute("aria-label", `Accept and process ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`);
+    accept.addEventListener("click", () => {
+      if (accept.disabled) return;
+      intakeRequest("Preparing metadata and destination. Nothing has changed yet…", async (options, current, state, row) => {
+        const payload = { issueId: candidate.issueId, volumeId: candidate.volumeId, rootIndex: Number($("intake-root").value) };
+        const prepared = await api(`/api/books/${encodeURIComponent(row.id)}/intake/prepare`, { ...options, method: "POST", body: JSON.stringify(payload) });
+        if (!current()) return;
+        if (!prepared?.revision) throw new Error("The server did not return a processing revision");
+        state.saving = true;
+        $("intake-status").textContent = ["Processing metadata and comicbook. Do not close this page; processing cannot be cancelled.", ...(prepared.warnings || [])].join("\n");
+        updateIntakeControls();
+        const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake/process`, {
+          method: "POST", body: JSON.stringify({ ...payload, expectedRevision: prepared.revision, confirmed: true })
+        });
+        if (!current()) return;
+        if (result?.state !== "completed") throw new Error("Processing did not finish");
+        setIntakeProcessing(row, result);
+        $("intake-status").textContent = row.outcome;
+        loadLibrary();
+        loadPublishers();
+        loadLists();
+        $("intake-status").focus({ preventScroll: true });
+      }, false, true);
+    });
+    const actions = textElement("div", "", "actions");
+    const view = comicVineLink(candidate.url, "View candidate");
+    if (view.tagName === "A") view.className = "button-link";
+    actions.append(accept, view);
+    details.append(actions);
+    article.append(cover, details);
+    $("intake-candidates").append(article);
+  }
+}
+
+async function showIntakeRow() {
+  cancelIntakeRequest();
+  const state = intake;
+  if (!state) return;
+  state.row = state.rows.find((row) => row.id === $("intake-queue").value);
+  const row = state.row;
+  if (row.processing?.state !== "completed" && row.processing?.state !== "pending" && !row.processing?.canRecover) {
+    row.processing = null;
+    row.outcome = "";
+  }
+  $("intake-source").textContent = row.source || row.title;
+  const cover = $("intake-current-cover");
+  const image = document.createElement("img");
+  image.alt = `Cover of ${row.source || row.title}`;
+  image.width = 120;
+  image.height = 180;
+  image.decoding = "async";
+  image.addEventListener("error", () => {
+    if (image.parentNode === cover) cover.replaceChildren(textElement("span", "Cover unavailable"));
+  }, { once: true });
+  image.src = `/api/books/${encodeURIComponent(row.id)}/thumbnail`;
+  cover.replaceChildren(image);
+  $("intake-status").textContent = "";
+  for (const name of ["series", "number", "year", "volume", "publisher"]) $(`intake-${name}`).value = row.hints?.[name] ?? "";
+  renderIntakeCandidates();
+  updateIntakeControls();
+  await intakeRequest("Checking processing status and filename hints…", async (options, current) => {
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake-processing`, options);
+    if (!current()) return;
+    setIntakeProcessing(row, result);
+    if (state.historyOnly) {
+      $("intake-status").textContent = row.outcome;
+      return;
+    }
+    if (!$("intake-root").options.length) {
+      const roots = await api("/api/file-operation-roots", options);
+      if (!current()) return;
+      $("intake-root").replaceChildren(...roots.filter((root) => /^Library \d+$/.test(root.label)).map((root) => new Option(root.label, root.index)));
+    }
+    if (result.state === "completed" || result.state === "pending" || result.canRecover) {
+      $("intake-status").textContent = row.outcome;
+      return;
+    }
+    if (!row.hints) {
+      const hints = await api(`/api/books/${encodeURIComponent(row.id)}/intake`, options);
+      if (!current()) return;
+      row.hints = hints.hints;
+      row.source = hints.source;
+      $("intake-source").textContent = row.source;
+      for (const name of ["series", "number", "year", "volume", "publisher"]) $(`intake-${name}`).value = row.hints[name] ?? "";
+    }
+    $("intake-status").textContent = $("intake-root").options.length
+      ? "Check the hints and destination library, then match. Scores rank suggestions; they are not approval."
+      : "No regular destination library is configured. Configure a writable library in Server settings before accepting.";
+  });
+}
+
+function openIntake(rows, scope, historyOnly = false) {
+  if (session?.role !== "admin" || intake?.saving) return;
+  resetIntake();
+  intake = { epoch: authEpoch, hash: location.hash, rows, row: null, busy: false, historyOnly };
+  $("intake-title").textContent = historyOnly ? "Processing status and original backup" : "Process Unsorted";
+  for (const id of ["intake-root", "intake-form", "intake-candidates"]) $(id).hidden = historyOnly;
+  document.querySelector('label[for="intake-root"]').hidden = historyOnly;
+  $("intake-scope").textContent = scope;
+  $("intake-queue").replaceChildren(...rows.map((row) => new Option(row.title, row.id)));
+  $("intake-dialog").showModal();
+  showIntakeRow();
+}
+
+$("intake-history").addEventListener("click", () => {
+  if (session?.role !== "admin" || !detailBook || !$("details-dialog").open || $("intake-history").hidden || intake) return;
+  openIntake([{ id: detailBook.id, title: bookTitle(detailBook) }],
+    "Review the last processing operation, download its verified original, or recover interrupted work. This view never starts new processing.", true);
+});
+
+$("process-unsorted").addEventListener("click", () => {
+  if (session?.role !== "admin" || catalogLocation !== "unsorted") return;
+  const selected = selectedBooks.size > 0;
+  const ids = selected ? [...selectedBooks] : libraryItems.map((book) => book.id);
+  if (!ids.length || ids.length > 100) {
+    $("library-status").textContent = "Choose Stack by: None or open a stack, then select up to 100 Unsorted comicbooks. With no selection, only the current page is used.";
+    $("library-status").focus();
+    return;
+  }
+  openIntake(ids.map((id) => ({ id, title: bookTitle(libraryItems.find((book) => book.id === id) || { title: id }) })), selected
+    ? `${ids.length} selected comicbook(s), across library pages. Processing status is checked even when a scan marks a source unavailable.`
+    : `No selection: ${ids.length} comicbook(s) on the current page only (page ${libraryPage}); not the entire Unsorted intake.`);
+});
+$("intake-queue").addEventListener("change", showIntakeRow);
+$("intake-refresh").addEventListener("click", showIntakeRow);
+$("intake-root").addEventListener("change", updateIntakeControls);
+$("intake-recover").addEventListener("click", () => {
+  if (!intake?.row?.processing?.canRecover) return;
+  intakeRequest("Recovering interrupted processing. Do not close this page…", async (options, current, state, row) => {
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake-processing/recover`, {
+      method: "POST", body: JSON.stringify({ expectedRevision: row.processing.revision, confirmed: true })
+    });
+    if (!current()) return;
+    setIntakeProcessing(row, result);
+    $("intake-status").textContent = row.outcome;
+    loadLibrary();
+    loadPublishers();
+    loadLists();
+  }, true);
+});
+$("intake-cancel").addEventListener("click", () => {
+  cancelIntakeRequest();
+  $("intake-status").textContent = "Request cancelled. Nothing saved. Match again to retry.";
+  ($("intake-match").disabled ? $("intake-refresh") : $("intake-match")).focus();
+});
+$("intake-hints").addEventListener("input", () => {
+  const row = intake?.row;
+  if (!row) return;
+  row.hints = Object.fromEntries(["series", "number", "year", "volume", "publisher"].map((name) => {
+    const value = $(`intake-${name}`).value.trim();
+    return [name, name === "year" || name === "volume" ? value ? Number(value) : null : value];
+  }));
+  row.candidates = [];
+  renderIntakeCandidates();
+  $("intake-status").textContent = "Hints changed. Match again; saved catalog metadata is unchanged.";
+});
+$("intake-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!$("intake-form").reportValidity()) return;
+  intakeRequest("Searching and ranking Comic Vine issues…", async (options, current, state, row) => {
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake/matches`, { ...options, method: "POST", body: JSON.stringify(row.hints) });
+    if (!current()) return;
+    row.candidates = result.candidates;
+    renderIntakeCandidates();
+    $("intake-status").textContent = [result.candidates.length ? `${result.candidates.length} candidate(s). Compare the run and issue; nothing is selected automatically.`
+      : "No candidates. Edit the hints and retry, or use manual Comic Vine search.", ...(result.warnings || [])].join("\n");
+  });
+});
+$("intake-manual").addEventListener("click", async () => {
+  const state = intake, row = state?.row;
+  if (!intakeCurrent(state, row) || state.busy) return;
+  state.returnFocus = $("intake-manual");
+  await openDetails(row.id);
+  if (!intakeCurrent(state, row) || !$("details-dialog").open || detailBook?.id !== row.id) return;
+  $("find-metadata").click();
+});
+$("intake-dialog").addEventListener("cancel", (event) => { if (!canCloseDialog("intake-dialog")) event.preventDefault(); });
+$("intake-dialog").addEventListener("close", () => { if (!$("intake-dialog").open) resetIntake(); });
+for (const id of ["metadata-dialog", "details-dialog", "organization-dialog", "file-operation-dialog", "archive-dialog"]) $(id).addEventListener("close", () => {
+  if (!intakeCurrent(intake)) return;
+  updateIntakeControls();
+  if (![...document.querySelectorAll("dialog[open]")].some((dialog) => dialog.id !== "intake-dialog"))
+    (intake.returnFocus?.isConnected && !intake.returnFocus.disabled ? intake.returnFocus : $("intake-queue")).focus();
+});
+
 function resetComicVine() {
   comicVine?.controller?.abort();
   comicVine = null;
@@ -2064,6 +2655,8 @@ async function stageComicVineIssue(id) {
       { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) });
     if (!comicVineCurrent(state, controller)) return;
     if (!Object.values(proposal.fields ?? {}).some((value) => typeof value === "string" && value.trim())) throw new Error("This issue has no supported nonempty metadata");
+    if (intakeCurrent(intake) && intake.row.id === state.id && !proposal.fields.Volume && /^[1-9]\d{3}$/.test(state.volume.startYear))
+      proposal.fields.Volume = state.volume.startYear;
     await openMetadata([state.id], true, proposal);
   } catch (error) {
     if (comicVineCurrent(state, controller)) $("comic-vine-status").textContent = `Could not load suggestions: ${error.message}. Choose the issue again to retry.`;
@@ -2091,6 +2684,8 @@ $("comic-vine-dialog").addEventListener("close", () => { if (!$("comic-vine-dial
 async function openMetadata(ids, bulk = false, proposal = null) {
   if (session?.role !== "admin" || !ids.length || ids.length > 100) return;
   if ($("metadata-dialog").open && !canCloseDialog("metadata-dialog")) return;
+  metadataIntake = intakeCurrent(intake) && ids.length === 1 && intake.row.id === ids[0] ? { state: intake, row: intake.row } : null;
+  const epoch = authEpoch;
   if (proposal) resetComicVine();
   const detailsGeneration = detailGeneration;
   const hash = location.hash;
@@ -2116,8 +2711,8 @@ async function openMetadata(ids, bulk = false, proposal = null) {
   $("metadata-dialog").showModal();
   try {
     const [schema, metadata] = await Promise.all([loadMetadataSchema(), ids.length === 1 ? api(`/api/books/${encodeURIComponent(ids[0])}/metadata`) : Promise.resolve({ fields: {}, custom: {} })]);
-    if (generation !== metadataGeneration || !$("metadata-dialog").open) return;
-    if (proposal && (detailsGeneration !== detailGeneration || hash !== location.hash || !$("details-dialog").open)) {
+    if (epoch !== authEpoch || generation !== metadataGeneration || !$("metadata-dialog").open) return;
+    if (proposal && (hash !== location.hash || detailsGeneration !== detailGeneration || ids[0] !== detailBook?.id || !$("details-dialog").open)) {
       $("metadata-dialog").close();
       return;
     }
@@ -2385,6 +2980,14 @@ $("archive-form").addEventListener("submit", async (event) => {
     const result = await api(path, { method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true }) });
     if (epoch !== authEpoch || generation !== archiveGeneration) return;
     $("archive-status").textContent = `${result.message || (restoring ? "Original comicbook restored. Catalog metadata edits were kept." : "Metadata written to the comicbook.")} Backup: ${result.backupId}. Private reading data is unchanged.`;
+    invalidateReaderNextIssue(id);
+    try {
+      await refreshReaderSource(id);
+    } catch (error) {
+      if (epoch === authEpoch && generation === archiveGeneration)
+        $("archive-status").textContent += ` Reader refresh failed: ${error.message}. Close and reopen the reader before continuing.`;
+    }
+    if (epoch !== authEpoch || generation !== archiveGeneration) return;
     failedCovers.delete(id);
     loadLibrary();
     loadLists();
@@ -2779,6 +3382,7 @@ $("organization-apply-form").addEventListener("submit", async (event) => {
       organizationBusy = false;
       updateOrganizationControls();
       for (const item of items) failedCovers.delete(item.bookId);
+      for (const item of items) invalidateReaderNextIssue(item.bookId);
       loadLists();
       loadPublishers();
       loadLibrary();
@@ -2891,6 +3495,7 @@ $("file-operation-apply-form").addEventListener("submit", async (event) => {
     const path = `/api/books/${encodeURIComponent(id)}/file-operations${preview.operation === "move" ? "" : `/${encodeURIComponent(preview.operationId)}/${preview.operation}`}`;
     await api(path, { method: "POST", body: JSON.stringify({ ...(preview.operation === "move" ? preview.draft : {}), expectedRevision: preview.revision, confirmed: true }) });
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
+    invalidateReaderNextIssue(id);
     fileOperationInitialDraft = JSON.stringify(fileOperationDraft());
     $("file-operation-status").textContent = "Reviewed operation completed. Book identity, metadata, and private reading data were kept. Review refreshed history below.";
     failedCovers.delete(id);
@@ -3091,7 +3696,7 @@ $("preview-archive-export").addEventListener("click", async () => {
 });
 
 let ruleFields = [];
-const ruleOperatorLabels = { contains: "Contains", notContains: "Does not contain", equals: "Equals", notEquals: "Does not equal", startsWith: "Starts with", endsWith: "Ends with", isEmpty: "Is empty", isNotEmpty: "Is not empty", greaterThan: "Greater than", lessThan: "Less than", greaterOrEqual: "Greater than or equal", lessOrEqual: "Less than or equal" };
+const ruleOperatorLabels = { contains: "Contains", notContains: "Does not contain", equals: "Equals", notEquals: "Does not equal", startsWith: "Starts with", endsWith: "Ends with", isEmpty: "Not set", isNotEmpty: "Is set", greaterThan: "Greater than", lessThan: "Less than", greaterOrEqual: "Greater than or equal", lessOrEqual: "Less than or equal" };
 
 function addListRule(rule = { field: "Series", operator: "contains", value: "" }, container = $("list-rules")) {
   if ($("list-rules").querySelectorAll(".list-rule").length >= 20) { $("list-status").textContent = "A smart list supports at most 20 total rules."; return; }
@@ -3110,19 +3715,34 @@ function addListRule(rule = { field: "Series", operator: "contains", value: "" }
   };
   const update = (initial = false) => {
     const schema = ruleFields.find((item) => item.name === field.value);
-    const numeric = schema?.type === "integer";
-    const enumeration = schema?.type === "readStatus" || schema?.type === "availability";
-    const operators = numeric ? ["equals", "notEquals", "greaterThan", "lessThan", "greaterOrEqual", "lessOrEqual", ...(!["PageCount", "PersonalRating"].includes(field.value) ? ["isEmpty", "isNotEmpty"] : [])]
-      : enumeration ? ["equals", "notEquals"] : ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith", "isEmpty", "isNotEmpty"];
-    operator.replaceChildren(...operators.map((name) => new Option(ruleOperatorLabels[name], name)));
+    const numeric = schema?.type === "integer" || schema?.type === "number";
+    const date = schema?.type === "date";
+    const membership = schema?.type === "listMembership";
+    const enumeration = ["readStatus", "availability", "boolean", "listMembership"].includes(schema?.type);
+    const missing = !["PageCount", "PersonalRating", "FileSizeMB"].includes(field.value) ? ["isEmpty", "isNotEmpty"] : [];
+    const comparisons = ["greaterThan", "lessThan", "greaterOrEqual", "lessOrEqual"];
+    const operators = numeric || date ? ["equals", "notEquals", ...comparisons, ...missing]
+      : enumeration ? ["equals", "notEquals", ...(membership ? missing : [])]
+      : ["contains", "notContains", "equals", "notEquals", "startsWith", "endsWith", ...(field.value === "Number" ? comparisons : []), ...missing];
+    operator.replaceChildren(...operators.map(name => new Option(membership && name === "isEmpty" ? "In no manual list" : membership && name === "isNotEmpty" ? "In any manual list" : ruleOperatorLabels[name], name)));
     if (initial) operator.value = rule.operator;
     const value = document.createElement(enumeration ? "select" : "input");
     value.className = "rule-value";
-    if (field.value === "ReadStatus") value.append(new Option("Unread", "unread"), new Option("In progress", "in-progress"), new Option("Completed", "completed"));
-    else if (field.value === "Availability") value.append(new Option("Available", "available"), new Option("Missing", "missing"), new Option("Unavailable", "unavailable"));
-    else if (numeric) { value.type = "number"; value.min = String(schema.min ?? 0); value.max = String(schema.max ?? 2147483647); value.step = "1"; }
+    value.setAttribute("aria-describedby", "list-status");
+    if (membership) {
+      value.append(new Option("Choose a manual list", ""), ...ruleManualLists.map(list => new Option(list.name, list.id)));
+      if (initial && rule.value && !ruleManualLists.some(list => list.id === rule.value)) {
+        const unavailable = new Option("List no longer available — choose another", rule.value);
+        unavailable.disabled = true;
+        value.append(unavailable);
+      }
+    } else if (schema?.type === "readStatus") value.append(new Option("Unread", "unread"), new Option("In progress", "in-progress"), new Option("Completed", "completed"));
+    else if (schema?.type === "availability") value.append(new Option("Available", "available"), new Option("Missing", "missing"), new Option("Unavailable", "unavailable"));
+    else if (schema?.type === "boolean") value.append(new Option("Yes", "yes"), new Option("No", "no"));
+    else if (date) { value.type = "date"; value.min = "0001-01-01"; value.max = "9999-12-31"; }
+    else if (numeric) { value.type = "number"; value.min = String(schema.min ?? 0); if (schema.max != null) value.max = String(schema.max); value.step = schema.type === "integer" ? "1" : "any"; }
     else value.maxLength = 2000;
-    value.required = numeric || enumeration;
+    value.required = numeric || enumeration || date;
     if (initial) value.value = rule.value;
     valueLabel.replaceChildren(document.createTextNode("Value"), value);
     updateValue();
@@ -3131,7 +3751,13 @@ function addListRule(rule = { field: "Series", operator: "contains", value: "" }
   operator.addEventListener("change", updateValue);
   const remove = textElement("button", "Remove rule", "danger");
   remove.type = "button";
-  remove.addEventListener("click", () => { row.remove(); listDirty = true; updateRuleBounds(); invalidateListPreview(); });
+  remove.addEventListener("click", () => {
+    row.remove();
+    listDirty = true;
+    updateRuleBounds();
+    invalidateListPreview();
+    (container.closest(".rule-group")?.querySelector(":scope > [data-add-rule]") || $("add-list-rule")).focus();
+  });
   row.append(labeledControl("Field", field), labeledControl("Operator", operator), valueLabel, remove);
   update(true);
   container.append(row);
@@ -3168,7 +3794,14 @@ function addListGroup(group = { match: "all", rules: [{ field: "Series", operato
   addGroup.addEventListener("click", () => { listDirty = true; addListGroup(undefined, children, depth + 1); });
   const remove = textElement("button", "Remove group", "danger");
   remove.type = "button";
-  remove.addEventListener("click", () => { section.remove(); listDirty = true; updateRuleBounds(); invalidateListPreview(); });
+  remove.addEventListener("click", () => {
+    section.remove();
+    listDirty = true;
+    updateRuleBounds();
+    invalidateListPreview();
+    const target = container.closest(".rule-group")?.querySelector(":scope > [data-add-group]") || $("add-list-group");
+    (target.disabled ? container.closest(".rule-group")?.querySelector(".group-match") || $("list-match") : target).focus();
+  });
   section.append(labeledControl("Match", match), children, addRule, addGroup, remove);
   container.append(section);
   for (const child of group.rules) {
@@ -3189,6 +3822,41 @@ function collectListRules(container = $("list-rules")) {
   });
 }
 
+function validateRuleDraft() {
+  for (const control of $("list-rules").querySelectorAll("input, select"))
+    if (!control.reportValidity()) return null;
+  const payload = { match: $("list-match").value, rules: collectListRules() };
+  if (!payload.rules.length || [...$("list-rules").querySelectorAll(".group-rules")].some(group => !group.children.length)) {
+    $("list-status").textContent = "Add at least one rule to every group, or remove empty groups.";
+    ($("add-list-rule").disabled ? $("list-match") : $("add-list-rule")).focus();
+    return null;
+  }
+  if (listEditorMode !== "list" && encodeURIComponent(JSON.stringify(payload)).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16)}`).length > 6000) {
+    $("list-status").textContent = "These advanced filters exceed the 6,000-character encoded request limit. Shorten values or remove rules, then try again. Your draft is kept.";
+    $("list-match").focus();
+    return null;
+  }
+  return payload;
+}
+
+function setListEditorMode(mode) {
+  listEditorMode = mode;
+  const filter = mode === "filter";
+  if (mode !== "list") $("list-title").textContent = filter ? "Advanced filters" : "Save advanced rules as smart list";
+  $("list-controls-legend").textContent = filter ? "Filter current catalog" : "Private reading list";
+  for (const id of ["list-name", "list-folder"]) {
+    $(id).closest("label").hidden = filter;
+    $(id).disabled = filter;
+  }
+  $("list-kind").closest("label").hidden = mode !== "list";
+  $("list-kind").disabled = mode !== "list" || Boolean(listEditingId);
+  $("filter-save-help").hidden = mode !== "filter-save";
+  $("save-filter-list").hidden = !filter;
+  $("back-to-filter").hidden = mode !== "filter-save";
+  $("save-list").textContent = filter ? "Apply filters" : mode === "filter-save" ? "Save advanced rules" : "Save list";
+  $("save-list").disabled = listBusy || (filter ? !ruleFields.length : $("list-kind").value === "smart" && !listPreviewKey);
+}
+
 function invalidateListPreview() {
   listPreviewGeneration++;
   listPreviewBusy = false;
@@ -3199,15 +3867,13 @@ function invalidateListPreview() {
   $("list-preview-page").textContent = "Page 1 of 1";
   $("previous-list-preview").disabled = $("next-list-preview").disabled = true;
   $("preview-list").disabled = false;
-  $("save-list").disabled = listBusy || $("list-kind").value === "smart";
+  $("save-list").disabled = listBusy || (listEditorMode === "filter" ? !ruleFields.length : $("list-kind").value === "smart");
 }
 
 async function previewList(page = 1) {
   if (listBusy || listPreviewBusy || $("list-kind").value !== "smart") return;
-  for (const control of $("list-rules").querySelectorAll("input, select"))
-    if (!control.reportValidity()) return;
-  const payload = { match: $("list-match").value, rules: collectListRules() };
-  if (!payload.rules.length || [...$("list-rules").querySelectorAll(".group-rules")].some((group) => !group.children.length)) { $("list-preview-status").textContent = "Add at least one rule to every group, or remove empty groups."; return; }
+  const payload = validateRuleDraft();
+  if (!payload) return;
   const key = JSON.stringify(payload);
   const generation = ++listPreviewGeneration;
   const epoch = authEpoch;
@@ -3244,14 +3910,14 @@ async function previewList(page = 1) {
     if (epoch === authEpoch && generation === listPreviewGeneration) {
       listPreviewBusy = false;
       $("preview-list").disabled = false;
-      $("save-list").disabled = !listPreviewKey;
+      $("save-list").disabled = listEditorMode !== "filter" && !listPreviewKey;
       $("previous-list-preview").disabled = !listPreviewKey || listPreviewPage <= 1;
       $("next-list-preview").disabled = !listPreviewKey || listPreviewPage >= listPreviewPages;
     }
   }
 }
 
-function showListEditor(list = null) {
+function showListEditor(list = null, mode = "list") {
   listDialogGeneration++;
   ruleFields = [];
   listDirty = listBusy = false;
@@ -3273,6 +3939,7 @@ function showListEditor(list = null) {
   $("smart-list-controls").hidden = $("list-kind").value !== "smart";
   $("smart-list-controls").disabled = true;
   $("list-status").textContent = "";
+  setListEditorMode(mode);
   invalidateListPreview();
   $("list-dialog").showModal();
   $("retry-list-rules").onclick = () => loadListRuleFields(list?.rules ?? []);
@@ -3283,11 +3950,16 @@ async function loadListRuleFields(rules) {
   const generation = listDialogGeneration;
   const epoch = authEpoch;
   $("retry-list-rules").hidden = true;
-  $("list-rule-status").textContent = "Loading smart-list rule fields… Manual lists can be saved now.";
+  $("list-rule-status").textContent = "Loading rule fields and your manual lists…";
   try {
-    const fields = await api("/api/list-rule-fields");
+    const [fields, lists, folders] = await Promise.all([api("/api/list-rule-fields"), api("/api/lists"), api("/api/list-folders")]);
     if (epoch !== authEpoch || generation !== listDialogGeneration) return;
     ruleFields = fields;
+    ruleManualLists = lists.filter(list => list.kind === "manual");
+    listFolders = folders;
+    const folder = $("list-folder").value;
+    $("list-folder").replaceChildren(new Option("Unfiled", ""), ...folderOptions());
+    $("list-folder").value = folder;
     for (const rule of rules) {
       if (rule.rules) addListGroup(rule);
       else addListRule(rule);
@@ -3298,7 +3970,7 @@ async function loadListRuleFields(rules) {
     invalidateListPreview();
   } catch (error) {
     if (epoch === authEpoch && generation === listDialogGeneration) {
-      $("list-rule-status").textContent = `Smart-list fields unavailable: ${error.message}. Retry to edit smart rules. Manual lists can still be saved.`;
+      $("list-rule-status").textContent = `Rule fields or lists unavailable: ${error.message}. Retry loading to edit rules. Manual lists can still be saved.`;
       $("retry-list-rules").hidden = false;
     }
   }
@@ -3328,6 +4000,8 @@ async function moveListBook(bookId, direction) {
   const listId = activeList()?.id;
   if (!listId) return;
   const epoch = authEpoch;
+  let generation = searchGeneration;
+  const trigger = document.activeElement;
   managementBusy = true;
   updateSelection();
   try {
@@ -3343,9 +4017,19 @@ async function moveListBook(bookId, direction) {
     if (epoch !== authEpoch) return;
     clearSelection();
     $("management-status").textContent = "List order saved. Moves use the full list, including books on other pages or hidden by filters.";
-    await loadLibrary();
+    generation = await loadLibrary();
   } catch (error) { if (epoch === authEpoch) $("management-status").textContent = error.message; }
-  finally { if (epoch === authEpoch) { managementBusy = false; updateSelection(); } }
+  finally {
+    if (epoch === authEpoch) {
+      managementBusy = false;
+      updateSelection();
+      if (generation === searchGeneration && !$("library-view").hidden && $("reading-list").value === listId &&
+          (document.activeElement === trigger || document.activeElement === document.body)) {
+        const card = $("books").querySelector(`[data-book-id="${CSS.escape(bookId)}"]`)?.closest(".book-card");
+        (card?.querySelector(`[data-move="${direction}"]`) || $("management-status")).focus({ preventScroll: true });
+      }
+    }
+  }
 }
 
 async function changeReadingStatus(completed) {
@@ -3374,6 +4058,7 @@ $("mark-selected-read").addEventListener("click", () => changeReadingStatus(true
 $("mark-selected-unread").addEventListener("click", () => changeReadingStatus(false));
 
 $("select-page").addEventListener("click", () => {
+  if (deletionBusy) return;
   if (pageSelectionFull()) {
     clearSelection(true);
     return;
@@ -3388,6 +4073,7 @@ $("select-page").addEventListener("click", () => {
 $("clear-selection").addEventListener("click", () => clearSelection(true));
 $("add-to-list").addEventListener("change", updateSelection);
 $("reading-list").addEventListener("change", () => {
+  if (seriesView()) $("book-status").value = "all";
   if (activeList()?.kind === "manual") $("book-sort").value = "list";
   changeLibrary();
 });
@@ -3422,6 +4108,7 @@ $("metadata-dialog").addEventListener("close", () => {
   metadataGeneration++;
   metadataDirty = false;
   metadataBookIds = [];
+  metadataIntake = null;
   invalidateMetadataPreview();
 });
 $("export-metadata-json").addEventListener("click", () => exportMetadata("json"));
@@ -3436,6 +4123,11 @@ $("metadata-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (session?.role !== "admin" || !metadataBookIds.length || metadataBusy) return;
   const generation = metadataGeneration;
+  const intakeContext = metadataIntake;
+  if (intakeContext && !intakeCurrent(intakeContext.state, intakeContext.row)) {
+    $("metadata-status").textContent = "The intake review context changed. Close this editor and reopen the book before saving.";
+    return;
+  }
   const detailsGeneration = detailGeneration;
   const epoch = authEpoch;
   const ids = [...metadataBookIds];
@@ -3451,6 +4143,10 @@ $("metadata-form").addEventListener("submit", async (event) => {
     metadataBusy = true;
     $("metadata-controls").disabled = true;
     $("save-metadata").disabled = $("apply-metadata").disabled = true;
+    if (intakeContext) {
+      await api(`/api/books/${encodeURIComponent(intakeContext.row.id)}/intake`);
+      if (epoch !== authEpoch || generation !== metadataGeneration || !intakeCurrent(intakeContext.state, intakeContext.row)) return;
+    }
     if (metadataBulk && !applying) {
       invalidateMetadataPreview();
       $("metadata-status").textContent = "Preparing exact changes. Nothing is being saved…";
@@ -3475,6 +4171,10 @@ $("metadata-form").addEventListener("submit", async (event) => {
       $("metadata-preview").hidden = false;
       $("metadata-preview").focus();
       $("metadata-status").textContent = metadataPreview.hasChanges ? "Review every book below, then choose Apply reviewed changes. Nothing has been saved yet." : "No actual changes. Every selected book is unchanged.";
+      if (!metadataPreview.hasChanges && intakeContext && intakeCurrent(intakeContext.state, intakeContext.row)) {
+        intakeContext.row.outcome = "Exact metadata preview reviewed: no changes needed. No metadata was saved.";
+        updateIntakeControls();
+      }
       return;
     }
     $("metadata-status").textContent = `Saving metadata for ${ids.length} ${ids.length === 1 ? "book" : "books"}…`;
@@ -3482,6 +4182,12 @@ $("metadata-form").addEventListener("submit", async (event) => {
       method: metadataBulk ? "POST" : "PUT", body: JSON.stringify(metadataBulk ? { ...metadataPreview.payload, expectedRevision: metadataPreview.revision } : changes)
     });
     if (epoch !== authEpoch) return;
+    if (Object.hasOwn(changes.fields, "Series") || Object.hasOwn(changes.fields, "Number"))
+      for (const id of ids) invalidateReaderNextIssue(id);
+    if (intakeContext && intakeCurrent(intakeContext.state, intakeContext.row)) {
+      intakeContext.row.outcome = "Metadata saved in the library database. Source comicbook unchanged.";
+      updateIntakeControls();
+    }
     if (archivePreview && ids.includes(archiveBookId)) {
       invalidateArchivePreview();
       $("archive-status").textContent = "Saved catalog metadata changed. Preview the comicbook operation again.";
@@ -3522,12 +4228,29 @@ $("metadata-form").addEventListener("submit", async (event) => {
   }
 });
 
+$("edit-advanced-filters").addEventListener("click", () => showListEditor({ kind: "smart", ...advancedFilter }, "filter"));
+$("save-filter-list").addEventListener("click", () => {
+  if (listBusy || listPreviewBusy || !ruleFields.length) return;
+  setListEditorMode("filter-save");
+  $("list-name").focus();
+});
+$("back-to-filter").addEventListener("click", () => {
+  if (listBusy || listPreviewBusy) return;
+  setListEditorMode("filter");
+  $("list-match").focus();
+});
+$("list-form").addEventListener("invalid", event => {
+  event.target.setAttribute("aria-invalid", "true");
+  $("list-status").textContent = `${event.target.closest("label")?.firstChild.textContent.trim() || "Value"}: ${event.target.validationMessage}`;
+}, true);
 $("create-list").addEventListener("click", () => showListEditor());
 $("edit-list").addEventListener("click", () => { if (activeList()) showListEditor(activeList()); });
 $("list-dialog").addEventListener("close", () => { listDialogGeneration++; listDirty = listBusy = false; invalidateListPreview(); });
 $("list-name").addEventListener("input", () => clearFieldError($("list-name"), $("list-status")));
 for (const event of ["input", "change"]) $("list-form").addEventListener(event, (event) => {
   listDirty = true;
+  event.target.removeAttribute("aria-invalid");
+  if (event.target.closest("#list-rules")) $("list-status").textContent = "";
   if (event.target.closest("#list-rules") || event.target.id === "list-match" || event.target.id === "list-kind") invalidateListPreview();
 });
 $("preview-list").addEventListener("click", () => previewList());
@@ -3549,8 +4272,20 @@ $("list-form").addEventListener("submit", async (event) => {
   const id = listEditingId;
   const kind = $("list-kind").value;
   if (kind === "smart" && !ruleFields.length) return;
-  const rules = kind === "smart" ? collectListRules() : [];
-  if (kind === "smart" && (!rules.length || [...$("list-rules").querySelectorAll(".group-rules")].some((group) => !group.children.length))) { $("list-status").textContent = "Add at least one rule to every group, or remove empty groups."; return; }
+  const payload = kind === "smart" ? validateRuleDraft() : null;
+  if (kind === "smart" && !payload) return;
+  const rules = payload?.rules ?? [];
+  if (listEditorMode === "filter") {
+    if (listPreviewKey !== JSON.stringify(payload)) await previewList();
+    if (epoch !== authEpoch || generation !== listDialogGeneration || listPreviewKey !== JSON.stringify(payload)) return;
+    rememberCatalogView();
+    history.pushState(null, "", location.href);
+    advancedFilter = payload;
+    listDirty = false;
+    $("list-dialog").close();
+    changeLibrary(false, true);
+    return;
+  }
   if (kind === "smart" && listPreviewKey !== JSON.stringify({ match: $("list-match").value, rules })) {
     $("list-status").textContent = "Preview the current rules successfully before saving.";
     return;
@@ -3573,11 +4308,13 @@ $("list-form").addEventListener("submit", async (event) => {
     if (epoch !== authEpoch) return;
     await loadLists();
     if (generation !== listDialogGeneration) return;
-    $("reading-list").value = list.id;
-    if (kind === "manual") $("book-sort").value = "list";
-    changeLibrary();
+    if (listEditorMode === "list") {
+      $("reading-list").value = list.id;
+      if (kind === "manual") $("book-sort").value = "list";
+      changeLibrary();
+    }
     $("list-dialog").close();
-    $("management-status").textContent = "Reading list saved.";
+    $("management-status").textContent = listEditorMode === "filter-save" ? "Advanced rules saved as a smart list. Current catalog filters are unchanged." : "Reading list saved.";
   } catch (error) { if (generation === listDialogGeneration) $("list-status").textContent = error.message; }
   finally { if (generation === listDialogGeneration) { listBusy = false; $("list-controls").disabled = false; $("save-list").disabled = kind === "smart" && !listPreviewKey; } }
 });
@@ -3601,6 +4338,7 @@ async function openDetails(id) {
   resetComicVine();
   if (comicExport && !comicExport.selection) resetComicExport();
   const generation = ++detailGeneration;
+  const epoch = authEpoch, hash = location.hash;
   detailBook = null;
   ratingDirty = ratingBusy = false;
   $("rating-form").hidden = true;
@@ -3615,6 +4353,7 @@ async function openDetails(id) {
   $("edit-metadata").hidden = true;
   $("find-metadata").hidden = true;
   $("write-archive").hidden = true;
+  $("intake-history").hidden = true;
   $("move-archive").hidden = true;
   $("edit-page-metadata").hidden = true;
   $("organize-pages").hidden = true;
@@ -3642,6 +4381,16 @@ async function openDetails(id) {
     if (generation !== detailGeneration || !session) return;
     renderDetails(detailBook, metadata, schema);
     $("details-status").textContent = "";
+    if (session.role === "admin" && !intake) {
+      try {
+        const status = await api(`/api/books/${encodeURIComponent(id)}/intake-processing`, { signal: AbortSignal.timeout(30000) });
+        if (generation !== detailGeneration || epoch !== authEpoch || hash !== location.hash || !session || !$("details-dialog").open || detailBook?.id !== id) return;
+        $("intake-history").hidden = session.role !== "admin" || status.state === "none";
+      } catch (error) {
+        if (generation === detailGeneration && epoch === authEpoch && hash === location.hash && $("details-dialog").open)
+          $("details-status").textContent = `Could not load processing status: ${error.message}. Close and reopen Book details to retry.`;
+      }
+    }
   } catch (error) {
     if (generation === detailGeneration) {
       if (!detailBook) $("details-content").textContent = "Could not load book details. Close this dialog and try again.";
@@ -3819,8 +4568,6 @@ function applyReaderControls() {
   $("reader-pages").style.setProperty("--brightness", `${readerPreferences.brightness}%`);
   $("reader-pages").style.setProperty("--contrast", `${readerPreferences.contrast}%`);
   $("previous-page").textContent = readerPreferences.rtl ? "Previous →" : "← Previous";
-  $("next-page").textContent = readerPreferences.rtl ? "← Next" : "Next →";
-  $("spread-hint").hidden = readerPreferences.mode !== "spread";
   $("reader-pages").className = `reader-pages ${readerPreferences.mode === "continuous" ? "continuous" : ""} ${readerPreferences.rtl ? "rtl" : ""}`;
   updateTouchMode();
   updatePageControls();
@@ -3844,7 +4591,16 @@ function updatePageControls() {
   const last = readerPreferences?.mode === "continuous" ? currentPage : displayedPages.at(-1) ?? currentPage;
   if (!pageNumberDraft) $("page-number").value = String((readingPositions[currentPage] ?? 0) + 1);
   $("previous-page").disabled = unavailable || empty || resolving || nextPage(first, currentBook.pageCount, -1, (page) => pageIncluded(pages[page].typeMask, readerPreferences.skipPageTypes), readingOrder) === null;
-  $("next-page").disabled = unavailable || empty || resolving || nextPage(last, currentBook.pageCount, 1, (page) => pageIncluded(pages[page].typeMask, readerPreferences.skipPageTypes), readingOrder) === null;
+  const atEnd = !unavailable && !empty && !resolving &&
+    nextPage(last, currentBook.pageCount, 1, (page) => pageIncluded(pages[page].typeMask, readerPreferences.skipPageTypes), readingOrder) === null;
+  if (atEnd && nextIssue.state === "idle") loadNextIssue();
+  const nextLabel = !atEnd ? "Next page" : nextIssue.state === "loading" ? "Finding next issue…"
+    : nextIssue.state === "error" ? "Retry next issue" : nextIssue.id ? "Next issue" : "No more issues";
+  $("next-page").disabled = unavailable || empty || resolving ||
+    (atEnd && (nextIssue.state === "loading" || (nextIssue.state === "ready" && !nextIssue.id)));
+  $("next-page").setAttribute("aria-label", nextLabel);
+  $("next-page").textContent = !atEnd ? (readerPreferences?.rtl ? "← Next" : "Next →")
+    : nextLabel === "Next issue" ? (readerPreferences.rtl ? "← Next issue" : "Next issue →") : nextLabel;
   for (const element of document.querySelectorAll(".display-controls input, .display-controls select, .display-controls button, #page-form input, #page-form button, #skip-types input, #skip-types button, #personal-bookmarks button, #embedded-bookmarks button")) element.disabled = unavailable;
   $("bookmark-name").disabled = unavailable || empty || bookmarkBusy || Boolean(unsavedBookmark);
   $("save-bookmark").disabled = $("bookmark-name").disabled;
@@ -4169,12 +4925,69 @@ function showPage(page, reveal = true) {
   scheduleVisibleProgress();
 }
 
+function invalidateReaderNextIssue(id) {
+  if (currentBook?.id !== id) return;
+  nextIssue = { state: "idle", id: null };
+  updatePageControls();
+}
+
+async function refreshReaderSource(id) {
+  const book = currentBook;
+  if (book?.id !== id) return;
+  const epoch = authEpoch;
+  const path = `/api/books/${encodeURIComponent(id)}`;
+  const [source, info, order] = await Promise.all([api(path), api(`${path}/page-info`), api(`${path}/page-order`)]);
+  if (epoch !== authEpoch || book !== currentBook || leavingReader) return;
+  validatePageOrder(order, id, source.pageCount);
+  if (source.pageCount < 1) throw new Error("This book has no readable pages.");
+  stopReaderView();
+  for (const entry of pages) releasePage(entry);
+  const pageInfo = new Map(info.map(entry => [entry.page, entry]));
+  pages = Array.from({ length: source.pageCount }, (_, page) => createReaderPage(page, pageInfo.get(page)));
+  book.pageCount = source.pageCount;
+  setReadingOrder(order.pages);
+  currentPage = Math.min(currentPage, source.pageCount - 1);
+  revealedPage = pageIncluded(pages[currentPage].typeMask, readerPreferences.skipPageTypes) ? null : currentPage;
+  pageNumberDraft = false;
+  $("page-count").textContent = `/ ${book.pageCount}`;
+  $("page-number").max = String(book.pageCount);
+  renderReader();
+  renderBookmarks();
+}
+
+async function loadNextIssue() {
+  const book = currentBook;
+  const request = nextIssue;
+  request.state = "loading";
+  try {
+    const result = await api(`/api/books/${encodeURIComponent(book.id)}/next-issue`);
+    if (request !== nextIssue || book !== currentBook) return;
+    if (!result || !(result.id === null || (typeof result.id === "string" && result.id && result.id !== book.id)))
+      throw new Error("Invalid next-issue response.");
+    request.id = result.id;
+    request.state = "ready";
+  } catch (error) {
+    if (request !== nextIssue || book !== currentBook) return;
+    request.state = "error";
+    showError(new Error(`Could not find the next issue. ${error.message} Use Retry next issue to try again.`));
+  } finally {
+    if (request === nextIssue && book === currentBook) updatePageControls();
+  }
+}
+
 function turnPage(direction) {
   const button = $(direction > 0 ? "next-page" : "previous-page");
   if (button.disabled) return;
   const page = readerPreferences.mode === "continuous" ? currentPage : direction > 0 ? displayedPages.at(-1) : displayedPages[0];
   const target = nextPage(page, currentBook.pageCount, direction, (next) => pageIncluded(pages[next].typeMask, readerPreferences.skipPageTypes), readingOrder);
   if (target !== null) showPage(target, false);
+  else if (direction > 0 && nextIssue.state === "error") {
+    clearError();
+    loadNextIssue();
+    updatePageControls();
+  } else if (direction > 0 && nextIssue.state === "ready" && nextIssue.id) {
+    location.hash = `reader/${encodeURIComponent(nextIssue.id)}?location=${catalogLocation}`;
+  }
 }
 
 async function leaveReader() {
@@ -4206,6 +5019,10 @@ async function leaveReader() {
 async function route(hash, generation) {
   if (!session || session.mustChangePassword) return;
   const epoch = authEpoch;
+  const returned = history.state?.returnCatalog;
+  if (returned?.version === 2 && returned.username === session.username) catalogReturn = returned;
+  const saved = history.state?.catalog ?? catalogReturn;
+  const catalog = saved?.version === 2 && saved.username === session.username && saved.hash === hash ? saved : null;
   const match = /^#reader\/([^/?]+)(?:\?location=(library|archived|unsorted))?$/.exec(hash);
   const id = match ? decodeURIComponent(match[1]) : null;
   if (currentBook && String(currentBook.id) === id && !leavingReader) {
@@ -4218,11 +5035,14 @@ async function route(hash, generation) {
       if (epoch === authEpoch && generation === routeGeneration) return leaveReader();
     }));
     if (epoch !== authEpoch || generation !== routeGeneration || hash !== location.hash || !session) return;
+    if ((id || hash === "#settings") && catalogReturn)
+      history.replaceState({ returnCatalog: catalogReturn }, "", location.href);
     clearError();
     $("password-form").reset();
     $("change-password").hidden = false;
     if (hash === "#settings") {
       if (session.role === "admin") {
+        if (catalogReturn) setCatalogLocation(catalogReturn.location);
         resetServerSettings();
         showView("settings");
         $("server-settings-title").focus();
@@ -4233,12 +5053,32 @@ async function route(hash, generation) {
       history.replaceState(null, "", "#library");
     }
     if (!id) {
-      setCatalogLocation(hash === "#unsorted" ? "unsorted" : $("library-location").value);
+      setCatalogLocation(catalog?.location ?? (hash === "#unsorted" ? "unsorted" : $("library-location").value === "archived" ? "archived" : "library"));
+      if (catalog) {
+        await Promise.all([loadLists(), loadPublishers()]);
+        if (epoch !== authEpoch || generation !== routeGeneration || hash !== location.hash) return;
+        for (const id of catalogControls) {
+          $(id).value = catalog.filters[id];
+          if ($(id).selectedIndex < 0) $(id).selectedIndex = 0;
+        }
+        $("search").value = libraryQuery = catalog.query;
+        advancedFilter = catalog.advancedFilter ?? null;
+        libraryPage = catalog.page;
+        groupKey = catalog.groupKey;
+        sectionKey = catalog.sectionKey;
+        closedSections = new Set(catalog.closedSections);
+        groupLabel = catalog.groupLabel;
+        groupOrigin = catalog.groupOrigin;
+        libraryReturnFocus = catalog.focus;
+        clearSelection();
+      } else {
+        loadLists();
+        loadPublishers();
+      }
       showView("library");
       if (activeList()?.kind === "smart") clearSelection();
-      loadLists();
-      loadPublishers();
-      await loadLibrary(true);
+      const search = await loadLibrary();
+      if (epoch === authEpoch && generation === routeGeneration) await restoreLibraryFocus(libraryReturnFocus, search);
       return;
     }
     if (match[2]) setCatalogLocation(match[2]);
@@ -4276,13 +5116,29 @@ async function route(hash, generation) {
       history.replaceState(null, "", catalogLocation === "unsorted" ? "#unsorted" : "#library");
       showView("library");
       loadPublishers();
-      await loadLibrary(true);
+      const search = await loadLibrary();
+      if (epoch === authEpoch && generation === routeGeneration) await restoreLibraryFocus(libraryReturnFocus, search);
     }
     if (epoch === authEpoch && generation === routeGeneration) showError(error);
   }
 }
 
 function scheduleRoute() {
+  if (deletionBusy) {
+    history.replaceState(null, "", deletion.hash);
+    rememberCatalogView();
+    return;
+  }
+  if (intake) {
+    const dialogs = [...document.querySelectorAll("dialog[open]")].filter((dialog) => dialog.id !== "intake-dialog").reverse();
+    if (!canCloseDialog("intake-dialog") || dialogs.some((dialog) => !canCloseDialog(dialog.id))) {
+      history.replaceState(null, "", intake.hash);
+      rememberCatalogView();
+      return;
+    }
+    for (const dialog of dialogs) dialog.close();
+    resetIntake();
+  }
   if (location.hash !== "#settings" && !leaveServerSettings()) {
     history.replaceState(null, "", "#settings");
     return;
@@ -4337,10 +5193,13 @@ $("logout").addEventListener("click", async () => {
 });
 
 function changeLibrary(resetGroup = true, focusResults = false) {
+  if (seriesView() && $("reading-list").value) $("book-status").value = "all";
   clearSelection();
   if (resetGroup || libraryQuery !== $("search").value.trim()) {
-    groupKey = null;
+    groupKey = sectionKey = null;
+    groupOrigin = null;
     groupLabel = "";
+    closedSections.clear();
   }
   $("sort-direction").disabled = $("book-sort").value === "list";
   if ($("book-sort").value === "list") $("sort-direction").value = "asc";
@@ -4350,18 +5209,64 @@ function changeLibrary(resetGroup = true, focusResults = false) {
   loadLibrary(focusResults);
 }
 
+$("clear-filters").addEventListener("click", () => {
+  rememberCatalogView();
+  history.pushState(null, "", location.href);
+  const discovery = Boolean(seriesView());
+  advancedFilter = null;
+  $("search").value = libraryQuery = "";
+  $("reading-list").value = $("publisher").value = $("book-rating").value = "";
+  $("book-status").value = $("book-availability").value = "all";
+  if ($("book-sort").value === "list") $("book-sort").value = "number";
+  changeLibrary(discovery, true);
+});
 $("search-form").addEventListener("submit", (event) => { event.preventDefault(); changeLibrary(); });
 $("clear-search").addEventListener("click", () => { $("search").value = ""; changeLibrary(); });
 $("search").addEventListener("search", () => { if (!$("search").value) changeLibrary(); });
 $("library-location").addEventListener("change", () => {
+  const hash = $("library-location").value === "unsorted" ? "#unsorted" : "#library";
+  if (location.hash !== hash) { location.hash = hash; return; }
   setCatalogLocation($("library-location").value);
   document.title = `${$("library-title").textContent} · Panel Haven`;
   loadPublishers();
   changeLibrary();
 });
-for (const id of ["book-sort", "sort-direction", "book-status", "book-rating", "publisher", "page-size", "book-availability"]) $(id).addEventListener("change", () => changeLibrary(false));
-$("group-by").addEventListener("change", () => changeLibrary());
-$("back-to-groups").addEventListener("click", () => changeLibrary(true, true));
+for (const id of ["book-sort", "sort-direction", "book-rating", "publisher", "page-size", "book-availability"]) $(id).addEventListener("change", () => changeLibrary(false));
+$("book-status").addEventListener("change", () => {
+  const resetGroup = Boolean(seriesView()) || !$("reading-status-hint").hidden || $("book-status").value === "in-progress";
+  if (seriesView()) {
+    advancedFilter = null;
+    $("search").value = libraryQuery = "";
+    $("reading-list").value = $("publisher").value = $("book-rating").value = "";
+    $("book-availability").value = "all";
+    $("group-by").value = "none";
+    $("stack-by").value = "series";
+    $("book-sort").value = "number";
+    $("sort-direction").value = "asc";
+  } else if ($("book-status").value === "in-progress") $("stack-by").value = "none";
+  changeLibrary(resetGroup);
+});
+for (const id of ["group-by", "stack-by"]) $(id).addEventListener("change", () => changeLibrary());
+$("back-to-groups").addEventListener("click", async () => {
+  const origin = groupOrigin;
+  if (!origin) { changeLibrary(true, true); return; }
+  rememberCatalogView();
+  history.pushState(null, "", location.href);
+  for (const id of catalogControls) {
+    $(id).value = origin.filters[id];
+    if ($(id).selectedIndex < 0) $(id).selectedIndex = 0;
+  }
+  advancedFilter = origin.advancedFilter ?? null;
+  closedSections = new Set(origin.closedSections);
+  groupKey = sectionKey = null;
+  groupLabel = "";
+  groupOrigin = null;
+  libraryPage = origin.page;
+  libraryReturnFocus = origin.key;
+  clearSelection();
+  const generation = await loadLibrary();
+  restoreLibraryFocus(origin.key, generation);
+});
 for (const suffix of ["", "-bottom"]) {
   $("previous-books" + suffix).addEventListener("click", () => { if (libraryPage > 1) { libraryPage--; loadLibrary(true); } });
   $("next-books" + suffix).addEventListener("click", () => { if (libraryPage < libraryPages) { libraryPage++; loadLibrary(true); } });
@@ -4373,7 +5278,8 @@ $("retry-scan-status").addEventListener("click", () => requestScan());
 $("dismiss-scan").addEventListener("click", () => {
   rememberScanDismissal(scanResultSignature());
   renderScan();
-  $("library-status").focus();
+  $("account-menu").open = false;
+  $("account-menu").querySelector("summary").focus();
 });
 $("maintenance").addEventListener("click", () => {
   $("maintenance-error").hidden = true;
@@ -4478,11 +5384,15 @@ async function loadUsers() {
     }
     const row = textElement("section", "", "user-row");
     row.dataset.userId = user.id;
-    row.append(textElement("h3", `${user.username}${user.id === session.id ? " (you)" : ""}`),
-      textElement("p", passwordStatus, "muted"));
+    const heading = textElement("h3", `${user.username}${user.id === session.id ? " (you)" : ""}`);
+    heading.id = `user-heading-${user.id}`;
+    row.setAttribute("aria-labelledby", heading.id);
+    row.append(heading, textElement("p", passwordStatus, "muted"));
     const roleForm = document.createElement("form");
     roleForm.className = "actions";
     roleForm.innerHTML = '<label>Role <select name="role"><option value="reader">Reader</option><option value="admin">Administrator</option></select></label><button type="submit">Save role</button>';
+    roleForm.querySelector("label").firstChild.textContent = `Role for ${user.username} `;
+    roleForm.querySelector("button").setAttribute("aria-label", `Save role for ${user.username}`);
     roleForm.elements.role.value = user.role;
     roleForm.elements.role.dataset.savedValue = user.role;
     roleForm.addEventListener("submit", (event) => {
@@ -4496,6 +5406,7 @@ async function loadUsers() {
     if (user.id === session.id) {
       const ownPassword = textElement("button", "Change my password");
       ownPassword.type = "button";
+      ownPassword.setAttribute("aria-label", `Change my password: ${user.username}`);
       ownPassword.addEventListener("click", () => {
         if (!canCloseDialog("user-dialog")) return;
         $("user-dialog").close();
@@ -4505,9 +5416,13 @@ async function loadUsers() {
     } else {
       const reset = document.createElement("details");
       reset.append(textElement("summary", "Reset password"));
+      reset.querySelector("summary").setAttribute("aria-label", `Reset password for ${user.username}`);
       const form = document.createElement("form");
       form.className = "form-stack";
       form.innerHTML = '<p class="muted">Both password fields are required. Use 12–256 characters.</p><label>New password<input name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label><label>Confirm new password<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="256"></label><button type="submit">Reset password</button>';
+      form.elements.password.parentElement.firstChild.textContent = `New password for ${user.username}`;
+      form.elements.confirmation.parentElement.firstChild.textContent = `Confirm new password for ${user.username}`;
+      form.querySelector("button").setAttribute("aria-label", `Reset password for ${user.username}`);
       form.querySelector("p").id = `reset-password-help-${user.id}`;
       for (const input of form.querySelectorAll("input")) input.setAttribute("aria-describedby", `reset-password-help-${user.id}`);
       for (const event of ["input", "reset"]) form.addEventListener(event, () => clearFieldError(form.elements.confirmation, $("user-status")));
@@ -4527,6 +5442,7 @@ async function loadUsers() {
     }
     const remove = textElement("button", "Delete account", "danger");
     remove.type = "button";
+    remove.setAttribute("aria-label", `Delete account: ${user.username}`);
     remove.addEventListener("click", () => {
       if (!confirm(`Permanently delete “${user.username}”? Their private reading history, ratings, bookmarks, lists, list folders, and reader preferences will be lost. Shared books and files are kept. This cannot be undone. The last administrator is protected.${user.id === session.id ? " You will be signed out." : ""}`)) return;
       mutateAccount(`/api/users/${encodeURIComponent(user.id)}`, "DELETE", null, "Account deleted.", user.id === session.id);
@@ -4747,14 +5663,16 @@ $("fullscreen").addEventListener("click", async () => {
 });
 document.addEventListener("fullscreenchange", updateFullscreen);
 updateFullscreen();
-window.addEventListener("hashchange", scheduleRoute);
+window.addEventListener("popstate", () => { if (history.state?.catalog) scheduleRoute(); });
+window.addEventListener("hashchange", () => { if (!history.state?.catalog) scheduleRoute(); });
 window.addEventListener("hashchange", resetComicExport);
 window.addEventListener("hashchange", resetComicVine);
 window.addEventListener("pagehide", resetComicVine);
+window.addEventListener("pagehide", cancelIntakeRequest);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
   if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy || $("confirm-archive").checked
-    || fileOperationBusy || organizationBusy || accountBusy
+    || intake?.saving || fileOperationBusy || organizationBusy || accountBusy || deletionBusy
     || ($("file-operation-dialog").open && fileOperationDirty())
     || ($("organization-dialog").open && organizationDirty())
     || ($("user-dialog").open && accountDirty())) { event.preventDefault(); event.returnValue = ""; }

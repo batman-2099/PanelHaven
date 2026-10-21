@@ -12,7 +12,12 @@ public sealed record Book(string Id, string Title, string Series, string Number,
     string Summary, int PageCount, int CurrentPage, bool Completed, bool Started,
     Dictionary<string, object?>? Metadata = null, string Availability = "available", string Location = "",
     int PersonalRating = 0);
-public sealed record BookPage(List<Book> Items, int Total, int Page, int PageSize);
+public sealed record MissingIssue(string BeforeBookId, int First, int Last);
+public sealed record BookPage(List<Book> Items, int Total, int Page, int PageSize)
+{
+    public List<MissingIssue> MissingIssues { get; init; } = [];
+    public IReadOnlyList<BookSection> Sections { get; init; } = Array.Empty<BookSection>();
+}
 public sealed record ReadingProgress([property: JsonRequired] int Page, [property: JsonRequired] bool Completed);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ReadingStatusEdit([property: JsonRequired] string[] BookIds, [property: JsonRequired] bool Completed);
@@ -148,9 +153,9 @@ public sealed partial class LibraryStore
         if (progress.Page < 0) throw new ArgumentException("Page is outside the book.");
         using var db = Open();
         using var command = Command(db, """
-            INSERT INTO progress(user_id,book_id,page,completed)
-            SELECT $user,id,$page,$completed FROM books WHERE id=$id AND $page<page_count
-            ON CONFLICT(user_id,book_id) DO UPDATE SET page=excluded.page,completed=excluded.completed
+            INSERT INTO progress(user_id,book_id,page,completed,updated_at)
+            SELECT $user,id,$page,$completed,unixepoch() FROM books WHERE id=$id AND $page<page_count
+            ON CONFLICT(user_id,book_id) DO UPDATE SET page=excluded.page,completed=excluded.completed,updated_at=excluded.updated_at
             """, ("$user", user), ("$id", id), ("$page", progress.Page), ("$completed", progress.Completed));
         if (command.ExecuteNonQuery() == 0)
         {
@@ -166,9 +171,9 @@ public sealed partial class LibraryStore
         using var transaction = db.BeginTransaction();
         ValidateListBooks(db, transaction, edit.BookIds);
         using var command = Command(db, edit.Completed ? """
-            INSERT INTO progress(user_id,book_id,page,completed)
-            SELECT $user,id,page_count-1,1 FROM books WHERE id=$book
-            ON CONFLICT(user_id,book_id) DO UPDATE SET page=excluded.page,completed=excluded.completed
+            INSERT INTO progress(user_id,book_id,page,completed,updated_at)
+            SELECT $user,id,page_count-1,1,unixepoch() FROM books WHERE id=$book
+            ON CONFLICT(user_id,book_id) DO UPDATE SET page=excluded.page,completed=excluded.completed,updated_at=excluded.updated_at
             """ : "DELETE FROM progress WHERE user_id=$user AND book_id=$book", ("$user", user), ("$book", ""));
         command.Transaction = transaction;
         foreach (var book in edit.BookIds)
@@ -236,7 +241,7 @@ public sealed partial class LibraryStore
                 while (pending.TryPop(out var directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (IsContained(archiveBackupRoot, directory)) continue;
+                    if (IsContained(archiveBackupRoot, directory) || IsContained(IntakeBackupRoot, directory)) continue;
                     try
                     {
                         EnsureSafePath(root, directory);
@@ -365,7 +370,7 @@ public sealed partial class LibraryStore
             foreach (var element in legacy.Root!.Elements()) info.Root!.Add(new XElement(element));
         var infoXml = info.ToString(SaveOptions.DisableFormatting);
         if (Encoding.UTF8.GetByteCount(infoXml) > MaxXmlBytes) throw new InvalidDataException();
-        string Field(string name) => info.Root!.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value ?? "";
+        string Field(string name) => info.Root!.Element(info.Root.Name.Namespace + name)?.Value ?? "";
         var title = Field("Title");
         if (string.IsNullOrWhiteSpace(title)) title = Path.GetFileNameWithoutExtension(path);
         file.Position = 0;
@@ -629,7 +634,7 @@ public sealed partial class LibraryStore
     internal static bool IsArchiveError(Exception ex) => ex is IOException or InvalidDataException or UnauthorizedAccessException
         or XmlException or ArgumentException or NotSupportedException or OverflowException or InvalidOperationException;
 
-    internal static int NaturalCompare(string a, string b)
+    internal static int NaturalCompare(string a, string b, bool ordinalTieBreak = true)
     {
         var x = 0;
         var y = 0;
@@ -655,7 +660,7 @@ public sealed partial class LibraryStore
             }
         }
         var remainder = (a.Length - x).CompareTo(b.Length - y);
-        return remainder != 0 ? remainder : string.CompareOrdinal(a, b);
+        return remainder != 0 ? remainder : ordinalTieBreak ? string.CompareOrdinal(a, b) : 0;
     }
 
 }

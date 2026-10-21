@@ -26,6 +26,13 @@
             <button id="metadata-report" type="button">Validate metadata</button>
             <button id="server-settings" type="button">Server settings</button>
             <button id="manage-users" type="button">Manage accounts</button>
+    <details id="scan-panel" aria-label="Library scan" hidden>
+      <summary id="scan-summary" aria-live="polite" aria-atomic="true">Library scan</summary>
+      <p id="scan-result" role="status"></p>
+      <p id="scan-error" class="scan-error" role="alert" hidden></p>
+      <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button><button id="dismiss-scan" type="button" hidden>Dismiss scan result</button></div>
+      <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
+    </details>
           </section>
         </div>
       </details>
@@ -36,12 +43,11 @@
     <div id="error" class="notice error" role="alert" hidden></div>
     <p id="startup" class="empty" role="status">Connecting to your library…</p>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
-      <h1 id="login-title">Sign in to Panel Haven</h1>
-      <p class="muted">Browse your collection and continue reading.</p>
+      <h1 id="login-title" class="brand" aria-label="Sign in to Panel Haven"><img class="brand-mark" src="/icon.svg" width="40" height="40" alt=""><img class="brand-wordmark" src="/wordmark.svg" width="176" height="28" alt=""></h1>
       <p id="login-message" role="status"></p>
       <form id="login-form" class="panel form-stack">
-        <label>Username (required)<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
-        <label>Password (required)<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+        <label>Username<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label>
         <button class="primary" type="submit">Sign in</button>
       </form>
     </section>
@@ -57,49 +63,40 @@
         <button id="cancel-password" type="button" class="quiet">Cancel</button>
       </form>
     </section>
-    <details id="scan-panel" class="notice" aria-label="Library scan" hidden>
-      <summary id="scan-summary" aria-live="polite" aria-atomic="true">Library scan</summary>
-      <p id="scan-result" role="status"></p>
-      <p id="scan-error" class="scan-error" role="alert" hidden></p>
-      <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button><button id="dismiss-scan" type="button" hidden>Dismiss scan result</button></div>
-      <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
-    </details>
     <section id="library-view" aria-labelledby="library-title" hidden>
-      <div class="section-heading"><h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1><nav class="catalog-navigation" aria-label="Comicbook areas"><a id="library-navigation" href="#library" aria-current="page">Library</a><a id="unsorted-navigation" href="#unsorted">Unsorted</a></nav></div>
-      <details class="compact-disclosure"><summary>Library information</summary>
-        <p id="catalog-help" class="muted">Browse your organized comicbooks. Archived comicbooks are hidden unless you choose Archived below.</p>
-        <p id="watch-status" class="muted" role="status" hidden></p>
-      </details>
+      <h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1>
       <div class="library-layout">
         <aside class="reading-list-sidebar" aria-labelledby="reading-lists-title">
-          <details id="reading-lists-disclosure" class="compact-disclosure" open>
-            <summary id="reading-lists-title">Reading lists</summary>
-            <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
-            <details class="reading-list-management compact-disclosure"><summary>Manage lists</summary>
-              <div class="reading-list-actions">
-                <button id="create-list" type="button" class="primary">New list</button>
-                <button id="edit-list" type="button" disabled>Edit list</button>
-                <button id="delete-list" type="button" class="danger" disabled>Delete list</button>
-                <button id="manage-list-folders" type="button">Manage list folders</button>
-              </div>
-            </details>
+          <h2 id="reading-lists-title">Reading lists</h2>
+          <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
+          <details class="reading-list-management compact-disclosure"><summary>Manage lists</summary>
+            <div class="reading-list-actions">
+              <button id="create-list" type="button" class="primary">New list</button>
+              <button id="edit-list" type="button" disabled>Edit list</button>
+              <button id="delete-list" type="button" class="danger" disabled>Delete list</button>
+              <button id="manage-list-folders" type="button">Manage list folders</button>
+            </div>
           </details>
         </aside>
         <div class="library-content">
+          <div class="library-controls">
       <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
-      <div class="library-filters" role="group" aria-label="Sort and filter books">
-        <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option></select></label>
-        <label>Group by<select id="group-by"><option value="none">Flat books</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
-        <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
-        <label>Reading status<select id="book-status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In progress</option><option value="completed">Completed</option></select></label>
+      <div class="library-filters" role="group" aria-label="Arrange and filter comicbooks">
+        <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option><option value="unsorted">Unsorted</option></select></label>
+        <label>Group by<select id="group-by"><option value="none" selected>None</option><option value="series">Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Stack by<select id="stack-by"><option value="none">None</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Arrange by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
+        <label id="reading-status-filter">Reading status<select id="book-status" aria-describedby="reading-status-hint"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></select></label>
       </div>
-      <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display</summary><div class="library-filters">
+      <p id="reading-status-hint" class="muted" hidden>Series discovery views have fixed criteria and order. Selecting one clears search, reading list, basic and advanced filters. Choose a book status to filter again.</p>
+      <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">· No active filters</span></summary><div class="library-filters">
         <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
         <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
         <label>Availability<select id="book-availability"><option value="all">All availability</option><option value="available">Available</option><option value="missing">Missing</option><option value="unavailable">Unavailable</option></select></label>
         <label>Publisher<select id="publisher"><option value="">All publishers</option></select></label>
         <label>Items per page<select id="page-size"><option value="24">24</option><option value="48" selected>48</option><option value="96">96</option></select></label>
-      </div></details>
+      </div><div class="actions filter-actions"><button id="edit-advanced-filters" type="button" aria-haspopup="dialog">Advanced filters…</button><button id="clear-filters" type="button" class="quiet">Clear filters</button></div><p id="advanced-filter-summary" class="muted" role="status">No advanced rules applied.</p></details>
+      <button id="process-unsorted" type="button" class="primary" hidden>Process Unsorted…</button>
       <div class="selection-toolbar" role="group" aria-label="Selected books" hidden>
         <div class="selection-primary">
           <button id="select-page" type="button">Select page</button>
@@ -115,38 +112,41 @@
           <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
           <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
           <button id="export-selected-comics" type="button" disabled>Export selected comics</button>
-          <label>Add to manual list<select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
+          <label><span class="sr-only">Add to manual list</span><select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
+          <button id="delete-selected" type="button" class="danger" hidden disabled title="Immediately and permanently delete selected files and catalog records for all users. No confirmation or undo.">Delete selected permanently</button>
         </div></details>
       </div>
-      <p id="management-status" role="status"></p>
+      <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
       <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button">Home</button><span id="group-label"></span></div>
       <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+          </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
       <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next →</button></nav>
         </div>
       </div>
     </section>
     <section id="reader-view" aria-labelledby="reader-title" hidden>
-      <div class="reader-toolbar"><h1 id="reader-title"></h1><button id="close-reader" type="button" class="quiet">← Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
-      <div id="reader-error" class="notice error" role="alert" hidden></div>
-      <div class="reader-controls">
+      <div class="reader-toolbar"><h1 id="reader-title"></h1></div>
         <div class="page-controls"><button id="previous-page" type="button" aria-label="Previous page">← Previous</button><form id="page-form"><label for="page-number">Position</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" aria-label="Next page">Next →</button></div>
-        <details class="reader-display compact-disclosure"><summary>Display settings</summary><div class="display-controls">
-          <label for="reader-mode">Mode</label><select id="reader-mode"><option value="single">Single page</option><option value="continuous">Continuous</option><option value="spread">Two-page spread</option></select>
-          <label for="fit">Fit</label><select id="fit"><option value="page">Page</option><option value="width">Width</option></select>
-          <label for="zoom">Zoom %</label><input id="zoom" type="number" min="50" max="300" step="1" value="100" inputmode="numeric"><button id="reset-zoom" type="button">100%</button>
-          <label class="checkbox"><input id="rtl" type="checkbox">Right to left</label><label class="checkbox"><input id="cover-alone" type="checkbox" checked>Cover alone</label>
-          <label for="rotation">Rotation</label><select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
-          <label for="brightness">Brightness %</label><input id="brightness" type="number" min="50" max="200" step="1" value="100" inputmode="numeric">
-          <label for="contrast">Contrast %</label><input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"><button id="reset-visuals" type="button">Reset visuals</button>
-        </div></details>
-        <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
-      </div>
+      <div id="reader-error" class="notice error" role="alert" hidden></div>
       <p id="current-page-type" class="reader-hint" role="status"></p>
       <p id="skip-status" class="reader-hint" role="status" hidden></p>
       <p id="page-status" role="status">Loading book…</p>
-      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages" aria-describedby="reader-hint"><div id="reader-pages" class="reader-pages"></div></div>
+      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages"><div id="reader-pages" class="reader-pages"></div></div>
+      <div class="reader-controls">
+        <details class="reader-display compact-disclosure"><summary>Display settings</summary><div class="display-controls">
+          <label for="reader-mode">Mode <select id="reader-mode"><option value="single">Single page</option><option value="continuous">Continuous</option><option value="spread">Two-page spread</option></select></label>
+          <label for="fit">Fit <select id="fit"><option value="page">Page</option><option value="width">Width</option></select></label>
+          <label for="zoom">Zoom % <input id="zoom" type="number" min="50" max="300" step="1" value="100" inputmode="numeric"></label><button id="reset-zoom" type="button">100%</button>
+          <label class="checkbox"><input id="rtl" type="checkbox">Right to left</label><label class="checkbox"><input id="cover-alone" type="checkbox" checked>Cover alone</label>
+          <label for="rotation">Rotation <select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+          <label for="brightness">Brightness % <input id="brightness" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"></label>
+          <label for="contrast">Contrast % <input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"></label><button id="reset-visuals" type="button">Reset visuals</button>
+        </div></details>
+        <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
+      </div>
+      <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet">← Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
       <details class="reader-options"><summary>Bookmarks and page types</summary>
         <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
           <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit">Add / update bookmark</button></form>
@@ -155,10 +155,6 @@
         </section>
         <section id="embedded-bookmarks-section" aria-labelledby="embedded-bookmarks-title" hidden><h2 id="embedded-bookmarks-title">Embedded bookmarks (read-only)</h2><ul id="embedded-bookmarks" aria-label="Embedded bookmarks"></ul></section>
         <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original comicbook. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
-      </details>
-      <details class="reader-options"><summary>Help</summary>
-      <p id="reader-hint" class="reader-hint muted">Scroll or pan natively; pinch to zoom on touch screens. In paged modes, Page Up/Down turn pages; left/right arrows or horizontal swipes also turn pages at 100%. Progress saves after a page is visible.</p>
-      <p id="spread-hint" class="reader-hint muted" hidden>Spreads use fixed pairs after the optional cover; skipped members do not regroup later pages. A pair containing a landscape page after rotation is shown as two separate pages.</p>
       </details>
     </section>
   <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
@@ -234,7 +230,6 @@
     </section>
   </section>
   </main>
-  <footer class="muted">Metadata searches powered by <a href="https://comicvine.gamespot.com/" target="_blank" rel="noopener noreferrer">Comic Vine</a>.</footer>
   <dialog id="details-dialog" aria-labelledby="details-title">
     <div class="dialog-heading"><h2 id="details-title">Book details</h2><button type="button" data-close="details-dialog" class="quiet" aria-label="Close book details">Close</button></div>
     <div class="details-primary"><button id="read-book" class="primary" type="button">Read book</button></div>
@@ -250,6 +245,7 @@
       <button id="edit-metadata" type="button" hidden>Edit metadata</button>
       <button id="find-metadata" type="button" hidden>Find metadata</button>
       <button id="move-archive" type="button" hidden>Move / reorganize</button>
+      <button id="intake-history" type="button" hidden>Processing status / original backup…</button>
     </div>
     <details class="details-advanced"><summary>Page and comicbook tools</summary><div class="actions list-actions">
       <button id="edit-page-metadata" type="button" hidden>Edit page types and embedded bookmarks</button>
@@ -267,6 +263,7 @@
     <p id="comic-export-status" role="status" aria-live="polite" aria-atomic="true"></p>
     <div class="actions list-actions"><button id="download-comics" type="button" class="primary">Download</button><button id="cancel-comic-export" type="button" hidden>Cancel download</button></div>
   </dialog>
+
   <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">
     <div class="dialog-heading"><h2 id="maintenance-title">Library maintenance</h2><button type="button" data-close="maintenance-dialog" class="quiet">Close</button></div>
     <details>
@@ -277,11 +274,12 @@
       <p id="archive-export-status" role="status"></p>
       <a id="download-archive-export" hidden target="_blank" rel="noopener">Download all comicbook backups (ZIP; opens a new tab)</a>
     </details>
-    <p class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
-    <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
+    <p id="maintenance-file-note" class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
+    <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="missing-issues">Missing issues</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
     <p id="maintenance-status" role="status"></p>
     <p id="maintenance-error" class="scan-error" role="alert" hidden></p>
     <p id="duplicate-note" class="muted" hidden>Exact duplicate groups share the SHA-256 recorded by the last scan, not just a title or cover. This is not a fresh file-identity check. Groups can continue across pages. Compare copies is read-only; present duplicates cannot be removed here.</p>
+    <p id="missing-issues-note" class="muted" hidden>Inferred numbering gaps, not missing files or confirmed publications. Covers Library, Archived, and Unsorted separately; consecutive missing issues share a range. This report is read-only.</p>
     <nav class="library-pagination" aria-label="Maintenance pages"><button id="previous-maintenance" type="button" disabled>Previous</button><span id="maintenance-page" role="status">Page 1 of 1</span><button id="next-maintenance" type="button" disabled>Next</button></nav>
     <div id="maintenance-items"></div>
   </dialog>
@@ -363,6 +361,33 @@
     </form>
     <button id="reload-page-metadata" type="button">Reload saved page metadata</button>
     <p id="page-metadata-status" role="status"></p>
+  </dialog>
+  <dialog id="intake-dialog" aria-labelledby="intake-title" aria-describedby="intake-scope">
+    <div class="dialog-heading"><h2 id="intake-title" tabindex="-1" autofocus>Process Unsorted</h2><button type="button" data-close="intake-dialog" class="quiet">Close</button></div>
+    <p id="intake-scope"></p>
+    <label for="intake-queue">Review queue</label><select id="intake-queue"></select>
+    <label for="intake-root">Destination library</label><select id="intake-root" disabled></select>
+    <p id="intake-source"></p>
+    <p id="intake-outcome" role="status"></p>
+    <div class="actions"><button id="intake-refresh" type="button">Refresh processing status</button><button id="intake-recover" type="button" hidden>Recover interrupted processing</button><a id="intake-original" class="button-link" hidden>Download verified original</a></div>
+    <form id="intake-form" class="form-stack">
+      <div class="intake-candidate">
+        <div id="intake-current-cover" class="intake-cover"></div>
+        <fieldset id="intake-hints" disabled><legend>Editable search hints</legend>
+          <label>Series (required)<input id="intake-series" required maxlength="200"></label>
+          <div class="intake-short-fields">
+            <label>Issue number<input id="intake-number" maxlength="40"></label>
+            <label>Year<input id="intake-year" type="number" min="1" max="9999" step="1"></label>
+            <label>Volume<input id="intake-volume" type="number" min="1" max="9999" step="1"></label>
+          </div>
+          <label>Publisher<input id="intake-publisher" maxlength="200"></label>
+        </fieldset>
+      </div>
+      <div class="actions"><button id="intake-match" type="submit" disabled>Match / search</button><button id="intake-cancel" type="button" class="quiet" hidden>Cancel request</button><button id="intake-manual" type="button" disabled>Manual search / catalog only…</button></div>
+      <p class="muted">Manual search opens the separate metadata field review and changes the catalog only; it does not process, convert or move the comicbook.</p>
+    </form>
+    <p id="intake-status" role="status" tabindex="-1"></p>
+    <div id="intake-candidates" aria-label="Ranked candidate issues"></div>
   </dialog>
   <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-safety">
     <div class="dialog-heading"><h2 id="archive-title">Write metadata to comicbook</h2><button type="button" data-close="archive-dialog" class="quiet" aria-label="Close comicbook write and restore">Close</button></div>
@@ -461,13 +486,13 @@
   <dialog id="list-dialog" aria-labelledby="list-title">
     <div class="dialog-heading"><h2 id="list-title">New reading list</h2><button type="button" data-close="list-dialog" class="quiet">Close</button></div>
     <form id="list-form" class="form-stack">
-      <fieldset id="list-controls"><legend>Private reading list</legend><label>Name (required)<input id="list-name" required maxlength="200"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
+      <fieldset id="list-controls"><legend id="list-controls-legend">Private reading list</legend><label>Name (required)<input id="list-name" required maxlength="200" aria-describedby="list-status"></label><label>Kind<select id="list-kind"><option value="manual">Manual reading list</option><option value="smart">Smart list</option></select></label>
         <label>Folder<select id="list-folder"><option value="">Unfiled</option></select></label>
-        <p class="muted">Smart-rule previews show the regular library only. When browsing a saved list, the selected Library, Archived, or Unsorted area still applies.</p>
-        <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules (AND)</option><option value="any">Any rule (OR)</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><button id="add-list-group" type="button">Add group</button><p class="muted">Smart lists update automatically as metadata, your reading progress, and private ratings change. Use 1–20 total rules in at most 20 groups and 4 levels (including this root). Groups cannot be empty. Use Is empty for unknown dates or other optional numbers. My rating uses 0–5 (0 means unrated). Text comparisons treat % and _ literally. Preview current rules before saving; changing the name or folder does not require another preview.</p><button id="preview-list" type="button">Preview matches</button><p id="list-preview-status" role="status"></p><nav class="library-pagination" aria-label="Smart list preview pages"><button id="previous-list-preview" type="button" disabled>Previous matches</button><span id="list-preview-page" role="status">Page 1 of 1</span><button id="next-list-preview" type="button" disabled>Next matches</button></nav><div id="list-preview-items"></div></fieldset>
+        <p id="filter-save-help" class="muted" hidden>Only these advanced rules are saved. Your current location, basic filters, and catalog view stay unchanged.</p>
+        <fieldset id="smart-list-controls" hidden disabled><legend>Smart rules</legend><label>Match<select id="list-match"><option value="all">All rules (AND)</option><option value="any">Any rule (OR)</option></select></label><div id="list-rules"></div><button id="add-list-rule" type="button">Add rule</button><button id="add-list-group" type="button">Add group</button><p class="muted">Use 1–20 rules, up to 20 nonempty groups and four levels. Not set finds missing metadata. Issue ranges use natural order; publication dates need a complete date. Rating 0 means unrated.</p><p class="muted">Preview uses Library only, without search or basic filters. Preview before saving a smart list.</p><button id="preview-list" type="button">Preview matches</button><p id="list-preview-status" role="status"></p><nav class="library-pagination" aria-label="Smart list preview pages"><button id="previous-list-preview" type="button" disabled>Previous matches</button><span id="list-preview-page" role="status">Page 1 of 1</span><button id="next-list-preview" type="button" disabled>Next matches</button></nav><div id="list-preview-items"></div></fieldset>
       </fieldset>
       <p id="list-rule-status" role="status"></p><button id="retry-list-rules" type="button" hidden>Retry loading rule fields</button>
-      <button id="save-list" type="submit">Save list</button>
+      <div class="actions filter-actions"><button id="save-list" type="submit">Save list</button><button id="save-filter-list" type="button" hidden>Save as smart list…</button><button id="back-to-filter" type="button" class="quiet" hidden>Back to filters</button></div>
     </form><p id="list-status" role="status"></p>
   </dialog>
   <dialog id="folder-dialog" aria-labelledby="folder-title">

@@ -23,6 +23,7 @@ public sealed partial class LibraryStore
         private readonly bool solid;
         private readonly Dictionary<string, Entry> entries = new(StringComparer.OrdinalIgnoreCase);
         public List<Entry> Pages { get; } = [];
+        public IEnumerable<string> Directories => entries.Values.Where(entry => entry.Directory).Select(entry => entry.Name);
         public sealed record Entry(string Name, long Size, bool Directory, ZipArchiveEntry? Zip, IArchiveEntry? Compressed);
 
         public ComicArchive(FileStream file, string path, CancellationToken cancellationToken = default)

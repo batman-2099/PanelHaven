@@ -20,12 +20,23 @@ public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) 
             var path = Path.Combine(cacheDirectory, id + ".thumbnail");
             if (File.Exists(path))
             {
-                using var cached = File.OpenRead(path);
-                using var reader = new BinaryReader(cached, Encoding.UTF8, leaveOpen: true);
-                if (reader.ReadString() == revision)
+                byte[]? bytes = null;
+                try
                 {
-                    var bytes = new byte[checked((int)(cached.Length - cached.Position))];
-                    await cached.ReadExactlyAsync(bytes, cancellationToken);
+                    using var cached = File.OpenRead(path);
+                    using var reader = new BinaryReader(cached, Encoding.UTF8, leaveOpen: true);
+                    if (reader.ReadString() == revision)
+                    {
+                        bytes = new byte[checked((int)(cached.Length - cached.Position))];
+                        await cached.ReadExactlyAsync(bytes, cancellationToken);
+                    }
+                }
+                catch (EndOfStreamException) { }
+                catch (FormatException) { }
+                // Cache truncation is recoverable; source/revision errors must still reach the caller.
+                if (bytes is { Length: >= 4 } && bytes[0] == 0xff && bytes[1] == 0xd8
+                    && bytes[^2] == 0xff && bytes[^1] == 0xd9)
+                {
                     EnsureRevision(id, revision);
                     return bytes;
                 }

@@ -7,7 +7,11 @@ using System.Text.RegularExpressions;
 namespace PanelHaven.Web;
 
 public sealed record ComicVineVolume(int Id, string Name, string StartYear, string Publisher, string Url);
-public sealed record ComicVineIssue(int Id, string Name, string Number, string CoverDate, string Url);
+public sealed record ComicVineIssue(int Id, string Name, string Number, string CoverDate, string Url)
+{
+    public string StoreDate { get; init; } = "";
+    public string CoverUrl { get; init; } = "";
+}
 public sealed record ComicVinePage<T>(IReadOnlyList<T> Results, int Offset, int Total, int Limit = 20);
 public sealed record ComicVineMetadata(Dictionary<string, string> Fields, string Url);
 public sealed class ComicVineException(int statusCode, string message) : Exception(message)
@@ -60,21 +64,61 @@ public sealed class ComicVine : IDisposable
         if (number is { Length: > 40 } || number?.Any(c => char.IsControl(c) || c is ',' or ':' or '|' or '%' or '&' or '=' or '?' or '#') == true)
             throw new ComicVineException(400, "Issue number must be at most 40 characters and cannot contain filter separators.");
         var filter = $"volume:{volumeId}" + (string.IsNullOrEmpty(number) ? "" : $",issue_number:{number}");
-        var root = await GetAsync($"issues/?filter={Uri.EscapeDataString(filter)}&limit=20&offset={offset}&field_list=id,name,issue_number,cover_date,site_detail_url", cancellationToken);
+        var root = await GetAsync($"issues/?filter={Uri.EscapeDataString(filter)}&limit=20&offset={offset}&field_list=id,name,issue_number,cover_date,store_date,image,site_detail_url", cancellationToken);
         var results = Items(root, 20).EnumerateArray().Select(item => new ComicVineIssue(Id(item), Text(item, "name"),
-            Text(item, "issue_number"), Text(item, "cover_date"), Url(item))).ToArray();
+            Text(item, "issue_number"), Text(item, "cover_date"), Url(item)) { StoreDate = Text(item, "store_date"), CoverUrl = CoverUrl(item) }).ToArray();
         return new(results, offset, Integer(root, "number_of_total_results"));
     }
 
-    public async Task<ComicVineMetadata> MetadataAsync(int issueId, int volumeId, CancellationToken cancellationToken = default)
+    public async Task<IntakeMatches> MatchIntakeAsync(IntakeHints? hints, CancellationToken cancellationToken = default)
+    {
+        hints = IntakeMatching.Validate(hints);
+        var volumes = await VolumesAsync(hints.Series, 0, cancellationToken);
+        var warnings = new List<string>();
+        var candidates = new List<IntakeCandidate>();
+        // ponytail: one search and at most three issue pages; manual provider search covers deeper results.
+        var selected = volumes.Results.DistinctBy(volume => volume.Id)
+            .OrderByDescending(volume => IntakeMatching.SeriesScore(hints.Series, volume.Name)
+                + (hints.Publisher.Length != 0 && IntakeMatching.SamePublisher(hints.Publisher, volume.Publisher) ? 10 : 0)
+                + (hints.Volume is { } volumeHint && IntakeMatching.VolumeNumber(volume, volumeHint) == volumeHint ? 5 : 0))
+            .ThenByDescending(volume => hints.Year is { } year && int.TryParse(volume.StartYear, out var start) && start <= year ? start : 0)
+            .ThenBy(volume => volume.Id).Take(3).ToArray();
+        if (volumes.Total > selected.Length)
+            warnings.Add("Search is bounded to the first 10 volumes and the three closest series/publisher/volume matches. Refine hints or use manual Comic Vine search for other volumes.");
+        if (hints.Number.Length == 0)
+            warnings.Add("No issue hint: only the first 20 issues per selected volume are considered. Enter an issue number to narrow the search.");
+        if (hints.Volume is > 0 and < 1000)
+            warnings.Add("Comic Vine does not expose a reliable volume ordinal. It can only be compared when explicitly present in the series name.");
+        var number = hints.Number.Contains('/') || hints.Number == "½" ? hints.Number : IntakeMatching.NormalizeNumber(hints.Number);
+        foreach (var volume in selected)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var issues = await IssuesAsync(volume.Id, number, 0, cancellationToken);
+            if (issues.Total > issues.Results.Count)
+                warnings.Add($"Only the first 20 matching issues in volume {volume.Id} were considered.");
+            candidates.AddRange(issues.Results.Select(issue => IntakeMatching.Rank(hints, volume, issue)));
+        }
+        var ranked = candidates.DistinctBy(candidate => candidate.IssueId).OrderByDescending(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.VolumeId).ThenBy(candidate => candidate.IssueId).ToArray();
+        if (ranked.Length == 0) warnings.Add("No candidates found. Refine the editable hints or use manual Comic Vine search; no metadata was changed.");
+        else
+        {
+            if (ranked[0].Score < 70) warnings.Add("Low-confidence match: important hints are absent or disagree. Check every proposed field.");
+            if (ranked.Length > 1 && ranked[0].Score - ranked[1].Score <= 5)
+                warnings.Add("Ambiguous match: leading candidates have similar scores. Compare their series, dates and publisher before approving.");
+        }
+        return new(hints, ranked, warnings);
+    }
+
+    public async Task<ComicVineMetadata> MetadataAsync(int issueId, int volumeId, CancellationToken cancellationToken = default, bool intake = false)
     {
         ValidateId(issueId);
         ValidateId(volumeId);
-        var issue = Property(await GetAsync($"issue/4000-{issueId}/?field_list=id,name,issue_number,volume,cover_date,description,deck,person_credits,character_credits,team_credits,location_credits,story_arc_credits,site_detail_url", cancellationToken), "results");
+        var issue = Property(await GetAsync($"issue/4000-{issueId}/?field_list=id,name,issue_number,volume,cover_date,store_date,description,deck,person_credits,character_credits,team_credits,location_credits,story_arc_credits,site_detail_url", cancellationToken), "results");
         if (Id(issue) != issueId || Id(Property(issue, "volume")) != volumeId)
             throw new ComicVineException(409, "The selected issue does not belong to this volume. Select the volume and issue again.");
         var url = Url(issue);
-        var volume = Property(await GetAsync($"volume/4050-{volumeId}/?field_list=id,name,publisher", cancellationToken), "results");
+        var volume = Property(await GetAsync($"volume/4050-{volumeId}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
         if (Id(volume) != volumeId) throw InvalidResponse();
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         void Add(string field, string value) { if (!string.IsNullOrWhiteSpace(value) && value.Length <= 16384) fields[field] = value; }
@@ -82,10 +126,14 @@ public sealed class ComicVine : IDisposable
         Add("Publisher", Text(Property(volume, "publisher"), "name"));
         Add("Title", Text(issue, "name"));
         Add("Number", Text(issue, "issue_number"));
+        if (intake && int.TryParse(Text(volume, "start_year"), out var volumeYear) && volumeYear is >= 1 and <= 9999)
+            Add("Volume", volumeYear.ToString(CultureInfo.InvariantCulture));
         var summary = Text(issue, "description");
         Add("Summary", summary.Length == 0 ? Text(issue, "deck") : summary);
         Add("Web", url);
-        if (DateOnly.TryParseExact(Text(issue, "cover_date"), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        var dateText = intake && DateOnly.TryParseExact(Text(issue, "store_date"), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+            ? Text(issue, "store_date") : Text(issue, "cover_date");
+        if (DateOnly.TryParseExact(dateText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
         {
             Add("Year", date.Year.ToString(CultureInfo.InvariantCulture));
             Add("Month", date.Month.ToString(CultureInfo.InvariantCulture));
@@ -223,6 +271,16 @@ public sealed class ComicVine : IDisposable
             || !Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme != "https"
             || !uri.Host.Equals("comicvine.gamespot.com", StringComparison.OrdinalIgnoreCase) || !uri.IsDefaultPort
             || uri.UserInfo.Length != 0 || uri.AbsolutePath.StartsWith("/api", StringComparison.OrdinalIgnoreCase)) throw InvalidResponse();
+        return uri.GetLeftPart(UriPartial.Path);
+    }
+    private static string CoverUrl(JsonElement item)
+    {
+        var value = Property(Property(item, "image"), "small_url");
+        if (value.ValueKind != JsonValueKind.String || value.GetString() is not { Length: <= 2048 } text
+            || !Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme != "https"
+            || !uri.Host.Equals("comicvine.gamespot.com", StringComparison.OrdinalIgnoreCase) || !uri.IsDefaultPort
+            || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
+            || !uri.AbsolutePath.StartsWith("/a/uploads/", StringComparison.Ordinal)) return "";
         return uri.GetLeftPart(UriPartial.Path);
     }
     private static string Text(JsonElement item, string name)

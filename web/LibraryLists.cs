@@ -83,6 +83,10 @@ public sealed partial class LibraryStore
 {
     public static readonly MetadataField[] ListRuleFields;
     private static readonly Dictionary<string, MetadataField> ListRuleSchema;
+    private static readonly JsonSerializerOptions CatalogFilterJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        MaxDepth = 16, AllowDuplicateProperties = false
+    };
 
     static LibraryStore()
     {
@@ -94,12 +98,19 @@ public sealed partial class LibraryStore
             new("Location", "Location", "text"), new("Folder", "Folder", "text"),
             new("PageCount", "Page count", "integer", Min: 0, Max: int.MaxValue),
             new("DaysSinceAdded", "Days since added", "integer", Min: 0, Max: int.MaxValue),
+            new("DaysSinceRead", "Days since last read", "integer", Min: 0, Max: int.MaxValue),
+            new("AddedDate", "Date added (UTC)", "date"), new("PublicationDate", "Publication date", "date"),
             new("Year", "Year", "integer", Min: 0, Max: 9999),
             new("PersonalRating", "Personal rating", "integer", Min: 0, Max: 5),
             new("ReadStatus", "Reading status", "readStatus"), new("Availability", "Availability", "availability"),
-            .. MetadataFields.Where(field => field.Name is "Colorist" or "Inker" or "Letterer" or "CoverArtist" or "Editor"
-                or "LanguageISO" or "Format" or "AgeRating" or "Volume" or "Month" or "Day" or "Count")
-                .Select(field => field.Type == "integer" ? field with { Label = field.Name, Min = field.Name is "Month" or "Day" ? 1 : 0 } : field)
+            new("SeriesReadStatus", "Series reading status", "readStatus"),
+            new("HasMissingIssues", "Series has missing issue numbers", "boolean", ["yes", "no"]),
+            new("FileSizeMB", "File size (MiB)", "number", Min: 0, Max: long.MaxValue / 1048576d),
+            new("FileType", "File type", "text"), new("ManualList", "Manual reading list", "listMembership"),
+            .. MetadataFields.Where(field => field.Name is not ("Title" or "Series" or "Number" or "Publisher"
+                or "Summary" or "Writer" or "Penciller" or "Genre" or "Year" or "PageCount"))
+                .Select(field => field.Type == "integer" ? field with { Label = field.Name, Min = field.Name is "Month" or "Day" ? 1 : 0 }
+                    : field.Type is "textarea" or "enum" ? field with { Type = "text" } : field)
         ];
         ListRuleSchema = ListRuleFields.ToDictionary(field => field.Name);
     }
@@ -108,8 +119,22 @@ public sealed partial class LibraryStore
     {
         // ponytail: uncommon fields use catalog XML; add indexed columns only if large-library queries need them.
         var root = ParseXml(xml, "ComicInfo").Root!;
+        if (name == "PublicationDate")
+        {
+            int Part(string part) => int.TryParse(root.Element(root.Name.Namespace + part)?.Value,
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : -1;
+            var year = Part("Year");
+            var month = Part("Month");
+            var day = Part("Day");
+            return year is >= 1 and <= 9999 && month is >= 1 and <= 12
+                && day >= 1 && day <= DateTime.DaysInMonth(year, month)
+                ? new DateOnly(year, month, day).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null;
+        }
         var value = root.Element(root.Name.Namespace + name)?.Value ?? "";
         var field = ListRuleSchema[name];
+        if (field.Type == "number")
+            return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var decimalValue)
+                && double.IsFinite(decimalValue) && decimalValue >= field.Min && decimalValue <= field.Max ? decimalValue : null;
         if (field.Type != "integer") return value;
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
             && number >= field.Min && number <= field.Max ? number : null;
@@ -241,11 +266,17 @@ public sealed partial class LibraryStore
                 if (rule.Operator is "isEmpty" or "isNotEmpty")
                 {
                     if (rule.Value != "") throw new ArgumentException("Empty checks require an empty rule value.");
-                    if (field.Type == "integer" && rule.Field is not ("PageCount" or "PersonalRating")) continue;
+                    if (field.Type is "integer" or "number" or "date" or "listMembership"
+                        && rule.Field is not ("PageCount" or "PersonalRating" or "FileSizeMB")) continue;
                 }
                 switch (field.Type)
                 {
                     case "text":
+                        if (rule.Field == "Number" && rule.Operator is "greaterThan" or "lessThan" or "greaterOrEqual" or "lessOrEqual")
+                        {
+                            if (string.IsNullOrWhiteSpace(rule.Value)) throw new ArgumentException("Issue comparisons require an issue number.");
+                            break;
+                        }
                         if (rule.Operator is not ("contains" or "notContains" or "equals" or "notEquals"
                             or "startsWith" or "endsWith" or "isEmpty" or "isNotEmpty"))
                             throw new ArgumentException("Invalid text rule operator.");
@@ -255,6 +286,26 @@ public sealed partial class LibraryStore
                             || !int.TryParse(rule.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
                             || number < field.Min || number > field.Max)
                             throw new ArgumentException("Numeric rules require an integer in the field's range and a numeric operator.");
+                        break;
+                    case "number":
+                        if (rule.Operator is not ("equals" or "notEquals" or "greaterThan" or "lessThan" or "greaterOrEqual" or "lessOrEqual")
+                            || !double.TryParse(rule.Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var decimalValue)
+                            || !double.IsFinite(decimalValue) || decimalValue < field.Min || decimalValue > field.Max)
+                            throw new ArgumentException("Numeric rules require a finite number in the field's range and a numeric operator.");
+                        break;
+                    case "date":
+                        if (rule.Operator is not ("equals" or "notEquals" or "greaterThan" or "lessThan" or "greaterOrEqual" or "lessOrEqual")
+                            || !DateOnly.TryParseExact(rule.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                            throw new ArgumentException("Date rules require a valid YYYY-MM-DD date and a comparison operator.");
+                        break;
+                    case "boolean":
+                        if (rule.Operator is not ("equals" or "notEquals") || rule.Value is not ("yes" or "no"))
+                            throw new ArgumentException("Boolean rules require yes or no.");
+                        break;
+                    case "listMembership":
+                        if (rule.Operator is not ("equals" or "notEquals"))
+                            throw new ArgumentException("Manual list rules require equals, notEquals, isEmpty or isNotEmpty.");
+                        ValidateListId(rule.Value);
                         break;
                     case "readStatus":
                         if (rule.Operator is not ("equals" or "notEquals")
@@ -269,6 +320,21 @@ public sealed partial class LibraryStore
                 }
             }
         }
+    }
+
+    public static SmartListPreview? ParseCatalogFilter(string? filter)
+    {
+        if (filter is null) return null;
+        if (filter.Length > 6000 || Uri.EscapeDataString(filter).Length > 6000)
+            throw new ArgumentException("Advanced filters must fit within 6000 URL-encoded characters. Use fewer or shorter rules.");
+        try
+        {
+            var result = JsonSerializer.Deserialize<SmartListPreview>(filter, CatalogFilterJsonOptions)
+                ?? throw new ArgumentException("Advanced filters require an object with match and rules.");
+            ValidateSmartRules(result.Match, result.Rules);
+            return result;
+        }
+        catch (JsonException exception) { throw new ArgumentException("Advanced filters require valid match/rules JSON: " + exception.Message); }
     }
 
     public BookPage PreviewSmartList(string user, SmartListPreview edit, int page = 1, int pageSize = 48)
@@ -570,7 +636,7 @@ public sealed partial class LibraryStore
         transaction.Commit();
     }
 
-    private static string ListMembershipFilter(SqliteCommand command, NativeList list)
+    private string ListMembershipFilter(SqliteCommand command, NativeList list)
     {
         if (list.Kind == "manual")
         {
@@ -581,8 +647,9 @@ public sealed partial class LibraryStore
         return SmartListFilter(command, list.Match, list.Rules);
     }
 
-    private static string SmartListFilter(SqliteCommand command, string match, ListRule[] listRules)
+    private string SmartListFilter(SqliteCommand command, string match, ListRule[] listRules)
     {
+        var parameterPrefix = "$rule" + command.Parameters.Count + "_";
         var parameterIndex = 0;
         return GroupFilter(match, listRules);
         string GroupFilter(string mode, ListRule[] children) =>
@@ -591,25 +658,68 @@ public sealed partial class LibraryStore
         {
             if (rule.Rules is not null) return GroupFilter(rule.Match!, rule.Rules);
             var field = ListRuleSchema[rule.Field!];
+            if (rule.Field == "FileType")
+                command.Connection!.CreateFunction<string, string>("rule_file_type", static path => Path.GetExtension(path).TrimStart('.').ToLowerInvariant(), isDeterministic: true);
+            if (rule.Field == "HasMissingIssues")
+                command.Connection!.CreateFunction<string, int?>("rule_whole_issue", WholeIssueNumber, isDeterministic: true);
+            var parameter = parameterPrefix + parameterIndex++;
+            if (rule.Field == "ManualList")
+            {
+                var membership = "EXISTS (SELECT 1 FROM list_books mlb JOIN lists ml ON ml.id=mlb.list_id"
+                    + " WHERE ml.user_id=$user AND ml.kind='manual' AND mlb.book_id=b.id";
+                if (rule.Operator is not ("isEmpty" or "isNotEmpty"))
+                {
+                    command.Parameters.AddWithValue(parameter, rule.Value!);
+                    membership += $" AND ml.id={parameter}";
+                }
+                return (rule.Operator is "notEquals" or "isEmpty" ? "NOT " : "") + membership + ")";
+            }
+            string? seriesColumn = null;
+            if (rule.Field is "SeriesReadStatus" or "HasMissingIssues")
+            {
+                var archived = LocationFilter(command, "archived", parameter + "Archived");
+                var unsorted = LocationFilter(command, "unsorted", parameter + "Unsorted");
+                var seriesWhere = "s.series=b.series AND trim(b.series)<>'' AND (" + archived + ")=("
+                    + archived.Replace("b.path", "s.path", StringComparison.Ordinal) + ") AND (" + unsorted + ")=("
+                    + unsorted.Replace("b.path", "s.path", StringComparison.Ordinal) + ")";
+                seriesColumn = rule.Field == "SeriesReadStatus"
+                    ? "(SELECT CASE WHEN COUNT(*)=0 THEN NULL WHEN COUNT(sp.book_id)=0 THEN 'unread'"
+                        + " WHEN SUM(COALESCE(sp.completed,0))=COUNT(*) THEN 'completed' ELSE 'in-progress' END"
+                        + " FROM books s LEFT JOIN progress sp ON sp.book_id=s.id AND sp.user_id=$user WHERE " + seriesWhere + ")"
+                    : "(SELECT CASE WHEN MAX(rule_whole_issue(s.number))-MIN(rule_whole_issue(s.number))+1"
+                        + ">COUNT(DISTINCT rule_whole_issue(s.number)) THEN 'yes' ELSE 'no' END FROM books s WHERE " + seriesWhere + ")";
+            }
             var column = rule.Field switch
             {
                 "Title" => "b.title", "Series" => "b.series", "Number" => "b.number", "Publisher" => "b.publisher",
                 "Summary" => "b.summary", "PageCount" => "b.page_count", "Writer" => "b.writer",
                 "Penciller" => "b.penciller", "Genre" => "b.genre", "Year" => "b.year", "PersonalRating" => "COALESCE(r.rating,0)",
                 "DaysSinceAdded" => "max(0,(unixepoch()-b.added_at)/86400)",
+                "DaysSinceRead" => "max(0,(unixepoch()-p.updated_at)/86400)",
+                "AddedDate" => "date(b.added_at,'unixepoch')",
+                "FileSizeMB" => "b.file_size/1048576.0", "FileType" => "rule_file_type(b.path)",
+                "SeriesReadStatus" or "HasMissingIssues" => seriesColumn!,
                 "ReadStatus" => "(CASE WHEN p.book_id IS NULL THEN 'unread' WHEN p.completed=1 THEN 'completed' ELSE 'in-progress' END)",
                 "Location" => "b.location", "Folder" => "b.folder", "Availability" => "b.availability",
                 _ => $"metadata_scalar(b.info_xml,'{field.Name}')"
             };
             if (rule.Operator is "isEmpty" or "isNotEmpty")
             {
-                return field.Type == "integer"
+                return field.Type is "integer" or "number" or "date"
                     ? $"{column} IS {(rule.Operator == "isEmpty" ? "" : "NOT ")}NULL"
                     : $"{column} {(rule.Operator == "isEmpty" ? "=" : "<>")} ''";
             }
-            var parameter = "$rule" + parameterIndex++;
-            command.Parameters.AddWithValue(parameter, field.Type == "integer"
-                ? (object)int.Parse(rule.Value!, CultureInfo.InvariantCulture) : rule.Value!);
+            command.Parameters.AddWithValue(parameter, field.Type switch
+            {
+                "integer" => (object)int.Parse(rule.Value!, CultureInfo.InvariantCulture),
+                "number" => double.Parse(rule.Value!, CultureInfo.InvariantCulture),
+                _ => rule.Value!
+            });
+            if (rule.Field == "Number" && rule.Operator is "greaterThan" or "lessThan" or "greaterOrEqual" or "lessOrEqual")
+            {
+                command.Connection!.CreateCollation("ISSUE_VALUE", static (a, b) => NaturalCompare(a ?? "", b ?? "", ordinalTieBreak: false));
+                column = "NULLIF(trim(" + column + "),'') COLLATE ISSUE_VALUE";
+            }
             return rule.Operator switch
             {
                 "contains" => $"instr(lower({column}),lower({parameter}))>0",

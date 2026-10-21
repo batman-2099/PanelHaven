@@ -15,7 +15,8 @@
   assert(!$('library-view').hidden && !document.querySelector('dialog[open]'), "Start on the idle library page.");
   try {
     $("group-by").value = "none";
-    change($("group-by"));
+    $("stack-by").value = "none";
+    change($("stack-by"));
     await waitFor(() => $("books").getAttribute("aria-busy") !== "true" && $("books").querySelector(".book-card:not(.group-card)"));
     $("clear-selection").click();
     $("books").querySelector(".book-selection input").click();
@@ -38,6 +39,33 @@
     $("metadata-field-search").value = "no matching field";
     $("metadata-field-search").dispatchEvent(new Event("input", { bubbles: true }));
     assert(rows.every(row => row.hidden) && selected.checked && rows.length === $("metadata-fields").querySelectorAll(".metadata-change").length, "Searching changed the metadata draft.");
+    $("add-custom-value").click();
+    const custom = $("custom-values").lastElementChild;
+    const unnamed = custom.querySelector("legend").textContent;
+    $("add-custom-value").click();
+    const otherCustom = $("custom-values").lastElementChild;
+    const otherUnnamed = otherCustom.querySelector("legend").textContent;
+    assert(unnamed !== otherUnnamed, "Unnamed custom rows need distinguishable legends.");
+    const key = custom.querySelector(".custom-name");
+    key.value = "Audit custom key";
+    key.dispatchEvent(new Event("input", { bubbles: true }));
+    assert(custom.querySelector("legend").textContent === key.value, "Custom legend did not track its entered key.");
+    for (const control of custom.querySelectorAll("input, textarea, select"))
+      assert(control.labels.length === 1 && control.labels[0].textContent.includes(key.value), "Custom native label lost its current key.");
+    custom.querySelector(".metadata-value").value = "Retain this draft";
+    key.value = "";
+    change(key);
+    assert(custom.querySelector("legend").textContent === unnamed && custom.querySelector(".metadata-value").value === "Retain this draft", "Clearing the key lost its stable fallback or draft value.");
+    otherCustom.querySelector("button").focus();
+    otherCustom.querySelector("button").click();
+    assert(document.activeElement === $("add-custom-value"), "Discarding a custom row lost focus.");
+    $("add-custom-value").click();
+    assert($("custom-values").lastElementChild.querySelector("legend").textContent !== unnamed, "Adding after discard reused another unnamed row's label.");
+    $("metadata-field-search").value = unnamed;
+    $("metadata-field-search").dispatchEvent(new Event("input", { bubbles: true }));
+    custom.querySelector("button").focus();
+    custom.querySelector("button").click();
+    assert(document.activeElement === $("add-custom-value") && document.activeElement.checkVisibility(), "Discarding a filtered row lost visible focus.");
     window.confirm = () => false;
     document.querySelector('[data-close="metadata-dialog"]').click();
     assert($("metadata-dialog").open, "Metadata close discarded the draft without approval.");
@@ -46,13 +74,53 @@
     $("clear-selection").click();
     $("create-list").click();
     assert($("list-kind").value === "manual" && !$("list-controls").disabled && !$("save-list").disabled, "Manual list depends on smart-rule loading.");
+    $("list-kind").value = "smart";
+    change($("list-kind"));
+    await waitFor(() => !$("smart-list-controls").disabled);
+    const removeRule = $("list-rules").querySelector(".list-rule > button");
+    removeRule.focus();
+    removeRule.click();
+    assert(document.activeElement === $("add-list-rule"), "Removing the last root rule lost focus.");
+    $("add-list-group").click();
+    const group = $("list-rules").lastElementChild;
+    const groupRule = group.querySelector(".list-rule > button");
+    groupRule.focus();
+    groupRule.click();
+    assert(document.activeElement === group.querySelector(":scope > [data-add-rule]"), "Removing a nested rule lost its parent add control.");
+    group.querySelector(":scope > [data-add-group]").click();
+    const nestedGroup = group.querySelector(".rule-group");
+    nestedGroup.querySelector(":scope > button:last-child").focus();
+    nestedGroup.querySelector(":scope > button:last-child").click();
+    assert(document.activeElement === group.querySelector(":scope > [data-add-group]"), "Removing a nested group lost its parent add control.");
+    group.querySelector(":scope > button:last-child").focus();
+    group.querySelector(":scope > button:last-child").click();
+    assert(document.activeElement === $("add-list-group"), "Removing the last root group lost focus.");
+    $("add-list-group").click();
+    const emptyGroup = $("list-rules").lastElementChild;
+    emptyGroup.querySelector(".list-rule > button").click();
+    for (let index = 0; index < 20; index++) $("add-list-rule").click();
+    assert($("add-list-group").disabled, "Rule-limit fixture did not disable Add group.");
+    emptyGroup.querySelector(":scope > button:last-child").focus();
+    emptyGroup.querySelector(":scope > button:last-child").click();
+    assert(document.activeElement === $("list-match") && !document.activeElement.disabled, "Removing an empty group at the rule limit focused a disabled control.");
     document.querySelector('[data-close="list-dialog"]').click();
     $("manage-users").click();
     await waitFor(() => !$("user-controls").disabled);
+    for (const row of $("user-list").children) {
+      const heading = row.querySelector("h3");
+      const username = heading.textContent.replace(/ \(you\)$/, "");
+      assert($(row.getAttribute("aria-labelledby")) === heading, "Account section lacks its visible heading association.");
+      for (const action of row.querySelectorAll("button, summary"))
+        assert(action.getAttribute("aria-label")?.includes(username), "Account action lacks username context.");
+      for (const control of row.querySelectorAll("input, select"))
+        assert(control.labels.length === 1 && control.labels[0].textContent.includes(username), "Account field lacks contextual native labeling.");
+    }
     let prompts = 0;
     window.confirm = () => { prompts++; return false; };
+    const accountsClosed = new Promise(resolve => $("user-dialog").addEventListener("close", resolve, { once: true }));
     document.querySelector('[data-close="user-dialog"]').click();
     assert(!$("user-dialog").open && prompts === 0, "Untouched account roles were treated as a draft.");
+    await accountsClosed;
     $("manage-users").click();
     await waitFor(() => !$("user-controls").disabled);
     const reset = $("user-list").querySelector("details");
@@ -68,6 +136,6 @@
     assert($("user-dialog").open && prompts === 1, "Account close discarded a genuine draft.");
     window.confirm = () => true;
     document.querySelector('[data-close="user-dialog"]').click();
-    console.log("PASS: complete metadata grouping, contextual controls, draft-safe filtering, manual-list readiness and account draft guards.");
+    console.log("PASS: metadata grouping, live custom labels, removal focus recovery, contextual accounts, draft-safe filtering, manual-list readiness and draft guards.");
   } finally { window.confirm = originalConfirm; }
 })();

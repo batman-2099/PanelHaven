@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.AspNetCore.DataProtection;
@@ -142,6 +143,20 @@ public static class HostManagementChecks
                 Check(ServerHost.ReadExistingBackup(destination) is null, "Another installation imported the legacy backup configuration.");
                 ServerHost.RequireOwned("panelhaven-backup.service", settingsPath, source);
                 Reject(() => ServerHost.RequireOwned("panelhaven-backup.service", settingsPath, destination));
+                // Exercise real timer ownership rejection without contacting the user's systemd manager.
+                File.WriteAllText(legacyService, "[Service]\nExecStart=/bin/false\n");
+                File.WriteAllText(legacyTimer, "[Timer]\nOnCalendar=daily\n");
+                var host = new ServerHost(settingsPath, source);
+                host.ApplyBackupAsync(new(true, Path.Combine(root, "backups"), "03:00", 3)).GetAwaiter().GetResult();
+                var serviceStatus = new ServerHostStatus(true, true, true, true, "application status");
+                var readBackupStatus = typeof(ServerHost).GetMethod("ReadBackupStatusAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var status = ((Task<ServerHostStatus>)readBackupStatus.Invoke(host, [serviceStatus])!).GetAwaiter().GetResult();
+                Check(status.Supported && status.Installed && status.Running && status.Enabled
+                    && status.Message == serviceStatus.Message && !status.BackupEnabled,
+                    "A foreign backup timer disabled application service controls.");
+                Check(status.BackupMessage?.Contains("panelhaven-backup.service") == true
+                    && status.BackupMessage.Contains("panelhaven-backup.timer"),
+                    "Backup status lost either the apply failure or timer preflight diagnostic.");
             }
         }
         finally

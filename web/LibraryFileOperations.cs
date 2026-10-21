@@ -81,6 +81,7 @@ public sealed partial class LibraryStore
             """);
         command.ExecuteNonQuery();
         InitializeRelocationProvenance(db);
+        InitializeIntakeProcessing(db);
         // Pending rows are the recovery journal. Startup never guesses which of two files to delete.
         using var reserve = Command(db, "UPDATE books SET availability='unavailable' WHERE id IN (SELECT book_id FROM file_operations WHERE state='pending')");
         reserve.ExecuteNonQuery();
@@ -316,6 +317,8 @@ public sealed partial class LibraryStore
         using var command = Command(db, """
             SELECT 1 FROM books WHERE path=$path
             UNION ALL SELECT 1 FROM file_operations WHERE state='pending' AND id<>COALESCE($operation,'')
+                AND (source=$path OR destination=$path)
+            UNION ALL SELECT 1 FROM intake_operations WHERE state='pending' AND id<>COALESCE($operation,'')
                 AND (source=$path OR destination=$path) LIMIT 1
             """, ("$path", PathKey(path)), ("$operation", operationId));
         command.Transaction = transaction;
@@ -324,7 +327,10 @@ public sealed partial class LibraryStore
 
     private static void RefusePendingFileOperation(SqliteConnection db, string id, SqliteTransaction? transaction = null)
     {
-        using var command = Command(db, "SELECT 1 FROM file_operations WHERE book_id=$id AND state='pending' LIMIT 1", ("$id", id));
+        using var command = Command(db, """
+            SELECT 1 FROM file_operations WHERE book_id=$id AND state='pending'
+            UNION ALL SELECT 1 FROM intake_operations WHERE book_id=$id AND state='pending' LIMIT 1
+            """, ("$id", id));
         command.Transaction = transaction;
         if (command.ExecuteScalar() is not null)
             throw new FileOperationConflictException("A pending file operation reserves this book. Preview its recovery before making another change.");
@@ -333,7 +339,10 @@ public sealed partial class LibraryStore
     private static HashSet<string> ReservedFileOperationPaths(SqliteConnection db)
     {
         var paths = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-        using var command = Command(db, "SELECT source,destination FROM file_operations WHERE state='pending'");
+        using var command = Command(db, """
+            SELECT source,destination FROM file_operations WHERE state='pending'
+            UNION ALL SELECT source,destination FROM intake_operations WHERE state='pending'
+            """);
         using var reader = command.ExecuteReader();
         while (reader.Read()) { paths.Add(reader.GetString(0)); paths.Add(reader.GetString(1)); }
         return paths;
@@ -636,6 +645,7 @@ public sealed partial class LibraryStore
         using var command = Command(db, """
             SELECT source,destination FROM file_operations WHERE book_id=$id AND committed=1
             UNION SELECT source,destination FROM book_path_provenance WHERE book_id=$id
+            UNION SELECT source,destination FROM intake_operations WHERE book_id=$id AND state='completed'
             """, ("$id", bookId));
         using var reader = command.ExecuteReader();
         var edges = new Dictionary<string, List<string>>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -660,14 +670,17 @@ public sealed partial class LibraryStore
 
     private static void RefuseFileOperationRelocation(SqliteConnection db, string from, string to)
     {
-        if (!RelocationTableExists(db, "file_operations")) return;
-        using var command = Command(db, """
-            SELECT h.source,h.destination,b.path FROM file_operations o JOIN books b ON b.id=o.book_id
-            JOIN file_operations h ON h.book_id=o.book_id WHERE o.state='pending'
-            """);
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-            if (new[] { reader.GetString(0), reader.GetString(1), reader.GetString(2) }.Any(path => IsContained(from, path) || IsContained(to, path)))
-                throw new InvalidOperationException("Resolve pending file operations touching either relocation root before offline relocation.");
+        foreach (var table in new[] { "file_operations", "intake_operations" })
+        {
+            if (!RelocationTableExists(db, table)) continue;
+            using var command = Command(db, $"""
+                SELECT h.source,h.destination,b.path FROM {table} o JOIN books b ON b.id=o.book_id
+                JOIN {table} h ON h.book_id=o.book_id WHERE o.state='pending'
+                """);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                if (new[] { reader.GetString(0), reader.GetString(1), reader.GetString(2) }.Any(path => IsContained(from, path) || IsContained(to, path)))
+                    throw new InvalidOperationException("Resolve pending file operations touching either relocation root before offline relocation.");
+        }
     }
 }

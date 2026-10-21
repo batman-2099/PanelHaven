@@ -95,18 +95,9 @@ public static class DataRelocation
         var stage = Path.Combine(parent, ".panelhaven-relocation-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var database = Path.Combine(source, "panelhaven.sqlite");
-            RequireRegular(database);
-            foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
-                if (Path.Exists(SafePath(database + suffix))) RequireRegular(database + suffix);
-            var keys = SafePath(Path.Combine(source, "keys"));
-            foreach (var key in Directory.EnumerateFileSystemEntries(keys)) RequireRegular(key);
             // Reuse the validated SQLite snapshot and complete key-ring copy, including committed WAL state.
             var options = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["backup"] = stage }).Build();
             StateMaintenance.Run(options, source);
-            LibraryStore.FlushArchivePath(Path.Combine(stage, "panelhaven.sqlite"), false);
-            foreach (var key in Directory.EnumerateFiles(Path.Combine(stage, "keys"))) LibraryStore.FlushArchivePath(key, false);
-            LibraryStore.FlushArchivePath(Path.Combine(stage, "keys"), true);
             using var gate = StateMaintenance.AcquireBackupGate(source);
             foreach (var entry in Directory.EnumerateFileSystemEntries(source))
             {
@@ -127,12 +118,13 @@ public static class DataRelocation
         }
     }
 
-    private static void RequireRegular(string path)
+    internal static void RequireRegular(string path)
     {
         SafePath(path);
-        if (OperatingSystem.IsLinux() && (LibraryStore.ArchiveStatx(-100, path, 0x100, 0x1, out var stat) != 0
-            || (stat.Mask & 0x1) == 0 || (stat.Mode & 0xf000) != 0x8000))
-            throw new IOException("Relocation accepts only regular state files, not devices, sockets or FIFOs: " + path);
+        if ((File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.Device)) != 0
+            || OperatingSystem.IsLinux() && (LibraryStore.ArchiveStatx(-100, path, 0x100, 0x1, out var stat) != 0
+                || (stat.Mask & 0x1) == 0 || (stat.Mode & 0xf000) != 0x8000))
+            throw new IOException("State operations accept only regular files, not devices, sockets or FIFOs: " + path);
     }
 
     private static void CopyEntry(string source, string destination)

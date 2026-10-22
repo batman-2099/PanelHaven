@@ -6,41 +6,25 @@ namespace PanelHaven.Web;
 public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) : IDisposable
 {
     private const long MaxPixels = 32_000_000;
-    // ponytail: one cache gate bounds native decode memory; use a small fixed pool only if throughput requires it.
-    private readonly SemaphoreSlim gate = new(1, 1);
+    // ponytail: two fixed lanes bound decode memory and serialize each book without a per-book lock registry.
+    private readonly SemaphoreSlim[] gates = [new(1, 1), new(1, 1)];
 
     public async Task<byte[]> GetAsync(string id, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(id, out var guid)) throw new ArgumentException("Invalid book ID.");
         id = guid.ToString("N");
+        cancellationToken.ThrowIfCancellationRequested();
+        var revision = library.GetCoverVersion(id);
+        var path = Path.Combine(cacheDirectory, id + ".thumbnail");
+        var cached = await ReadCacheAsync(id, path, revision, cancellationToken);
+        if (cached is not null) return cached;
+        var gate = gates[guid.GetHashCode() & 1];
         await gate.WaitAsync(cancellationToken);
         try
         {
-            var revision = library.GetCoverVersion(id);
-            var path = Path.Combine(cacheDirectory, id + ".thumbnail");
-            if (File.Exists(path))
-            {
-                byte[]? bytes = null;
-                try
-                {
-                    using var cached = File.OpenRead(path);
-                    using var reader = new BinaryReader(cached, Encoding.UTF8, leaveOpen: true);
-                    if (reader.ReadString() == revision)
-                    {
-                        bytes = new byte[checked((int)(cached.Length - cached.Position))];
-                        await cached.ReadExactlyAsync(bytes, cancellationToken);
-                    }
-                }
-                catch (EndOfStreamException) { }
-                catch (FormatException) { }
-                // Cache truncation is recoverable; source/revision errors must still reach the caller.
-                if (bytes is { Length: >= 4 } && bytes[0] == 0xff && bytes[1] == 0xd8
-                    && bytes[^2] == 0xff && bytes[^1] == 0xd9)
-                {
-                    EnsureRevision(id, revision);
-                    return bytes;
-                }
-            }
+            revision = library.GetCoverVersion(id);
+            cached = await ReadCacheAsync(id, path, revision, cancellationToken);
+            if (cached is not null) return cached;
 
             cancellationToken.ThrowIfCancellationRequested();
             var jpeg = Render(library.GetPage(id, 0, cancellationToken).Bytes, cancellationToken);
@@ -70,6 +54,29 @@ public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) 
         {
             gate.Release();
         }
+    }
+
+    private async Task<byte[]?> ReadCacheAsync(string id, string path, string revision, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path)) return null;
+        byte[]? bytes = null;
+        try
+        {
+            using var cached = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            using var reader = new BinaryReader(cached, Encoding.UTF8, leaveOpen: true);
+            if (reader.ReadString() == revision)
+            {
+                bytes = new byte[checked((int)(cached.Length - cached.Position))];
+                await cached.ReadExactlyAsync(bytes, cancellationToken);
+            }
+        }
+        catch (EndOfStreamException) { }
+        catch (FormatException) { }
+        // Cache truncation is recoverable; source/revision errors must still reach the caller.
+        if (bytes is not { Length: >= 4 } || bytes[0] != 0xff || bytes[1] != 0xd8
+            || bytes[^2] != 0xff || bytes[^1] != 0xd9) return null;
+        EnsureRevision(id, revision);
+        return bytes;
     }
 
     private void EnsureRevision(string id, string revision)
@@ -130,5 +137,8 @@ public sealed class ThumbnailStore(LibraryStore library, string cacheDirectory) 
         return encoded.ToArray();
     }
 
-    public void Dispose() => gate.Dispose();
+    public void Dispose()
+    {
+        foreach (var gate in gates) gate.Dispose();
+    }
 }

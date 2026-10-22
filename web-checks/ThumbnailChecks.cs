@@ -87,6 +87,21 @@ public static class ThumbnailChecks
             using (var restarted = new ThumbnailStore(library, cache))
                 Check(first.SequenceEqual(restarted.GetAsync(id, default).GetAwaiter().GetResult()), "Persistent cache was not reused.");
             Check(File.GetLastWriteTimeUtc(cacheFile) == stamp, "Cache hit regenerated the thumbnail.");
+            // A busy decoder must not hold up a cover that is already cached.
+            var gates = (SemaphoreSlim[])typeof(ThumbnailStore)
+                .GetField("gates", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(thumbnails)!;
+            foreach (var gate in gates) gate.Wait();
+            try
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                Check(first.SequenceEqual(thumbnails.GetAsync(id, deadline.Token).GetAwaiter().GetResult()),
+                    "Cached cover waited for an unrelated thumbnail decode.");
+            }
+            finally
+            {
+                foreach (var gate in gates) gate.Release();
+            }
             var validCache = File.ReadAllBytes(cacheFile);
             foreach (var damaged in new[] { Array.Empty<byte>(), new byte[] { 0x80 },
                 new byte[] { 0xff, 0xff, 0xff, 0xff, 0xff },

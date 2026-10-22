@@ -473,7 +473,7 @@ function showLogin() {
   $("book-status").value = "all";
   $("book-rating").value = "";
   $("book-availability").value = "all";
-  $("group-by").value = "none";
+  $("group-by").value = "publisher";
   $("stack-by").value = "series";
   groupKey = sectionKey = null;
   closedSections.clear();

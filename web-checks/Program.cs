@@ -79,6 +79,8 @@ HostManagementChecks.Run();
 Console.WriteLine("PASS: fixed service commands, backup destination safety and verified whole-state relocation.");
 await WatchChecks.RunAsync();
 Console.WriteLine("PASS: watched-folder changes, debounce, startup recovery and scan lifecycle.");
+await ScanLogChecks.RunAsync();
+Console.WriteLine("PASS: bounded private scan diagnostics, full error export, fatal/cancelled outcomes, restart retention, rotation and independent snapshots.");
 var directory = Path.Combine(Path.GetTempPath(), "panelhaven-accounts-check-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(directory);
 try

@@ -33,6 +33,12 @@
       <div class="actions"><button id="cancel-scan" type="button" hidden>Cancel scan</button><button id="retry-scan-status" type="button" hidden>Check scan status</button><button id="dismiss-scan" type="button" hidden>Dismiss scan result</button></div>
       <details id="scan-errors" hidden><summary id="scan-error-count">Scan errors</summary><p id="scan-error-list"></p></details>
     </details>
+    <div id="scan-log-controls">
+      <button id="export-scan-log" type="button" aria-describedby="scan-log-note" disabled>Export detailed scan log</button>
+      <p id="scan-log-note" class="muted">Includes server paths and exception details. Review before sharing.</p>
+      <p id="scan-log-status" role="status"></p>
+      <p id="scan-log-error" class="scan-error" role="alert" hidden></p>
+    </div>
           </section>
         </div>
       </details>
@@ -104,7 +110,7 @@
         </div>
         <div class="selection-mark" role="group" aria-labelledby="mark-selected-label">
           <span id="mark-selected-label">Mark selected</span>
-          <button id="mark-selected-read" type="button" title="Mark selected comicbooks 100% read for your account" aria-label="Read: mark selected comicbooks 100% read for your account" disabled>Read</button>
+          <button id="mark-selected-read" type="button" class="success" title="Mark selected comicbooks 100% read for your account" aria-label="Read: mark selected comicbooks 100% read for your account" disabled>Read</button>
           <button id="mark-selected-unread" type="button" title="Mark selected comicbooks unread (0%) for your account" aria-label="Unread: reset selected comicbooks to unread (0%) for your account" disabled>Unread</button>
         </div>
         <details class="selection-tools compact-disclosure"><summary>More selected actions</summary><div class="actions">
@@ -149,7 +155,7 @@
       <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet">← Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
       <details class="reader-options"><summary>Bookmarks and page types</summary>
         <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
-          <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit">Add / update bookmark</button></form>
+          <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit" class="success">Add / update bookmark</button></form>
           <p id="bookmark-status" role="status"></p><button id="retry-bookmark" type="button" hidden>Retry bookmark save</button>
           <ul id="personal-bookmarks" aria-label="Personal bookmarks"></ul>
         </section>
@@ -209,7 +215,7 @@
       </fieldset>
       <div id="settings-save" class="form-stack" tabindex="-1">
       <label>Current administrator password — required for every save or service action<input id="settings-current-password" type="password" autocomplete="current-password" required maxlength="256"></label>
-      <button id="save-server-settings" type="submit" class="primary" disabled>Save server settings</button>
+      <button id="save-server-settings" type="submit" class="success" disabled>Save server settings</button>
     <p id="server-settings-status" role="status"></p>
       </div>
     </form>
@@ -237,7 +243,7 @@
     <div id="details-bookmarks"></div>
     <form id="rating-form" class="actions list-actions" hidden>
       <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
-      <button id="save-rating" type="submit">Save rating</button>
+      <button id="save-rating" type="submit" class="success">Save rating</button>
     </form>
     <p id="rating-status" role="status"></p>
     <div class="actions list-actions details-secondary">
@@ -325,11 +331,11 @@
     <p id="metadata-source" class="muted" hidden></p>
     <div class="metadata-tools form-stack"><label for="metadata-field-search">Find a field</label><input id="metadata-field-search" type="search" placeholder="Title, writer, publisher…"><label class="checkbox"><input id="metadata-changed-only" type="checkbox">Checked fields only</label><p id="metadata-change-summary" role="status"></p></div>
     <form id="metadata-form" class="form-stack">
-      <button id="save-metadata" type="submit">Save checked changes</button>
+      <button id="save-metadata" type="submit" class="success">Save checked changes</button>
     <p id="metadata-status" role="status"></p>
       <fieldset id="metadata-controls"><legend>Metadata changes</legend><div id="metadata-fields"></div><details class="custom-values-group"><summary>Custom values</summary><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></details></fieldset>
       <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
-      <button id="apply-metadata" type="submit" class="primary" hidden disabled>Apply reviewed changes</button>
+      <button id="apply-metadata" type="submit" class="success" hidden disabled>Apply reviewed changes</button>
     </form>
   </dialog>
   <dialog id="page-order-dialog" aria-labelledby="page-order-title">
@@ -337,7 +343,7 @@
     <p>Change the reading order for everyone without changing the comicbook file, original page numbers, private bookmarks, or reading progress. Drag a thumbnail to another position, or use Move earlier / Move later with a keyboard or touch. Choose Save page order to apply your changes.</p>
     <p class="muted">If the comicbook file changes, its custom reading order can no longer be used. This includes writing metadata to the file or restoring a backup. Scan externally changed files before organizing pages. Scanning an unchanged file or moving it keeps its saved order.</p>
     <div class="actions">
-      <button id="save-page-order" type="button" class="primary" disabled>Save page order</button>
+      <button id="save-page-order" type="button" class="success" disabled>Save page order</button>
       <button id="reset-page-order" type="button" disabled>Reset to comicbook order (draft)</button>
       <button id="reload-page-order" type="button">Discard draft / Reload saved order</button>
     </div>
@@ -357,7 +363,7 @@
       </fieldset>
       <button id="preview-page-metadata" type="submit" disabled>Preview page changes</button>
       <section id="page-metadata-preview" tabindex="-1" hidden aria-label="Review page metadata changes"><h3>Review exact changes</h3><div id="page-metadata-changes"></div></section>
-      <button id="save-page-metadata" type="submit" disabled>Save reviewed changes to catalog</button>
+      <button id="save-page-metadata" type="submit" class="success" disabled>Save reviewed changes to catalog</button>
     </form>
     <button id="reload-page-metadata" type="button">Reload saved page metadata</button>
     <p id="page-metadata-status" role="status"></p>
@@ -410,7 +416,7 @@
     </section>
     <form id="archive-form" class="form-stack">
       <label class="archive-confirm"><input id="confirm-archive" type="checkbox" required disabled><span id="archive-confirm-label">I reviewed the preview and confirm replacing this source comicbook.</span></label>
-      <button id="apply-archive" type="submit" class="primary" disabled>Apply reviewed metadata write</button>
+      <button id="apply-archive" type="submit" class="success" disabled>Apply reviewed metadata write</button>
     </form>
     <section aria-labelledby="archive-backups-title">
       <h3 id="archive-backups-title">Original comicbook backup history</h3>

@@ -52,16 +52,22 @@ public sealed partial class LibraryStore
                     cancellationToken.ThrowIfCancellationRequested();
                     ValidateEntryName(name);
                     var entry = new Entry(name, size, directory, z, a);
-                    if (entries.Count == MaxEntries || !entries.TryAdd(name, entry) || (attributes & 0xf000) == 0xa000
-                        || ((attributes >> 16) & 0xf000) == 0xa000
-                        || (attributes & (int)FileAttributes.ReparsePoint) != 0 || size < 0 || directory && size != 0) throw new InvalidDataException();
+                    if (entries.Count == MaxEntries) throw new InvalidDataException($"Archive exceeds the {MaxEntries}-entry limit.");
+                    if (!entries.TryAdd(name, entry)) throw new InvalidDataException($"Archive contains a duplicate entry name (case-insensitive): {name}");
+                    if ((attributes & 0xf000) == 0xa000 || ((attributes >> 16) & 0xf000) == 0xa000
+                        || (attributes & (int)FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidDataException($"Archive entry is a symbolic link or reparse point: {name}");
+                    if (size < 0 || directory && size != 0)
+                        throw new InvalidDataException($"Archive entry has an invalid declared size {size} (directories must be empty): {name}");
                     total = checked(total + size);
-                    if (total > MaxExpandedBytes) throw new InvalidDataException();
+                    if (total > MaxExpandedBytes) throw new InvalidDataException($"Archive expanded size exceeds the {MaxExpandedBytes}-byte limit.");
                     // Solid RAR uses the aggregate ratio below; 7z exposes no per-entry packed size and is checked per folder in preflight.
                     if (!solid && archive?.Type != SharpCompress.Common.ArchiveType.SevenZip && size > 0
-                        && (packed <= 0 || size / packed > 1000)) throw new InvalidDataException();
+                        && (packed <= 0 || size / packed > 1000))
+                        throw new InvalidDataException($"Archive entry has an invalid compressed size or exceeds the 1000:1 expansion limit: {name}");
                     if (directory || ImageMime(name) is null) return;
-                    if (size == 0 || size > MaxPageBytes) throw new InvalidDataException();
+                    if (size == 0 || size > MaxPageBytes)
+                        throw new InvalidDataException($"Image entry size {size} is outside the allowed range 1–{MaxPageBytes} bytes: {name}");
                     Pages.Add(entry);
                 }
                 if (zip is not null)
@@ -78,12 +84,14 @@ public sealed partial class LibraryStore
                         if (!e.IsComplete || e.IsSplitAfter || archive.Type == SharpCompress.Common.ArchiveType.Rar
                             && (e.VolumeIndexFirst != 0 || e.VolumeIndexLast != 0))
                             throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
-                        if (e.LinkTarget is not null) throw new InvalidDataException();
+                        if (e.LinkTarget is not null) throw new InvalidDataException($"Archive entry is a link: {e.Key}");
                         // TAR exposes links separately; its inherited Attrib getter is not implemented.
                         var attributes = e is SharpCompress.Common.Tar.TarEntry ? 0 : e.Attrib ?? 0;
                         Add(e.Key ?? "", e.Size, e.CompressedSize, e.IsDirectory, attributes, null, e);
                     }
-                if (total / Math.Max(1, archive?.TotalSize ?? file.Length) > 1000 || Pages.Count == 0) throw new InvalidDataException();
+                if (total / Math.Max(1, archive?.TotalSize ?? file.Length) > 1000)
+                    throw new InvalidDataException("Archive exceeds the aggregate 1000:1 expansion limit.");
+                if (Pages.Count == 0) throw new InvalidDataException("Archive contains no supported image pages (JPEG, PNG, GIF, or WebP).");
                 Pages.Sort((a, b) => NaturalCompare(a.Name, b.Name));
             }
             catch (Exception ex) when (DecoderError(ex))
@@ -133,16 +141,17 @@ public sealed partial class LibraryStore
                 long expanded = 0;
                 while (reader.MoveToNextEntry())
                 {
-                    if (!entries.TryGetValue(reader.Entry.Key ?? "", out var entry)) throw new InvalidDataException();
+                    if (!entries.TryGetValue(reader.Entry.Key ?? "", out var entry))
+                        throw new InvalidDataException("Decoded archive entry was not present in the validated entry list.");
                     if (entry.Directory) continue;
                     expanded = checked(expanded + entry.Size);
-                    if (expanded > MaxExpandedBytes) throw new InvalidDataException();
+                    if (expanded > MaxExpandedBytes) throw new InvalidDataException($"Decoded archive exceeds the {MaxExpandedBytes}-byte expanded-size limit.");
                     using var stream = reader.OpenEntryStream();
                     try { consume(entry, stream); }
                     catch { reader.Cancel(); throw; } // EntryStream.Dispose otherwise drains an untrusted remainder.
                     if (entry == target) return;
                 }
-                if (target is not null) throw new InvalidDataException();
+                if (target is not null) throw new InvalidDataException("Requested entry is missing from the decoded archive.");
             }
             else
             {
@@ -160,7 +169,8 @@ public sealed partial class LibraryStore
         public static byte[]? Consume(Stream stream, long size, int? retainLimit, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (size < 0 || size > MaxExpandedBytes || retainLimit.HasValue && size > retainLimit.Value) throw new InvalidDataException();
+            if (size < 0 || size > MaxExpandedBytes || retainLimit.HasValue && size > retainLimit.Value)
+                throw new InvalidDataException($"Entry declared size {size} is outside the allowed range 0–{(retainLimit.HasValue ? Math.Min(MaxExpandedBytes, retainLimit.Value) : MaxExpandedBytes)} bytes.");
             var bytes = retainLimit.HasValue ? new byte[(int)size] : null;
             var buffer = bytes is null ? ArrayPool<byte>.Shared.Rent(81920) : null;
             try
@@ -192,7 +202,7 @@ public sealed partial class LibraryStore
                 value |= (ulong)(b & 127) << shift;
                 if ((b & 128) == 0) return value;
             }
-            throw new InvalidDataException();
+            throw new InvalidDataException("RAR variable-length integer exceeds its supported 63-bit encoding.");
         }
 
         private static void PreflightRar(FileStream file, CancellationToken cancellationToken)
@@ -201,8 +211,8 @@ public sealed partial class LibraryStore
             using var reader = new BinaryReader(file, System.Text.Encoding.UTF8, true);
             var signature = reader.ReadBytes(7);
             var v5 = signature.AsSpan().SequenceEqual("Rar!\x1a\x07\x01"u8);
-            if (!v5 && !signature.AsSpan().SequenceEqual("Rar!\x1a\x07\x00"u8)) throw new InvalidDataException();
-            if (v5 && reader.ReadByte() != 0) throw new InvalidDataException();
+            if (!v5 && !signature.AsSpan().SequenceEqual("Rar!\x1a\x07\x00"u8)) throw new InvalidDataException("Invalid RAR signature.");
+            if (v5 && reader.ReadByte() != 0) throw new InvalidDataException("Invalid RAR5 signature terminator.");
             var count = 0;
             long headerBytes = 0;
             while (file.Position < file.Length)
@@ -215,7 +225,7 @@ public sealed partial class LibraryStore
                     reader.ReadUInt32();
                     var length = checked((long)RarInt(reader));
                     end = checked(file.Position + length);
-                    if (length > MaxHeaderBytes || end > file.Length) throw new InvalidDataException();
+                    if (length > MaxHeaderBytes || end > file.Length) throw new InvalidDataException("RAR5 header exceeds 16 MiB or extends beyond the source file.");
                     var type = RarInt(reader);
                     var flags = RarInt(reader);
                     var extra = (flags & 1) != 0 ? checked((long)RarInt(reader)) : 0;
@@ -225,11 +235,11 @@ public sealed partial class LibraryStore
                     if (type == 1 && (RarInt(reader) & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                     if (type is 2 or 3)
                     {
-                        if (++count > MaxEntries) throw new InvalidDataException();
+                        if (++count > MaxEntries) throw new InvalidDataException($"RAR5 exceeds the {MaxEntries}-entry limit.");
                         var fileFlags = RarInt(reader);
-                        if ((fileFlags & 8) != 0 || RarInt(reader) > MaxExpandedBytes) throw new InvalidDataException();
+                        if ((fileFlags & 8) != 0 || RarInt(reader) > MaxExpandedBytes) throw new InvalidDataException("RAR5 entry has an unknown expanded size or exceeds the expanded-size limit.");
                         var attributes = RarInt(reader);
-                        if ((attributes & 0xf000) == 0xa000) throw new InvalidDataException();
+                        if ((attributes & 0xf000) == 0xa000) throw new InvalidDataException("RAR5 entry is a symbolic link.");
                         if ((fileFlags & 2) != 0) reader.ReadUInt32();
                         if ((fileFlags & 4) != 0) reader.ReadUInt32();
                         var compression = RarInt(reader);
@@ -237,15 +247,15 @@ public sealed partial class LibraryStore
                             throw new InvalidDataException("RAR dictionary exceeds 64 MiB or uses an unsupported version.");
                         RarInt(reader); // host OS
                         var nameLength = checked((long)RarInt(reader));
-                        if (nameLength > 4096) throw new InvalidDataException();
+                        if (nameLength > 4096) throw new InvalidDataException("RAR5 entry name exceeds 4096 bytes.");
                         file.Position = checked(file.Position + nameLength);
-                        if (extra < 0 || file.Position != end - extra) throw new InvalidDataException();
+                        if (extra < 0 || file.Position != end - extra) throw new InvalidDataException("RAR5 entry header and extra-field sizes are inconsistent.");
                         while (file.Position < end)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             var extraLength = checked((long)RarInt(reader));
                             var next = checked(file.Position + extraLength);
-                            if (next > end || extraLength == 0) throw new InvalidDataException();
+                            if (next > end || extraLength == 0) throw new InvalidDataException("RAR5 extra field is empty or extends beyond its header.");
                             var extraType = RarInt(reader);
                             if (extraType == 1) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                             if (extraType == 5) throw new InvalidDataException("Comicbook links are not supported.");
@@ -261,7 +271,7 @@ public sealed partial class LibraryStore
                     var flags = reader.ReadUInt16();
                     var length = reader.ReadUInt16();
                     end = checked(start + length);
-                    if (length < 7 || end > file.Length) throw new InvalidDataException();
+                    if (length < 7 || end > file.Length) throw new InvalidDataException("RAR header is shorter than 7 bytes or extends beyond the source file.");
                     if ((flags & 0x8000) != 0) packed = reader.ReadUInt32();
                     if (type == 0x73)
                     {
@@ -270,19 +280,20 @@ public sealed partial class LibraryStore
                     }
                     if (type is 0x74 or 0x7a)
                     {
-                        if (++count > MaxEntries || length < 32) throw new InvalidDataException();
+                        if (++count > MaxEntries || length < 32) throw new InvalidDataException($"RAR exceeds {MaxEntries} entries or its file header is shorter than 32 bytes.");
                         if ((flags & 3) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                         if ((flags & 4) != 0) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
                         reader.ReadUInt32(); reader.ReadByte(); reader.ReadUInt32(); reader.ReadUInt32();
                         reader.ReadByte(); reader.ReadByte();
-                        if (reader.ReadUInt16() > 4096) throw new InvalidDataException();
-                        if ((reader.ReadUInt32() & 0xf000) == 0xa000) throw new InvalidDataException();
+                        if (reader.ReadUInt16() > 4096) throw new InvalidDataException("RAR entry name exceeds 4096 bytes.");
+                        if ((reader.ReadUInt32() & 0xf000) == 0xa000) throw new InvalidDataException("RAR entry is a symbolic link.");
                         if ((flags & 0x100) != 0) packed = checked(packed + ((long)reader.ReadUInt32() << 32));
                     }
                     if (type == 0x7b && (flags & 1) != 0) throw new ArchiveFeatureException("Multipart comicbooks are not supported.");
                 }
                 headerBytes = checked(headerBytes + end - start);
-                if (headerBytes > MaxHeaderBytes || file.Position > end || packed < 0 || packed > file.Length - end) throw new InvalidDataException();
+                if (headerBytes > MaxHeaderBytes || file.Position > end || packed < 0 || packed > file.Length - end)
+                    throw new InvalidDataException("RAR headers exceed 16 MiB, overlap their boundaries, or declare packed data outside the source file.");
                 file.Position = end + packed;
             }
         }
@@ -291,13 +302,13 @@ public sealed partial class LibraryStore
         {
             using var reader = new BinaryReader(file, System.Text.Encoding.UTF8, true);
             if (!reader.ReadBytes(6).AsSpan().SequenceEqual((ReadOnlySpan<byte>)[0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]))
-                throw new InvalidDataException();
+                throw new InvalidDataException("Invalid 7z signature.");
             reader.ReadUInt16(); reader.ReadUInt32();
             var offset = reader.ReadUInt64();
             var length = reader.ReadUInt64();
             reader.ReadUInt32();
             if (length > MaxHeaderBytes || offset > (ulong)(file.Length - 32)
-                || length > (ulong)(file.Length - 32) - offset) throw new InvalidDataException();
+                || length > (ulong)(file.Length - 32) - offset) throw new InvalidDataException("7z header exceeds 16 MiB or lies outside the source file.");
             file.Position = checked(32 + (long)offset);
             var header = reader.ReadBytes((int)length);
             for (var depth = 0; depth < 2; depth++)
@@ -306,7 +317,7 @@ public sealed partial class LibraryStore
                 using var parser = new SevenHeader(input, file.Length, cancellationToken);
                 var type = parser.ReadByte();
                 if (type == 1) { parser.Header(); return; }
-                if (type != 23 || depth != 0) throw new InvalidDataException();
+                if (type != 23 || depth != 0) throw new InvalidDataException("7z header has an invalid type or recursively encoded header.");
                 var streams = parser.Streams(MaxHeaderBytes);
                 if (streams.Folders.Count != 1 || streams.Packed.Count != 1
                     || streams.Folders[0].Methods.Count != 1) throw new NotSupportedException("Unsupported encoded 7z header.");
@@ -314,7 +325,7 @@ public sealed partial class LibraryStore
                 var method = folder.Methods[0];
                 var packed = streams.Packed[0];
                 if (packed > MaxHeaderBytes || streams.Offset > file.Length - 32 || packed > file.Length - 32 - streams.Offset)
-                    throw new InvalidDataException();
+                    throw new InvalidDataException("Encoded 7z header exceeds 16 MiB or lies outside the source file.");
                 file.Position = 32 + streams.Offset;
                 // Only the small encoded header is buffered; image/archive payloads remain streamed.
                 using var compressed = new MemoryStream(reader.ReadBytes((int)packed), false);
@@ -327,7 +338,7 @@ public sealed partial class LibraryStore
                 }
                 else throw new NotSupportedException("Unsupported encoded 7z header codec.");
             }
-            throw new InvalidDataException();
+            throw new InvalidDataException("7z header decoding did not produce a plain header.");
         }
 
         // SharpCompress 0.50.4 has no decoder-memory limit. Inspect headers before it allocates dictionaries,
@@ -360,17 +371,17 @@ public sealed partial class LibraryStore
             private int Count(int maximum = MaxEntries)
             {
                 var n = Number();
-                return n <= (ulong)maximum ? (int)n : throw new InvalidDataException();
+                return n <= (ulong)maximum ? (int)n : throw new InvalidDataException($"7z count {n} exceeds the allowed limit {maximum}.");
             }
             private long Size(long maximum)
             {
                 var n = Number();
-                return n <= (ulong)maximum ? (long)n : throw new InvalidDataException();
+                return n <= (ulong)maximum ? (long)n : throw new InvalidDataException($"7z declared size {n} exceeds the allowed limit {maximum} bytes.");
             }
-            private void Expect(byte value) { if (ReadByte() != value) throw new InvalidDataException(); }
+            private void Expect(byte value) { if (ReadByte() != value) throw new InvalidDataException($"7z header expected marker {value} at offset {BaseStream.Position - 1}."); }
             private void Skip(long length)
             {
-                if (length < 0 || length > BaseStream.Length - BaseStream.Position) throw new InvalidDataException();
+                if (length < 0 || length > BaseStream.Length - BaseStream.Position) throw new InvalidDataException("7z field extends beyond its bounded header.");
                 BaseStream.Position += length;
             }
             private bool[] Defined(int count)
@@ -396,13 +407,13 @@ public sealed partial class LibraryStore
             {
                 var folder = new Folder();
                 var count = Count(4);
-                if (count == 0) throw new InvalidDataException();
+                if (count == 0) throw new InvalidDataException("7z folder contains no codecs.");
                 long memory = 0;
                 for (var i = 0; i < count; i++)
                 {
                     var flags = ReadByte();
                     var idLength = flags & 15;
-                    if (idLength is 0 or > 8 || (flags & 0xc0) != 0) throw new InvalidDataException();
+                    if (idLength is 0 or > 8 || (flags & 0xc0) != 0) throw new InvalidDataException("7z codec identifier length or flags are invalid.");
                     ulong id = 0;
                     for (var j = 0; j < idLength; j++) id = (id << 8) | ReadByte();
                     if (id == 0x06f10701) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
@@ -412,25 +423,25 @@ public sealed partial class LibraryStore
                     switch (id)
                     {
                         case 0x030101:
-                            if (properties.Length != 5 || properties[0] >= 225) throw new InvalidDataException();
+                            if (properties.Length != 5 || properties[0] >= 225) throw new InvalidDataException("7z LZMA properties require five bytes and a property value below 225.");
                             memory += BinaryPrimitives.ReadUInt32LittleEndian(properties.AsSpan(1));
                             break;
                         case 0x21:
-                            if (properties.Length != 1 || properties[0] > 40) throw new InvalidDataException();
+                            if (properties.Length != 1 || properties[0] > 40) throw new InvalidDataException("7z LZMA2 properties require one byte with a value at most 40.");
                             memory += properties[0] == 40 ? uint.MaxValue : (2L | (properties[0] & 1)) << (properties[0] / 2 + 11);
                             break;
                         case 0x030401:
-                            if (properties.Length != 5 || properties[0] is < 2 or > 64) throw new InvalidDataException();
+                            if (properties.Length != 5 || properties[0] is < 2 or > 64) throw new InvalidDataException("7z PPMd properties require five bytes and an order from 2 to 64.");
                             memory += BinaryPrimitives.ReadUInt32LittleEndian(properties.AsSpan(1));
                             break;
                         case 0x040202: memory += 4 * 1024 * 1024; break;
                         case 0x040108: memory += 128 * 1024; break;
                         case 3:
-                            if (properties.Length != 1) throw new InvalidDataException();
+                            if (properties.Length != 1) throw new InvalidDataException("7z Delta codec requires exactly one property byte.");
                             break;
                         case 0: case 0x03030103: case 0x03030205: case 0x03030401: case 0x03030501:
                         case 0x03030701: case 0x03030805: case 0x0a: case 0x0b:
-                            if (properties.Length != 0) throw new InvalidDataException();
+                            if (properties.Length != 0) throw new InvalidDataException("7z filter unexpectedly declares codec properties.");
                             break;
                         default: throw new NotSupportedException("Unsupported 7z codec.");
                     }
@@ -444,14 +455,14 @@ public sealed partial class LibraryStore
                 {
                     var input = Count(count - 1);
                     var output = Count(count - 1);
-                    if (!inputs.Add(input) || !outputs.Add(output)) throw new InvalidDataException();
+                    if (!inputs.Add(input) || !outputs.Add(output)) throw new InvalidDataException("7z codec chain contains duplicate input or output links.");
                     links.Add(input, output);
                 }
                 for (var i = 0; i < count; i++)
                 {
                     var visited = new HashSet<int>();
                     for (var current = i; links.TryGetValue(current, out var next); current = next)
-                        if (!visited.Add(current)) throw new InvalidDataException();
+                        if (!visited.Add(current)) throw new InvalidDataException("7z codec chain contains a cycle.");
                 }
                 return folder;
             }
@@ -470,7 +481,7 @@ public sealed partial class LibraryStore
                     for (var i = 0; i < count; i++) packed.Add(Size(MaxArchiveBytes));
                     type = ReadByte();
                     if (type == 10) { Digests(count); type = ReadByte(); }
-                    if (type != 0) throw new InvalidDataException();
+                    if (type != 0) throw new InvalidDataException("7z packed-stream section has an invalid terminator.");
                     type = ReadByte();
                 }
                 if (type == 7)
@@ -486,10 +497,10 @@ public sealed partial class LibraryStore
                         {
                             var size = Size(limit);
                             if (i == 0) folder.Size = size;
-                            else if (folder.Size != size) throw new InvalidDataException(); // accepted filters preserve length
+                            else if (folder.Size != size) throw new InvalidDataException("7z filter changes the declared stream length."); // accepted filters preserve length
                         }
                         expanded = checked(expanded + folder.Size);
-                        if (expanded > limit) throw new InvalidDataException();
+                        if (expanded > limit) throw new InvalidDataException($"7z expanded streams exceed the {limit}-byte limit.");
                     }
                     type = ReadByte();
                     if (type == 10)
@@ -498,13 +509,14 @@ public sealed partial class LibraryStore
                         for (var i = 0; i < count; i++) folders[i].Crc = crcs[i];
                         type = ReadByte();
                     }
-                    if (type != 0) throw new InvalidDataException();
+                    if (type != 0) throw new InvalidDataException("7z unpacked-stream section has an invalid terminator.");
                     type = ReadByte();
                 }
-                if (packed.Count != folders.Count) throw new InvalidDataException();
-                if (offset > sourceLength - 32 || packed.Sum() > sourceLength - 32 - offset) throw new InvalidDataException();
+                if (packed.Count != folders.Count) throw new InvalidDataException("7z packed-stream and folder counts differ.");
+                if (offset > sourceLength - 32 || packed.Sum() > sourceLength - 32 - offset) throw new InvalidDataException("7z packed streams lie outside the source file.");
                 for (var i = 0; i < folders.Count; i++)
-                    if (folders[i].Size > 0 && (packed[i] == 0 || folders[i].Size / packed[i] > 1000)) throw new InvalidDataException();
+                    if (folders[i].Size > 0 && (packed[i] == 0 || folders[i].Size / packed[i] > 1000))
+                        throw new InvalidDataException("7z folder has a zero packed size or exceeds the 1000:1 expansion limit.");
                 if (type == 8)
                 {
                     type = ReadByte();
@@ -515,7 +527,7 @@ public sealed partial class LibraryStore
                         {
                             folder.Substreams = Count();
                             total = checked(total + folder.Substreams);
-                            if (total > MaxEntries) throw new InvalidDataException();
+                            if (total > MaxEntries) throw new InvalidDataException($"7z substream count exceeds {MaxEntries}.");
                         }
                         type = ReadByte();
                     }
@@ -525,20 +537,20 @@ public sealed partial class LibraryStore
                         {
                             long sum = 0;
                             for (var i = 1; i < folder.Substreams; i++) sum = checked(sum + Size(limit));
-                            if (sum > folder.Size) throw new InvalidDataException();
+                            if (sum > folder.Size) throw new InvalidDataException("7z substream sizes exceed their containing folder size.");
                         }
                         type = ReadByte();
                     }
-                    else if (folders.Any(f => f.Substreams > 1)) throw new InvalidDataException();
+                    else if (folders.Any(f => f.Substreams > 1)) throw new InvalidDataException("7z folder has multiple substreams without a size table.");
                     if (type == 10)
                     {
                         Digests(folders.Sum(f => f.Substreams == 1 && f.Crc ? 0 : f.Substreams));
                         type = ReadByte();
                     }
-                    if (type != 0) throw new InvalidDataException();
+                    if (type != 0) throw new InvalidDataException("7z substream section has an invalid terminator.");
                     type = ReadByte();
                 }
-                if (type != 0) throw new InvalidDataException();
+                if (type != 0) throw new InvalidDataException("7z stream section has an invalid terminator.");
                 return new StreamInfo(offset, packed, folders);
             }
 
@@ -552,20 +564,20 @@ public sealed partial class LibraryStore
                 }
                 if (type == 3) throw new NotSupportedException("External 7z header streams are not supported.");
                 if (type == 4) { Streams(MaxExpandedBytes); type = ReadByte(); }
-                if (type != 5) throw new InvalidDataException();
+                if (type != 5) throw new InvalidDataException("7z header is missing its file-information section.");
                 var files = Count();
                 while ((type = ReadByte()) != 0)
                 {
                     var length = Size(MaxHeaderBytes);
                     var end = checked(BaseStream.Position + length);
-                    if (end > BaseStream.Length) throw new InvalidDataException();
+                    if (end > BaseStream.Length) throw new InvalidDataException("7z file property extends beyond the bounded header.");
                     if (type == 17) Expect(0); // names must live in this bounded header
                     else if (type is 18 or 19 or 20 or 21 or 24) { Defined(files); Expect(0); }
-                    if (BaseStream.Position > end) throw new InvalidDataException();
+                    if (BaseStream.Position > end) throw new InvalidDataException("7z file property consumed more than its declared length.");
                     BaseStream.Position = end;
                 }
                 Expect(0);
-                if (BaseStream.Position != BaseStream.Length) throw new InvalidDataException();
+                if (BaseStream.Position != BaseStream.Length) throw new InvalidDataException("7z header contains trailing data after its terminator.");
             }
         }
     }

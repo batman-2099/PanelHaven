@@ -391,6 +391,23 @@ public static class LibraryEndpoints
         });
         api.MapGet("/scan", (ScanWorker worker) => Results.Ok(worker.Status))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapGet("/scan/log", (ScanWorker worker, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "private, no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            try
+            {
+                var log = worker.ExportLog(context.RequestAborted);
+                return log is null
+                    ? Error(404, "No detailed scan log is available. Run a new scan; historical failures cannot be reconstructed.")
+                    : Results.File(log, "application/x-ndjson",
+                        $"panelhaven-scan-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.jsonl");
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return Error(503, "The detailed scan log could not be exported. Check the server log.");
+            }
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/watch-status", (ScanWorker worker) => Results.Ok(worker.WatchStatus))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapPost("/scan", (ScanWorker worker) => worker.TryStart(out var status)

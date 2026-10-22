@@ -270,6 +270,7 @@ let scanStatus = null;
 let dismissedScanResult = null;
 let scanTimer = null;
 let scanRequest = null;
+let scanLogRequest = null;
 let scanBusy = false;
 let libraryItems = [];
 const selectedBooks = new Set();
@@ -367,7 +368,7 @@ function showView(name) {
 }
 
 $("account-menu").addEventListener("click", (event) => {
-  if (!event.target.closest("button") || event.target.closest("#scan-panel")) return;
+  if (!event.target.closest("button") || event.target.closest("#scan-panel, #scan-log-controls")) return;
   $("account-menu").open = false;
   $("account-menu").querySelector("summary").focus();
 }, true);
@@ -977,6 +978,12 @@ function resetScan() {
   clearTimeout(scanTimer);
   scanRequest?.abort();
   scanRequest = null;
+  scanLogRequest?.abort();
+  scanLogRequest = null;
+  $("scan-log-status").textContent = "";
+  $("scan-log-error").textContent = "";
+  $("scan-log-error").hidden = true;
+  $("export-scan-log").disabled = true;
   scanStatus = null;
   dismissedScanResult = null;
   try {
@@ -1011,6 +1018,9 @@ function renderScan() {
   $("cancel-scan").hidden = !active;
   $("cancel-scan").disabled = scanBusy || scanStatus?.state === "cancelling";
   $("retry-scan-status").disabled = scanBusy;
+  $("export-scan-log").disabled = !!scanLogRequest || !scanStatus?.logAvailable;
+  $("scan-log-error").textContent = scanStatus?.logError || "";
+  $("scan-log-error").hidden = !scanStatus?.logError;
   const dismissible = scanStatus && ["completed", "cancelled", "failed"].includes(scanStatus.state) && $("scan-error").hidden;
   $("dismiss-scan").hidden = !dismissible;
   const summary = !$("scan-error").hidden ? "Scan status needs attention" : {
@@ -5275,6 +5285,30 @@ $("refresh-library").addEventListener("click", () => { failedCovers.clear(); cle
 $("scan").addEventListener("click", () => requestScan("start"));
 $("cancel-scan").addEventListener("click", () => requestScan("cancel"));
 $("retry-scan-status").addEventListener("click", () => requestScan());
+$("export-scan-log").addEventListener("click", async () => {
+  if (session?.role !== "admin" || !scanStatus?.logAvailable || scanLogRequest) return;
+  const epoch = authEpoch;
+  const request = scanLogRequest = new AbortController();
+  $("scan-log-status").textContent = "Preparing scan log download…";
+  renderScan();
+  try {
+    const blob = await api("/api/scan/log", { blob: true, signal: request.signal });
+    if (epoch !== authEpoch || request !== scanLogRequest) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `panelhaven-scan-log-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`;
+    document.body.append(link);
+    try { link.click(); }
+    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    $("scan-log-status").textContent = "Scan log download started.";
+  } catch (error) {
+    if (epoch === authEpoch && request === scanLogRequest && error.name !== "AbortError")
+      $("scan-log-status").textContent = `Scan log export failed: ${error.message} Try exporting again.`;
+  } finally {
+    if (request === scanLogRequest) { scanLogRequest = null; renderScan(); }
+  }
+});
 $("dismiss-scan").addEventListener("click", () => {
   rememberScanDismissal(scanResultSignature());
   renderScan();

@@ -36,7 +36,8 @@ public static class LibraryChecks
             var archivePath = Path.Combine(directory, "sample.cbz");
             CreateArchive(archivePath, "<ComicInfo><Title>Imported</Title><Unknown key='kept'>value</Unknown><Pages><Page Image='0'/></Pages></ComicInfo>");
             var store = new LibraryStore(Path.Combine(directory, "test.sqlite"), [directory]);
-            var scan = store.ScanAsync(default).GetAwaiter().GetResult();
+            var log = new List<ScanLogEntry>();
+            var scan = store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
             Check(scan.Scanned == 1 && scan.Added == 1 && scan.Updated == 0 && scan.Skipped == 0 && scan.ErrorCount == 0,
                 "Valid CBZ import failed.");
             var book = store.ListBooks("alice", null).Items.Single();
@@ -63,7 +64,7 @@ public static class LibraryChecks
             var revision = store.GetCoverVersion(book.Id);
             using (var locked = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.None))
             {
-                scan = store.ScanAsync(default).GetAwaiter().GetResult();
+                scan = store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
                 Check(scan.Scanned == 1 && scan.Skipped == 1 && scan.Added == 0 && scan.Updated == 0 && scan.ErrorCount == 0,
                     "Unchanged source was reopened instead of skipped.");
                 Check(store.GetCoverVersion(book.Id) == revision, "Cover revision required reopening the archive.");
@@ -82,7 +83,11 @@ public static class LibraryChecks
             File.SetLastWriteTimeUtc(archivePath, previousModified.AddSeconds(2));
             Reject<InvalidOperationException>(() => store.GetCoverVersion(book.Id));
             Reject<InvalidOperationException>(() => store.GetPage(book.Id, 0));
-            scan = store.ScanAsync(default).GetAwaiter().GetResult();
+            scan = store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
+            Check(log.Select(entry => entry.Outcome).SequenceEqual(["added", "skipped", "updated"])
+                && log.All(entry => entry.Root == directory && entry.Path == archivePath && entry.ExceptionType is null)
+                && log.Zip(log.Skip(1)).All(pair => pair.First.Timestamp <= pair.Second.Timestamp),
+                "Detailed scan outcomes were missing, out of order, or had incorrect source paths.");
             edited = store.GetBook("alice", book.Id);
             Check(scan.Updated == 1 && scan.Added == 0 && scan.Skipped == 0 && scan.ErrorCount == 0
                 && edited.Title == "Edited" && edited.PageCount == 3 && edited.CurrentPage == 1 && edited.Completed
@@ -93,18 +98,35 @@ public static class LibraryChecks
             CreateArchive(Path.Combine(directory, "traversal.cbz"), "<ComicInfo/>", "../page.gif");
             CreateArchive(Path.Combine(directory, "dtd.cbz"), "<!DOCTYPE ComicInfo [<!ENTITY x 'bad'>]><ComicInfo>&x;</ComicInfo>");
             CreateArchive(Path.Combine(directory, "wrong-root.cbz"), "<Other/>");
-            scan = store.ScanAsync(default).GetAwaiter().GetResult();
+            log.Clear();
+            scan = store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
+            Check(log.Single(entry => entry.Path == Path.Combine(directory, "wrong-root.cbz")) is
+                { Outcome: "error", Stage: "metadata-xml", ExceptionType: "System.IO.InvalidDataException", Message: { } xmlReason, Detail: { } xmlDetail }
+                && xmlReason.Contains("ComicInfo root") && xmlDetail.Contains("ReadXml"),
+                "Invalid metadata XML did not retain an actionable reason, phase, exception type, and stack.");
+            Check(log.Single(entry => entry.Path == Path.Combine(directory, "dtd.cbz")) is
+                { Stage: "metadata-xml", ExceptionType: "System.Xml.XmlException", Detail: { } dtdDetail }
+                && dtdDetail.Contains("DTD"), "XML parser diagnostics were lost.");
             Check(scan.Scanned == 4 && scan.Skipped == 1 && scan.ErrorCount == 3 && scan.Errors.Count == 3
                 && store.ListBooks("alice", null).Total == 1, "Unsafe archives were imported.");
             Check(scan.Errors.All(e => !e.Contains(directory)), "Scan errors exposed absolute paths.");
 
-            File.WriteAllText(archivePath, "broken archive");
-            scan = store.ScanAsync(default).GetAwaiter().GetResult();
+            File.WriteAllText(archivePath, "broken archive with enough bytes to reach ZIP validation");
+            log.Clear();
+            scan = store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
+            Check(log.Single(entry => entry.Path == archivePath) is
+                { Stage: "archive-headers", Message: { } zipReason, Detail: { } zipDetail }
+                && zipReason.Contains("end-of-central-directory") && zipDetail.Contains("OpenArchive"),
+                "Corrupt ZIP did not retain its header-validation reason and stack.");
             Check(scan.Errors.Count == 4 && store.GetBook("alice", book.Id).Title == "Edited", "Failed rescan deleted metadata.");
             File.Delete(archivePath);
             Reject<FileNotFoundException>(() => store.GetPage(book.Id, 0));
             Reject<FileNotFoundException>(() => store.GetCoverVersion(book.Id));
             Check(store.GetBook("alice", book.Id).Completed, "Missing source erased reading progress.");
+            log.Clear();
+            store.ScanAsync(default, onLog: log.Add).GetAwaiter().GetResult();
+            Check(log.Any(entry => entry.Path == archivePath && entry.Outcome == "missing" && entry.Stage == "reconciliation"),
+                "Missing catalog source was not recorded in detailed reconciliation.");
             var unconfigured = new LibraryStore(Path.Combine(directory, "empty.sqlite"), []);
             Check(unconfigured.ScanAsync(default).GetAwaiter().GetResult().Errors.Count == 1, "Missing roots were reported as a successful scan.");
 
@@ -257,7 +279,12 @@ public static class LibraryChecks
             for (var i = 0; i < 105; i++) File.WriteAllText(Path.Combine(errorsRoot, $"{i}.cbz"), "invalid archive");
             var invalid = new LibraryStore(Path.Combine(directory, "errors.sqlite"), [errorsRoot]);
             snapshots.Clear();
-            scan = invalid.ScanAsync(default, snapshots.Add).GetAwaiter().GetResult();
+            log.Clear();
+            scan = invalid.ScanAsync(default, snapshots.Add, log.Add).GetAwaiter().GetResult();
+            Check(log.Count == 105 && log.All(entry => entry.Outcome == "error"
+                && entry.Stage == "path-validation" && entry.Message!.Contains("allowed range")
+                && entry.Detail!.Contains("ReadSourceVersion") && Path.IsPathFullyQualified(entry.Path!)),
+                "Detailed scan errors were capped at the summary limit or lost source/exception diagnostics.");
             Check(scan.Scanned == 105 && scan.ErrorCount == 105 && scan.Errors.Count == 100
                 && snapshots.First(result => result.ErrorCount == 1).Errors.Count == 1
                 && snapshots[^1].ErrorCount == 105 && scan.Errors.All(error => !error.Contains(directory)),

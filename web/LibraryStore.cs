@@ -24,6 +24,8 @@ public sealed record ReadingStatusEdit([property: JsonRequired] string[] BookIds
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RatingEdit([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int Rating);
 public sealed record ScanResult(int Scanned, int Added, int Updated, int Skipped, int ErrorCount, List<string> Errors);
+public sealed record ScanLogEntry(DateTimeOffset Timestamp, string Outcome, string? Root, string? Path, string Stage,
+    string? ExceptionType = null, string? Message = null, string? Detail = null);
 public sealed record PageData(byte[] Bytes, string ContentType);
 
 public sealed partial class LibraryStore
@@ -205,7 +207,8 @@ public sealed partial class LibraryStore
     }
 
 
-    public async Task<ScanResult> ScanAsync(CancellationToken cancellationToken, Action<ScanResult>? onProgress = null)
+    public async Task<ScanResult> ScanAsync(CancellationToken cancellationToken, Action<ScanResult>? onProgress = null,
+        Action<ScanLogEntry>? onLog = null)
     {
         var scanned = 0;
         var added = 0;
@@ -215,6 +218,9 @@ public sealed partial class LibraryStore
         var errors = new List<string>();
         ScanResult Snapshot() => new(scanned, added, updated, skipped, errorCount, [.. errors]);
         void Publish() => onProgress?.Invoke(Snapshot());
+        void Log(string outcome, string? root, string? path, string stage, string? message = null, Exception? exception = null)
+            => onLog?.Invoke(new(DateTimeOffset.UtcNow, outcome, root, path, stage,
+                exception?.GetType().FullName, exception?.Message ?? message, exception?.ToString()));
         void Error(string message)
         {
             errorCount++;
@@ -227,7 +233,11 @@ public sealed partial class LibraryStore
             acquired = true;
             Publish();
             if (roots.Length == 0)
-                Error("No library roots are configured. Ask an administrator to configure Libraries.");
+            {
+                const string message = "No library roots are configured. Ask an administrator to configure Libraries.";
+                Error(message);
+                Log("error", null, null, "configuration", message);
+            }
             using var db = Open();
             var reservedPaths = ReservedFileOperationPaths(db);
             var remaining = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -258,17 +268,21 @@ public sealed partial class LibraryStore
                                 {
                                     SetAvailability(db, path, "unavailable");
                                     skipped++;
+                                    Log("reserved", root, path, "reservation", "Skipped: source reserved by a file operation.");
                                     Publish();
                                     continue;
                                 }
                             }
+                            var stage = "path-validation";
                             try
                             {
                                 EnsureSafePath(root, path);
                                 if (isDirectory) pending.Push(path);
                                 else if (isArchive)
                                 {
-                                    switch (Import(db, root, path, cancellationToken))
+                                    var outcome = Import(db, root, path, cancellationToken, ref stage);
+                                    Log(outcome switch { ImportOutcome.Added => "added", ImportOutcome.Updated => "updated", _ => "skipped" }, root, path, stage);
+                                    switch (outcome)
                                     {
                                         case ImportOutcome.Added: added++; break;
                                         case ImportOutcome.Updated: updated++; break;
@@ -276,10 +290,16 @@ public sealed partial class LibraryStore
                                     }
                                 }
                             }
+                            catch (SqliteException ex)
+                            {
+                                Log("error", root, path, stage, exception: ex);
+                                throw;
+                            }
                             catch (Exception ex) when (IsArchiveError(ex))
                             {
                                 if (isArchive) MarkImportFailure(db, path);
                                 Error($"{SafeRelative(root, path)}: {(ex is ArchiveFeatureException ? ex.Message : "comicbook unavailable, invalid, or exceeds safety limits.")}");
+                                Log("error", root, path, stage, exception: ex);
                             }
                             if (isArchive) Publish();
                         }
@@ -287,6 +307,7 @@ public sealed partial class LibraryStore
                     catch (Exception ex) when (IsArchiveError(ex))
                     {
                         Error($"{SafeRelative(root, directory)}: directory unavailable or unsafe.");
+                        Log("error", root, directory, "directory-enumeration", exception: ex);
                         Publish();
                     }
                 }
@@ -295,32 +316,45 @@ public sealed partial class LibraryStore
             foreach (var path in remaining)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var root = roots.FirstOrDefault(r => IsContained(r, path));
                 if (reservedPaths.Contains(path))
                 {
                     SetAvailability(db, path, "unavailable");
+                    Log("reserved", root, path, "reconciliation", "Source reserved by a file operation; catalog marked unavailable.");
                     continue;
                 }
                 var availability = SourceAvailability(path);
                 if (availability != "available")
                 {
                     SetAvailability(db, path, availability);
+                    Log(availability, root, path, "reconciliation",
+                        availability == "missing" ? "Source no longer exists; catalog entry retained."
+                            : "Source is outside configured roots, inaccessible, unsafe, or exceeds file-size limits; catalog entry retained.");
                     continue;
                 }
-                var root = roots.First(r => IsContained(r, path));
                 scanned++;
+                var stage = "path-validation";
                 try
                 {
-                    switch (Import(db, root, path, cancellationToken))
+                    var outcome = Import(db, root!, path, cancellationToken, ref stage);
+                    Log(outcome switch { ImportOutcome.Added => "added", ImportOutcome.Updated => "updated", _ => "skipped" }, root, path, stage);
+                    switch (outcome)
                     {
                         case ImportOutcome.Added: added++; break;
                         case ImportOutcome.Updated: updated++; break;
                         case ImportOutcome.Skipped: skipped++; break;
                     }
                 }
+                catch (SqliteException ex)
+                {
+                    Log("error", root, path, stage, exception: ex);
+                    throw;
+                }
                 catch (Exception ex) when (IsArchiveError(ex))
                 {
                     MarkImportFailure(db, path);
-                    Error($"{SafeRelative(root, path)}: comicbook unavailable, invalid, or exceeds safety limits.");
+                    Error($"{SafeRelative(root!, path)}: comicbook unavailable, invalid, or exceeds safety limits.");
+                    Log("error", root, path, stage, exception: ex);
                 }
                 Publish();
             }
@@ -336,12 +370,14 @@ public sealed partial class LibraryStore
 
     private enum ImportOutcome { Added, Updated, Skipped }
 
-    private ImportOutcome Import(SqliteConnection db, string root, string path, CancellationToken cancellationToken)
+    private ImportOutcome Import(SqliteConnection db, string root, string path, CancellationToken cancellationToken, ref string stage)
     {
+        stage = "path-validation";
         var version = ReadSourceVersion(root, path);
         var key = PathKey(path);
         string? existing = null;
         var unchanged = false;
+        stage = "catalog-lookup";
         using (var read = Command(db, "SELECT id,file_size,modified_ticks,availability,content_hash FROM books WHERE path=$path", ("$path", key)))
         using (var reader = read.ExecuteReader())
         {
@@ -360,19 +396,25 @@ public sealed partial class LibraryStore
         // A changed or unvalidated source must stop participating in duplicate groups, even if this scan is cancelled.
         if (existing is not null) SetAvailability(db, path, "unavailable");
         cancellationToken.ThrowIfCancellationRequested();
+        stage = "archive-headers";
         using var file = OpenArchive(root, path);
         if (file.Length != version.Size || ReadSourceVersion(root, path) != version) throw new IOException("Comicbook changed during scan.");
+        stage = "archive-entries";
         using var archive = new ComicArchive(file, path, cancellationToken);
+        stage = "metadata-read";
         var metadata = archive.ReadMetadata(cancellationToken);
+        stage = "metadata-xml";
         var legacy = metadata.Book is null ? null : ReadXml(metadata.Book, "ComicBook", cancellationToken);
         var info = metadata.Info is null ? new XDocument(new XElement("ComicInfo")) : ReadXml(metadata.Info, "ComicInfo", cancellationToken);
         if (metadata.Info is null && legacy is not null)
             foreach (var element in legacy.Root!.Elements()) info.Root!.Add(new XElement(element));
         var infoXml = info.ToString(SaveOptions.DisableFormatting);
-        if (Encoding.UTF8.GetByteCount(infoXml) > MaxXmlBytes) throw new InvalidDataException();
+        if (Encoding.UTF8.GetByteCount(infoXml) > MaxXmlBytes)
+            throw new InvalidDataException($"Normalized ComicInfo XML exceeds the {MaxXmlBytes}-byte metadata limit.");
         string Field(string name) => info.Root!.Element(info.Root.Name.Namespace + name)?.Value ?? "";
         var title = Field("Title");
         if (string.IsNullOrWhiteSpace(title)) title = Path.GetFileNameWithoutExtension(path);
+        stage = "hashing";
         file.Position = 0;
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> buffer = stackalloc byte[16 * 1024];
@@ -386,6 +428,7 @@ public sealed partial class LibraryStore
         var hash = Convert.ToHexString(buffer[..32]);
         var (location, folder) = SourceLocation(path);
         cancellationToken.ThrowIfCancellationRequested();
+        stage = "catalog-write";
         using var transaction = db.BeginTransaction();
         using var command = Command(db, """
             INSERT INTO books(id,path,title,series,number,publisher,summary,page_count,info_xml,book_xml,file_size,modified_ticks,
@@ -473,10 +516,11 @@ public sealed partial class LibraryStore
         EnsureSafePath(root, path);
         if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(path)
             & (UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead)) == 0)
-            throw new UnauthorizedAccessException();
+            throw new UnauthorizedAccessException("Source has no Unix read permission bits.");
         var info = new FileInfo(path);
-        if (!info.Exists) throw new FileNotFoundException();
-        if (info.Length < 22 || info.Length > MaxArchiveBytes) throw new InvalidDataException();
+        if (!info.Exists) throw new FileNotFoundException("Comicbook source no longer exists.");
+        if (info.Length < 22 || info.Length > MaxArchiveBytes)
+            throw new InvalidDataException($"Comicbook size {info.Length} bytes is outside the allowed range 22–{MaxArchiveBytes} bytes.");
         return (info.Length, info.LastWriteTimeUtc.Ticks);
     }
 
@@ -488,10 +532,11 @@ public sealed partial class LibraryStore
 
     internal static void EnsureSafePath(string root, string path)
     {
-        if (!IsContained(root, Path.GetFullPath(path))) throw new UnauthorizedAccessException();
+        if (!IsContained(root, Path.GetFullPath(path))) throw new UnauthorizedAccessException("Source path is outside its configured library root.");
         // Reject every symlink/reparse component, including root ancestors; no extraction is ever performed.
         for (var current = path; !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new UnauthorizedAccessException();
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new UnauthorizedAccessException("Source path contains a symbolic link or reparse point.");
     }
 
     private static FileStream OpenArchive(string root, string path, string? formatPath = null)
@@ -501,7 +546,8 @@ public sealed partial class LibraryStore
         try
         {
             EnsureSafePath(root, path);
-            if (file.Length < 22 || file.Length > MaxArchiveBytes) throw new InvalidDataException();
+            if (file.Length < 22 || file.Length > MaxArchiveBytes)
+                throw new InvalidDataException($"Comicbook size {file.Length} bytes is outside the allowed range 22–{MaxArchiveBytes} bytes.");
             if (Path.GetExtension(formatPath ?? path).ToLowerInvariant() is not (".cbz" or ".zip")) return file;
             // Bound the central directory before ZipArchive materializes it. ZIP64/multidisk are deliberately unsupported.
             var tail = new byte[(int)Math.Min(file.Length, 65557)];
@@ -521,12 +567,12 @@ public sealed partial class LibraryStore
                     || BinaryPrimitives.ReadUInt16LittleEndian(end[8..]) != count
                     || count == 0 || count > MaxEntries || directorySize > 16 * 1024 * 1024
                     || (long)directoryOffset + directorySize != file.Length - tail.Length + i)
-                    throw new InvalidDataException();
+                    throw new InvalidDataException($"Invalid ZIP directory layout: multidisk/ZIP64, empty directory, more than {MaxEntries} entries, directory over 16 MiB, or directory offset/size mismatch.");
                 ValidateZipHeaders(file, directoryOffset, count);
                 valid = true;
                 break;
             }
-            if (!valid) throw new InvalidDataException();
+            if (!valid) throw new InvalidDataException("ZIP end-of-central-directory record is missing or its comment length is invalid.");
             file.Position = 0;
             return file;
         }
@@ -540,7 +586,8 @@ public sealed partial class LibraryStore
         for (var entry = 0; entry < count; entry++)
         {
             file.ReadExactly(header);
-            if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x02014b50) throw new InvalidDataException();
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x02014b50)
+                throw new InvalidDataException($"ZIP central-directory entry {entry} has an invalid header signature.");
             var flags = BinaryPrimitives.ReadUInt16LittleEndian(header[8..]);
             if ((flags & (1 | 64 | 8192)) != 0) throw new ArchiveFeatureException("Encrypted comicbooks are not supported.");
             if (BinaryPrimitives.ReadUInt32LittleEndian(header[20..]) == uint.MaxValue
@@ -552,11 +599,12 @@ public sealed partial class LibraryStore
             ValidateZipExtra(file, BinaryPrimitives.ReadUInt16LittleEndian(header[30..]));
             file.Position += BinaryPrimitives.ReadUInt16LittleEndian(header[32..]);
             var next = file.Position;
-            if (offset >= directoryOffset) throw new InvalidDataException();
+            if (offset >= directoryOffset) throw new InvalidDataException($"ZIP entry {entry} local-header offset overlaps the central directory.");
             file.Position = offset;
             file.ReadExactly(local);
             if (BinaryPrimitives.ReadUInt32LittleEndian(local) != 0x04034b50
-                || BinaryPrimitives.ReadUInt16LittleEndian(local[6..]) != flags) throw new InvalidDataException();
+                || BinaryPrimitives.ReadUInt16LittleEndian(local[6..]) != flags)
+                throw new InvalidDataException($"ZIP entry {entry} has an invalid local-header signature or inconsistent flags.");
             file.Position += BinaryPrimitives.ReadUInt16LittleEndian(local[26..]);
             ValidateZipExtra(file, BinaryPrimitives.ReadUInt16LittleEndian(local[28..]));
             file.Position = next;
@@ -566,15 +614,15 @@ public sealed partial class LibraryStore
     private static void ValidateZipExtra(FileStream file, int remaining)
     {
         Span<byte> header = stackalloc byte[4];
-        if (file.Position + remaining > file.Length) throw new InvalidDataException();
+        if (file.Position + remaining > file.Length) throw new InvalidDataException("ZIP extra-field block extends beyond the source file.");
         while (remaining != 0)
         {
-            if (remaining < 4) throw new InvalidDataException();
+            if (remaining < 4) throw new InvalidDataException("ZIP extra-field header is truncated.");
             file.ReadExactly(header);
             var kind = BinaryPrimitives.ReadUInt16LittleEndian(header);
             var length = BinaryPrimitives.ReadUInt16LittleEndian(header[2..]);
             if (kind == 1) throw new InvalidDataException("ZIP64 comicbooks are not supported.");
-            if (length > remaining - 4) throw new InvalidDataException();
+            if (length > remaining - 4) throw new InvalidDataException("ZIP extra-field length exceeds its containing block.");
             remaining -= 4 + length;
             file.Position += length;
         }
@@ -585,7 +633,8 @@ public sealed partial class LibraryStore
     {
         if (string.IsNullOrEmpty(name) || name.Length > 4096 || name[0] == '/' || name.Contains('\\')
             || name.Contains(':') || name.Any(char.IsControl)
-            || name.Split('/').Any(part => part is "." or "..")) throw new InvalidDataException();
+            || name.Split('/').Any(part => part is "." or ".."))
+            throw new InvalidDataException("Archive entry name is empty, exceeds 4096 characters, or contains an absolute path, traversal, backslash, colon, or control character.");
     }
 
     private static string? ImageMime(string name) => Path.GetExtension(name).ToLowerInvariant() switch
@@ -610,7 +659,8 @@ public sealed partial class LibraryStore
         using var reader = XmlReader.Create(stream, XmlSettings());
         var document = XDocument.Load(reader, LoadOptions.PreserveWhitespace);
         cancellationToken.ThrowIfCancellationRequested();
-        if (document.Root?.Name.LocalName != rootName) throw new InvalidDataException();
+        if (document.Root?.Name.LocalName != rootName)
+            throw new InvalidDataException($"Metadata XML must have a {rootName} root element; found {document.Root?.Name.LocalName ?? "(none)"}.");
         return document;
     }
 

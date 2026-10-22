@@ -4,22 +4,6 @@ namespace PanelHaven.Web;
 
 public sealed partial class LibraryStore
 {
-    private static void InitializeRelocationProvenance(SqliteConnection db, SqliteTransaction? transaction = null)
-    {
-        using var command = Command(db, """
-            CREATE TABLE IF NOT EXISTS book_path_provenance (
-                book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-                source TEXT NOT NULL, destination TEXT NOT NULL,
-                PRIMARY KEY(book_id,source,destination)
-            );
-            CREATE TABLE IF NOT EXISTS archive_backup_owners (
-                owner_id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE
-            );
-            """);
-        command.Transaction = transaction;
-        command.ExecuteNonQuery();
-    }
-
     private static bool RelocationTableExists(SqliteConnection db, string table, SqliteTransaction? transaction = null)
     {
         using var command = Command(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$table", ("$table", table));
@@ -39,7 +23,7 @@ public sealed partial class LibraryStore
         string id, string? mergedId, string source, string from, string to)
     {
         var paths = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) { source };
-        foreach (var table in new[] { "file_operations", "intake_operations", "book_path_provenance" })
+        foreach (var table in new[] { "file_operations", "intake_operations" })
         {
             if (!RelocationTableExists(db, table, transaction)) continue;
             using var command = Command(db, $"SELECT source,destination FROM {table} WHERE book_id IN ($id,$merged)",
@@ -54,20 +38,10 @@ public sealed partial class LibraryStore
     private static void ApplyRelocationHistory(SqliteConnection db, SqliteTransaction transaction, string id, string? mergedId,
         List<(string Source, string Destination)> paths)
     {
-        InitializeRelocationProvenance(db, transaction);
         using var command = Command(db, "", ("$id", id), ("$merged", mergedId));
         command.Transaction = transaction;
         if (mergedId is not null)
         {
-            // Keep immutable originals in their original owner directory, including earlier merges.
-            command.CommandText = """
-                INSERT INTO archive_backup_owners(owner_id,book_id) VALUES($merged,$id)
-                    ON CONFLICT(owner_id) DO UPDATE SET book_id=$id;
-                UPDATE archive_backup_owners SET book_id=$id WHERE book_id=$merged;
-                INSERT OR IGNORE INTO book_path_provenance(book_id,source,destination)
-                    SELECT $id,source,destination FROM book_path_provenance WHERE book_id=$merged;
-                """;
-            command.ExecuteNonQuery();
             if (RelocationTableExists(db, "page_metadata_edits", transaction))
             {
                 command.CommandText = """
@@ -95,12 +69,6 @@ public sealed partial class LibraryStore
         {
             command.Parameters["$source"].Value = source;
             command.Parameters["$destination"].Value = destination;
-            command.CommandText = """
-                UPDATE OR IGNORE book_path_provenance SET destination=$destination WHERE book_id=$id AND destination=$source;
-                DELETE FROM book_path_provenance WHERE book_id=$id AND destination=$source;
-                INSERT OR IGNORE INTO book_path_provenance(book_id,source,destination) VALUES($id,$source,$destination);
-                """;
-            command.ExecuteNonQuery();
             if (RelocationTableExists(db, "intake_operations", transaction))
             {
                 command.CommandText = """
@@ -116,15 +84,5 @@ public sealed partial class LibraryStore
                 """;
             command.ExecuteNonQuery();
         }
-    }
-
-    private List<string> ArchiveBackupOwners(SqliteConnection db, string id)
-    {
-        var owners = new List<string> { id };
-        if (!RelocationTableExists(db, "archive_backup_owners")) return owners;
-        using var command = Command(db, "SELECT owner_id FROM archive_backup_owners WHERE book_id=$id AND owner_id<>$id ORDER BY owner_id", ("$id", id));
-        using var reader = command.ExecuteReader();
-        while (reader.Read()) owners.Add(reader.GetString(0));
-        return owners;
     }
 }

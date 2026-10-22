@@ -36,7 +36,7 @@ public sealed partial class LibraryStore
     private readonly string[] roots;
     private readonly string? archivePath;
     private readonly string? unsortedPath;
-    private readonly string archiveBackupRoot;
+    private readonly string stateDirectory;
     private readonly SemaphoreSlim scanLock = new(1, 1);
     internal IReadOnlyList<string> WatchRoots => roots;
     private static readonly StringComparison PathComparison = OperatingSystem.IsWindows()
@@ -44,8 +44,8 @@ public sealed partial class LibraryStore
 
     public LibraryStore(string databasePath, string[] libraryRoots, string? archivePath = null, string? unsortedPath = null)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath))!);
-        archiveBackupRoot = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(databasePath))!, "archive-backups");
+        stateDirectory = Path.GetDirectoryName(Path.GetFullPath(databasePath))!;
+        Directory.CreateDirectory(stateDirectory);
         connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath, ForeignKeys = true, DefaultTimeout = 30
@@ -251,7 +251,6 @@ public sealed partial class LibraryStore
                 while (pending.TryPop(out var directory))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (IsContained(archiveBackupRoot, directory) || IsContained(IntakeBackupRoot, directory)) continue;
                     try
                     {
                         EnsureSafePath(root, directory);
@@ -468,11 +467,13 @@ public sealed partial class LibraryStore
     {
         string path;
         long size, ticks;
+        bool available;
         using (var db = Open())
-        using (var command = Command(db, "SELECT path,page_count,file_size,modified_ticks FROM books WHERE id=$id", ("$id", id)))
+        using (var command = Command(db, "SELECT path,page_count,file_size,modified_ticks,availability FROM books WHERE id=$id", ("$id", id)))
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read()) throw new KeyNotFoundException();
+            available = reader.GetString(4) == "available";
             if (page >= reader.GetInt32(1)) throw new ArgumentException("Page is outside the book.");
             path = reader.GetString(0);
             size = reader.GetInt64(2);
@@ -481,6 +482,7 @@ public sealed partial class LibraryStore
         var root = roots.FirstOrDefault(r => IsContained(r, path)) ?? throw new UnauthorizedAccessException();
         if (ReadSourceVersion(root, path) != (size, ticks))
             throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
+        if (!available) throw new InvalidOperationException("Comicbook is unavailable; rescan or recover its pending operation before reading.");
         return (root, path, size, ticks);
     }
 

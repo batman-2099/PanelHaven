@@ -191,15 +191,13 @@ public static class PageOrderChecks
             Check((long)Sql("SELECT COUNT(*) FROM books")! == 1 && store.GetPageOrder(id).Pages.SequenceEqual(saved.Pages),
                 "Relocation merge dropped the surviving shared order or book ID.");
             PrivateState();
-            // Metadata write/restore also changes source bytes: never guess whether the physical page identity survived.
+            // Metadata writing also changes source bytes: never guess whether the physical page identity survived.
             store.EditMetadata(id, new(new() { ["Title"] = "Written" }));
             var write = store.PreviewArchiveWrite(id);
+            var beforeWrite = File.ReadAllBytes(path);
             var written = store.ApplyArchiveWrite(id, new(write.Revision, true));
-            Check(!store.GetPageOrder(id).Custom, "Archive rewrite retained a source-bound permutation.");
-            saved = store.SavePageOrder(id, new(store.GetPageOrder(id).Revision, [2, 0, 1]));
-            var restore = store.PreviewArchiveRestore(id, written.BackupId!);
-            store.RestoreArchiveBackup(id, written.BackupId!, new(restore.Revision, true));
-            Check(!store.GetPageOrder(id).Custom, "Archive restore retained a source-bound permutation.");
+            Check(written.BookId == id && !File.ReadAllBytes(path).SequenceEqual(beforeWrite)
+                && !store.GetPageOrder(id).Custom, "Metadata rewrite did not change source bytes or retained a source-bound permutation.");
             Reject<MetadataRevisionException>(() => store.SavePageOrder(id, new(saved.Revision, saved.Pages)));
             saved = store.SavePageOrder(id, new(store.GetPageOrder(id).Revision, [2, 0, 1]));
             WriteSource(2);

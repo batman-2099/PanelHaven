@@ -335,7 +335,6 @@ let pageMetadataGeneration = 0;
 let pageMetadataBusy = false;
 let pageMetadataDirty = false;
 let pageMetadataPreview = null;
-let archiveExportGeneration = 0;
 
 function showError(error) {
   if (error.name === "AbortError") return;
@@ -513,6 +512,7 @@ function showLogin() {
   resetPageMetadata();
   $("edit-page-metadata").hidden = true;
   $("write-archive").hidden = true;
+  $("convert-cbz").hidden = true;
   listDialogGeneration++;
   metadataBookIds = [];
   $("reading-list").replaceChildren(new Option("All books", ""));
@@ -1070,7 +1070,7 @@ async function requestScan(action = "status") {
     if (["completed", "cancelled", "failed"].includes(result.state) && (previous?.revision !== result.revision || previous?.state !== result.state || action === "start")) {
       if (archivePreview) {
         invalidateArchivePreview();
-        $("archive-status").textContent = "A library scan finished. Preview again against the current source and catalog before confirming.";
+        $("archive-status").textContent = "A library scan finished. Source checks must run again before the next operation.";
       }
       failedCovers.clear();
       loadLibrary();
@@ -1329,6 +1329,7 @@ function renderDetailAvailability(book) {
   $("details-availability").className = book.availability === "available" ? "muted" : "book-availability";
   $("read-book").disabled = book.pageCount < 1 || book.availability !== "available";
   $("export-comic").disabled = !session || session.mustChangePassword || book.pageCount < 1 || book.availability !== "available";
+  $("convert-cbz").hidden = session?.role !== "admin" || book.availability !== "available" || !/\.(cbr|rar|cb7|7z|cbt|tar)$/i.test(book.location);
 }
 
 async function refreshDetailAvailability() {
@@ -1832,7 +1833,7 @@ $("delete-selected").addEventListener("click", async () => {
     if (deletion !== state) return;
     for (const id of result.deletedIds) { selectedBooks.delete(id); failedCovers.delete(id); }
     const failures = result.failures.map(item => `${preview.items.find(book => book.bookId === item.bookId)?.title || item.bookId}: ${item.error}`);
-    status.textContent = `${result.message}\nDeleted: ${result.deletedIds.length}. Failed: ${failures.length}.${failures.length ? `\n${failures.join("\n")}\nFailed comicbooks remain selected. Inspect them before trying again.` : ""}\nSeparately retained original backups were kept. Nothing will be retried automatically.`;
+    status.textContent = `${result.message}\nDeleted: ${result.deletedIds.length}. Failed: ${failures.length}.${failures.length ? `\n${failures.join("\n")}\nFailed comicbooks remain selected. Inspect them before trying again.` : ""}\nNothing will be retried automatically.`;
   } catch (error) {
     if (deletion !== state) return;
     status.textContent = !submitted
@@ -1854,6 +1855,7 @@ $("delete-selected").addEventListener("click", async () => {
 });
 
 function canCloseDialog(id) {
+  if (id === "details-dialog" && intake?.replacement && intake.saving) return false;
   if (id === "intake-dialog") return !intake?.saving && !metadataBusy && !organizationBusy && !archiveBusy && !fileOperationBusy;
   if (id === "data-relocation-dialog") return !serverSettingsBusy && (!dataRelocationDirty() || confirm("Discard this unsubmitted relocation request?"));
   if (id === "user-dialog") return !accountBusy && (!accountDirty() || confirm("Discard unsaved account changes?"));
@@ -1864,7 +1866,7 @@ function canCloseDialog(id) {
   if (id === "metadata-dialog") return !metadataBusy && (!metadataDirty || confirm("Discard unsaved metadata changes?"));
   if (id === "list-dialog") return !listBusy && !listPreviewBusy && (!listDirty || confirm(listEditorMode === "list" ? "Discard unsaved reading list changes?" : "Discard unapplied advanced filter changes?"));
   if (id === "duplicate-dialog") return !duplicateBusy;
-  if (id === "archive-dialog") return !archiveBusy && (!$("confirm-archive").checked || confirm("Discard this comicbook confirmation? Nothing is applied by closing."));
+  if (id === "archive-dialog") return !archiveBusy;
   if (id === "file-operation-dialog") return !fileOperationBusy && (!fileOperationDirty() || confirm("Discard this move draft? Nothing is applied by closing."));
   if (id === "organization-dialog") return !organizationBusy && (!organizationDirty() || confirm("Discard this batch organization draft? Nothing is applied by closing."));
   if ((rating && ratingBusy) || (folder && folderBusy)) return false;
@@ -1995,7 +1997,7 @@ function metadataChanged() {
   invalidateMetadataPreview();
   if (archivePreview && metadataBookIds.includes(archiveBookId)) {
     invalidateArchivePreview();
-    $("archive-status").textContent = "Catalog draft changed. Save or discard it, then preview the comicbook operation again.";
+    $("archive-status").textContent = "Catalog draft changed. Save or discard it before trying the comicbook operation again.";
   }
 }
 
@@ -2211,7 +2213,8 @@ function comicVineLink(url, label = "Comic Vine") {
 
 function intakeCurrent(state, row = state?.row) {
   return !!state && intake === state && state.epoch === authEpoch && state.hash === location.hash
-    && session?.role === "admin" && $("intake-dialog").open && state.row === row;
+    && session?.role === "admin" && $("intake-dialog").open && state.row === row
+    && (!state.replacement || state.details === detailGeneration && detailBook?.id === row?.id && $("details-dialog").open);
 }
 
 function cancelIntakeRequest() {
@@ -2248,12 +2251,10 @@ function updateIntakeControls() {
   $("intake-root").disabled = busy || !$("intake-root").options.length;
   $("intake-dialog").querySelector("[data-close]").disabled = !!intake?.saving;
   $("intake-refresh").disabled = busy;
+  $("apply-cbz-replacement").disabled = busy || !processing || processing.state === "pending" || processing.canRecover || !!intake?.replacementAttempt;
   $("intake-recover").hidden = !processing?.canRecover;
   $("intake-recover").disabled = busy;
-  $("intake-original").hidden = !processing?.originalAvailable;
-  if (processing?.originalAvailable) $("intake-original").href = `/api/books/${encodeURIComponent(row.id)}/intake-processing/original`;
-  else $("intake-original").removeAttribute("href");
-  $("intake-outcome").textContent = row?.outcome || "Processing status has not been checked. Refresh status before accepting.";
+  $("intake-outcome").textContent = row?.outcome || "Processing status has not been checked. Refresh status before proceeding.";
   for (const option of $("intake-queue").options) {
     const item = intake?.rows.find((entry) => entry.id === option.value);
     if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" ? "needs review" : item.processing?.state || "status unknown"}`;
@@ -2264,10 +2265,10 @@ function updateIntakeControls() {
 function setIntakeProcessing(row, result) {
   if (!result || !["none", "pending", "completed", "failed"].includes(result.state)) throw new Error("The server returned an unknown processing status");
   row.processing = result;
-  row.outcome = result.state === "none" ? "Not processed. Accept a candidate to save metadata and organize the comicbook."
+  if (intake?.replacement) $("intake-history").hidden = result.state === "none";
+  row.outcome = result.state === "none" ? intake?.historyOnly ? "No recorded processing operation." : "Not processed. Accept a candidate to save metadata and organize the comicbook."
     : [result.message, result.destination ? `Destination: ${result.destination}` : "",
-      result.state === "completed" ? result.converted ? "Converted CBR to CBZ; original CBR removed after verification." : "Comicbook format preserved." : "",
-      result.originalAvailable ? "Verified original backup available to download." : "",
+      result.state === "completed" ? result.converted ? "Converted to CBZ; original source removed after verification." : "Comicbook format preserved." : "",
       result.canRecover ? "Use Recover interrupted processing to finish committed cleanup or roll back uncommitted changes safely." : ""].filter(Boolean).join("\n");
   if (result.state === "completed") {
     selectedBooks.delete(row.id);
@@ -2300,13 +2301,44 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
         loadPublishers();
         loadLists();
         $("intake-status").textContent = result.state === "completed" ? row.outcome
-          : `${error.message}. Persisted status checked; processing was not retried. ${result.state === "none" || result.state === "failed" && !result.canRecover ? "You may explicitly accept again after resolving the error." : "Use the status and recovery controls below."}`;
+          : `${error.message}. Persisted status checked; processing was not retried. ${state.replacement ? "Review the status below; refresh status or use recovery before converting again." : result.state === "none" || result.state === "failed" && !result.canRecover ? "You may explicitly accept again after resolving the error." : "Use the status and recovery controls below."}`;
       } catch {
         if (current()) $("intake-status").textContent = row.outcome;
       }
-    } else $("intake-status").textContent = `${error.message}. Nothing was saved by this request. Refresh status or retry the search.`;
+    } else $("intake-status").textContent = `${error.message}. Nothing was saved by this request. ${state.replacement ? "Refresh status or convert again after resolving the problem." : "Refresh status or retry the search."}`;
   } finally {
     if (current()) {
+      if ((state.replacement || state.saving && state.historyOnly && state.details === detailGeneration && detailBook?.id === row.id) && row.processing) {
+        const attempted = state.replacementAttempt;
+        const completed = row.processing.state === "completed" && row.processing.converted
+          && (!state.replacement || attempted?.source === row.processing.source && attempted.destination === row.processing.destination);
+        if (row.processing.state === "none" || row.processing.state === "failed" && !row.processing.canRecover
+          || row.processing.state === "completed" && !completed)
+          state.replacementAttempt = null;
+        if (attempted && row.processing.state === "completed" && !completed)
+          $("intake-status").textContent = "The recorded completed operation does not match this conversion. No automatic retry was made. Review processing history before converting again.";
+        if (completed) {
+          invalidateReaderNextIssue(row.id);
+          failedCovers.delete(row.id);
+          loadLibrary();
+          loadPublishers();
+          loadLists();
+          try {
+            const [book, metadata, schema] = await Promise.all([api(`/api/books/${encodeURIComponent(row.id)}`),
+              api(`/api/books/${encodeURIComponent(row.id)}/metadata`), loadMetadataSchema()]);
+            if (!current()) return;
+            if (state.details === detailGeneration && detailBook?.id === row.id && $("details-dialog").open) {
+              detailBook = book;
+              renderDetails(book, metadata, schema);
+              $("intake-history").hidden = false;
+            }
+            await refreshReaderSource(row.id);
+          } catch (error) {
+            if (current()) $("intake-status").textContent += ` Conversion completed, but the view could not refresh: ${error.message}. Close and reopen Book details and the reader.`;
+          }
+          if (!current()) return;
+        }
+      }
       const focusStatus = state.saving || checkProcessing || document.activeElement?.disabled;
       state.busy = state.saving = false;
       state.controller = null;
@@ -2411,7 +2443,7 @@ async function showIntakeRow() {
   for (const name of ["series", "number", "year", "volume", "publisher"]) $(`intake-${name}`).value = row.hints?.[name] ?? "";
   renderIntakeCandidates();
   updateIntakeControls();
-  await intakeRequest("Checking processing status and filename hints…", async (options, current) => {
+  await intakeRequest(state.historyOnly ? "Checking processing status…" : "Checking processing status and filename hints…", async (options, current) => {
     const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake-processing`, options);
     if (!current()) return;
     setIntakeProcessing(row, result);
@@ -2442,14 +2474,16 @@ async function showIntakeRow() {
   });
 }
 
-function openIntake(rows, scope, historyOnly = false) {
+function openIntake(rows, scope, historyOnly = false, replacement = false) {
   if (session?.role !== "admin" || intake?.saving) return;
   resetIntake();
-  intake = { epoch: authEpoch, hash: location.hash, rows, row: null, busy: false, historyOnly };
-  $("intake-title").textContent = historyOnly ? "Processing status and original backup" : "Process Unsorted";
+  intake = { epoch: authEpoch, hash: location.hash, rows, row: null, busy: false, historyOnly, replacement, details: detailGeneration };
+  $("intake-title").textContent = replacement ? "Convert to CBZ" : historyOnly ? "Processing status" : "Process Unsorted";
+  $("cbz-replacement").hidden = !replacement;
+  $("intake-queue").hidden = document.querySelector('label[for="intake-queue"]').hidden = replacement;
   for (const id of ["intake-root", "intake-form", "intake-candidates"]) $(id).hidden = historyOnly;
   document.querySelector('label[for="intake-root"]').hidden = historyOnly;
-  $("intake-scope").textContent = scope;
+  $("intake-scope").textContent = scope + (historyOnly ? "" : " Accept and process removes the source after verified success. This cannot be undone.");
   $("intake-queue").replaceChildren(...rows.map((row) => new Option(row.title, row.id)));
   $("intake-dialog").showModal();
   showIntakeRow();
@@ -2458,7 +2492,33 @@ function openIntake(rows, scope, historyOnly = false) {
 $("intake-history").addEventListener("click", () => {
   if (session?.role !== "admin" || !detailBook || !$("details-dialog").open || $("intake-history").hidden || intake) return;
   openIntake([{ id: detailBook.id, title: bookTitle(detailBook) }],
-    "Review the last processing operation, download its verified original, or recover interrupted work. This view never starts new processing.", true);
+    "Review the last processing operation or recover interrupted work. This view never starts new processing.", true);
+});
+
+$("convert-cbz").addEventListener("click", () => {
+  if (session?.role !== "admin" || !detailBook || !$("details-dialog").open || $("convert-cbz").hidden || intake) return;
+  openIntake([{ id: detailBook.id, title: bookTitle(detailBook) }],
+    "Creates a CBZ in the same folder using saved metadata.", true, true);
+});
+$("cbz-replacement-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!intake?.replacement || $("apply-cbz-replacement").disabled) return;
+  intakeRequest("Checking the source, saved metadata, and destination before conversion…", async (options, current, state, row) => {
+    const preview = await api(`/api/books/${encodeURIComponent(row.id)}/cbz-replacement/preview`, { ...options, method: "POST" });
+    if (!current()) return;
+    if (!preview?.revision || !preview.source || !preview.destination || preview.converted !== true || !Array.isArray(preview.warnings))
+      throw new Error("The server did not return a complete conversion preview");
+    state.replacementAttempt = preview;
+    $("intake-status").textContent = "Converting to CBZ. Do not close this page; replacement cannot be cancelled or undone…";
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/cbz-replacement`, {
+      method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true })
+    });
+    if (!current()) return;
+    if (result?.state !== "completed" || !result.converted || result.source !== preview.source || result.destination !== preview.destination)
+      throw new Error("Conversion completion was not confirmed");
+    setIntakeProcessing(row, result);
+    $("intake-status").textContent = row.outcome;
+  }, true);
 });
 
 $("process-unsorted").addEventListener("click", () => {
@@ -2528,7 +2588,13 @@ $("intake-manual").addEventListener("click", async () => {
   $("find-metadata").click();
 });
 $("intake-dialog").addEventListener("cancel", (event) => { if (!canCloseDialog("intake-dialog")) event.preventDefault(); });
-$("intake-dialog").addEventListener("close", () => { if (!$("intake-dialog").open) resetIntake(); });
+$("intake-dialog").addEventListener("close", () => {
+  if ($("intake-dialog").open) return;
+  const replacement = intake?.replacement && intake.epoch === authEpoch && intake.details === detailGeneration;
+  resetIntake();
+  if (replacement && $("details-dialog").open)
+    ($("convert-cbz").hidden ? $("intake-history").hidden ? $("read-book") : $("intake-history") : $("convert-cbz")).focus({ preventScroll: true });
+});
 for (const id of ["metadata-dialog", "details-dialog", "organization-dialog", "file-operation-dialog", "archive-dialog"]) $(id).addEventListener("close", () => {
   if (!intakeCurrent(intake)) return;
   updateIntakeControls();
@@ -2795,152 +2861,46 @@ function collectMetadataChanges() {
 
 function updateArchiveControls() {
   const available = session?.role === "admin" && archiveBookId !== null;
-  $("preview-archive").disabled = $("refresh-archive-backups").disabled = !available || archiveBusy;
-  $("confirm-archive").disabled = !available || archiveBusy || !archivePreview?.canApply;
-  $("apply-archive").disabled = $("confirm-archive").disabled || !$("confirm-archive").checked;
-  for (const button of $("archive-backups").querySelectorAll("button")) button.disabled = !available || archiveBusy;
+  $("apply-archive").disabled = !available || archiveBusy;
   $("archive-dialog").querySelector("[data-close]").disabled = archiveBusy;
 }
 
 function invalidateArchivePreview() {
   archivePreview = null;
-  $("confirm-archive").checked = false;
-  $("archive-preview").hidden = true;
-  for (const id of ["archive-changes", "archive-entries"]) $(id).replaceChildren();
-  for (const id of ["archive-preview-summary", "archive-source-hash", "archive-xml-note"]) $(id).textContent = "";
-  $("apply-archive").textContent = "Apply reviewed metadata write";
-  $("archive-confirm-label").textContent = "I reviewed the preview and confirm replacing this source comicbook.";
   updateArchiveControls();
-}
-
-function resetArchiveExport() {
-  archiveExportGeneration++;
-  $("download-archive-export").hidden = true;
-  $("download-archive-export").removeAttribute("href");
-  $("archive-export-status").textContent = "";
-  $("preview-archive-export").disabled = false;
 }
 
 function resetArchiveWrite() {
   archiveGeneration++;
-  resetArchiveExport();
   archiveBookId = null;
   archiveBusy = false;
   invalidateArchivePreview();
-  $("archive-backups").replaceChildren();
-  for (const id of ["archive-book", "archive-status", "archive-backups-status"]) $(id).textContent = "";
+  for (const id of ["archive-book", "archive-status"]) $(id).textContent = "";
 }
 
-async function refreshArchiveBackups() {
-  if (session?.role !== "admin" || !archiveBookId || archiveBusy) return;
-  const generation = archiveGeneration;
-  const epoch = authEpoch;
-  archiveBusy = true;
-  if (archivePreview) {
-    invalidateArchivePreview();
-    $("archive-status").textContent = "History refresh invalidated the preview. Preview again before confirming an operation.";
-  }
-  updateArchiveControls();
-  $("archive-backups").replaceChildren();
-  $("archive-backups-status").textContent = "Loading original comicbook backup history…";
-  try {
-    const backups = await api(`/api/books/${encodeURIComponent(archiveBookId)}/archive-backups`);
-    if (epoch !== authEpoch || generation !== archiveGeneration) return;
-    for (const backup of backups) {
-      const row = textElement("article", "", "maintenance-row");
-      row.append(textElement("h4", `Original saved ${new Date(backup.createdAt).toLocaleString()}`));
-      row.append(textElement("p", `Backup ${backup.id} · ${backup.originalSize.toLocaleString()} bytes`));
-      const hashes = document.createElement("details");
-      hashes.append(textElement("summary", "Comicbook SHA-256 hashes"),
-        textElement("p", `Original: ${backup.originalHash}`, "duplicate-key"),
-        textElement("p", `Written: ${backup.writtenHash}`, "duplicate-key"));
-      const button = textElement("button", "Preview original restore");
-      button.type = "button";
-      button.dataset.backupId = backup.id;
-      button.setAttribute("aria-label", `Preview original restore for backup ${backup.id}`);
-      button.addEventListener("click", () => previewArchiveWrite(backup.id));
-      row.append(hashes, button);
-      $("archive-backups").append(row);
-    }
-    $("archive-backups-status").textContent = backups.length ? `${backups.length} original comicbook backup(s). Backup bytes are checked again before restore.` : "No original comicbook backups are recorded for this book.";
-  } catch (error) {
-    if (epoch === authEpoch && generation === archiveGeneration)
-      $("archive-backups-status").textContent = `Could not load backup history: ${error.message}. Use Refresh backup history to retry; do not assume an uncertain write failed.`;
-  } finally {
-    if (epoch === authEpoch && generation === archiveGeneration) {
-      archiveBusy = false;
-      updateArchiveControls();
-    }
-  }
-}
-
-async function previewArchiveWrite(backupId = null) {
+async function previewArchiveWrite() {
   if (session?.role !== "admin" || !archiveBookId || archiveBusy) return;
   invalidateArchivePreview();
   if ((metadataBookIds.includes(archiveBookId) && (metadataDirty || metadataBusy)) || (pageMetadata?.bookId === archiveBookId && (pageMetadataDirty || pageMetadataBusy))) {
-    $("archive-status").textContent = "Save or discard the unsaved catalog metadata draft before previewing. Comicbook write-back uses saved metadata only.";
+    $("archive-status").textContent = "Save or discard the unsaved catalog metadata draft first. Comicbook write-back uses saved metadata only.";
     return;
   }
   const generation = archiveGeneration;
   const epoch = authEpoch;
   archiveBusy = true;
   updateArchiveControls();
-  $("archive-status").textContent = backupId ? "Checking the original backup and current source. Nothing is being restored…" : "Preparing exact comicbook changes. Nothing is being written…";
+  $("archive-status").textContent = "Checking the source and saved metadata. Nothing is being written…";
   try {
-    const path = `/api/books/${encodeURIComponent(archiveBookId)}/${backupId ? `archive-backups/${encodeURIComponent(backupId)}/preview` : "archive-write/preview"}`;
-    const preview = await api(path, { method: "POST" });
+    const preview = await api(`/api/books/${encodeURIComponent(archiveBookId)}/archive-write/preview`, { method: "POST" });
     if (epoch !== authEpoch || generation !== archiveGeneration) return;
     if ((metadataBookIds.includes(archiveBookId) && (metadataDirty || metadataBusy)) || (pageMetadata?.bookId === archiveBookId && (pageMetadataDirty || pageMetadataBusy)))
-      throw new Error("Catalog draft changed. Save or discard it before previewing again.");
+      throw new Error("Catalog draft changed. Save or discard it before trying again.");
     archivePreview = preview;
-    const restoring = preview.operation === "restore";
-    $("archive-book").textContent = `${preview.title} · ${preview.location}`;
-    $("archive-preview-title").textContent = restoring ? "Review original comicbook restore" : "Review comicbook metadata write";
-    $("archive-preview-summary").textContent = restoring
-      ? `Restore the whole original comicbook from backup ${preview.backupId}. Catalog metadata edits remain unchanged. XML below compares the current source with that backup; it is not a catalog rollback.`
-      : "Write saved catalog metadata to this CBZ/ZIP. Review all field changes and the exact intended UTF-8 XML below.";
-    $("archive-source-hash").textContent = `Current source SHA-256: ${preview.sourceHash}`;
-    $("archive-xml-note").textContent = restoring
-      ? "XML panels are normalized readable displays, not original byte text. Restore uses the verified original comicbook bytes, including original encoding and ZIP structure; it does not re-encode the displayed XML."
-      : "Before panels are normalized readable XML, not original byte text. After panels show the exact intended XML text, written as UTF-8. Formatting and encoding may differ even when scalar values are unchanged.";
-    for (const change of preview.changes) {
-      const row = textElement("div", "", "maintenance-row");
-      row.append(textElement("h5", `${change.custom ? "Custom: " : ""}${change.field}`));
-      const values = document.createElement("dl");
-      values.append(
-        textElement("dt", "Before"), textElement("dd", change.before == null ? "(absent)" : change.before === "" ? "(empty string)" : JSON.stringify(change.before)),
-        textElement("dt", "After"), textElement("dd", change.after == null ? "(removed / absent)" : change.after === "" ? "(empty string)" : JSON.stringify(change.after)));
-      row.append(values);
-      $("archive-changes").append(row);
-    }
-    if (!preview.changes.length) $("archive-changes").textContent = "No scalar or custom metadata changes.";
-    for (const entry of preview.entries) {
-      const panel = document.createElement("details");
-      panel.append(textElement("summary", entry.name));
-      for (const [label, value] of [["Before — normalized XML display", entry.before], [restoring ? "After — normalized backup XML display" : "After — exact intended UTF-8 XML", entry.after]]) {
-        panel.append(textElement("h5", label));
-        const xml = textElement("pre", value === null ? "(entry absent)" : value);
-        xml.tabIndex = 0;
-        xml.setAttribute("role", "region");
-        xml.setAttribute("aria-label", `${entry.name}: ${label}`);
-        panel.append(xml);
-      }
-      $("archive-entries").append(panel);
-    }
-    if (!preview.entries.length) $("archive-entries").textContent = "No metadata XML entry changes.";
-    $("apply-archive").textContent = restoring ? "Restore reviewed original comicbook" : "Apply reviewed metadata write";
-    $("archive-confirm-label").textContent = restoring
-      ? `I reviewed backup ${preview.backupId} and confirm replacing the source with its original comicbook bytes. Catalog edits remain.`
-      : "I reviewed the exact changes and confirm writing metadata to this source comicbook, with a verified original backup.";
-    $("archive-preview").hidden = false;
-    $("archive-preview").focus();
-    $("archive-status").textContent = preview.canApply
-      ? "Preview ready. Nothing has changed. Review it, check the confirmation, then use the apply button. A source or catalog change requires a new preview."
-      : "No comicbook changes to apply. Apply is disabled; no comicbook will be written and no backup will be created.";
+    $("archive-status").textContent = preview.canApply ? "Source checked. Writing saved metadata…" : "No comicbook changes to apply.";
   } catch (error) {
     if (epoch === authEpoch && generation === archiveGeneration) {
       invalidateArchivePreview();
-      $("archive-status").textContent = `Preview unavailable: ${error.message}. No comicbook operation was applied. Resolve the problem, then preview again.`;
+      $("archive-status").textContent = `Source check failed: ${error.message}. No comicbook operation was applied. Resolve the problem, then try again.`;
     }
   } finally {
     if (epoch === authEpoch && generation === archiveGeneration) {
@@ -2955,41 +2915,33 @@ $("write-archive").addEventListener("click", () => {
   resetArchiveWrite();
   archiveBookId = detailBook.id;
   $("archive-book").textContent = `${bookTitle(detailBook)} · ${detailBook.location}`;
-  $("archive-status").textContent = "Choose Preview metadata write, or preview an original restore from backup history.";
   updateArchiveControls();
   $("archive-dialog").showModal();
-  refreshArchiveBackups();
 });
-$("preview-archive").addEventListener("click", () => previewArchiveWrite());
-$("refresh-archive-backups").addEventListener("click", refreshArchiveBackups);
-$("confirm-archive").addEventListener("change", updateArchiveControls);
 $("archive-dialog").addEventListener("close", () => { if (!$("archive-dialog").open) resetArchiveWrite(); });
 $("archive-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (session?.role !== "admin" || !archiveBookId || archiveBusy) return;
-  if (!archivePreview?.canApply || !$("confirm-archive").checked || archivePreview.bookId !== archiveBookId) {
-    $("archive-status").textContent = "Preview this operation and explicitly confirm it before applying.";
-    return;
-  }
-  if ((metadataBookIds.includes(archiveBookId) && (metadataDirty || metadataBusy)) || (pageMetadata?.bookId === archiveBookId && (pageMetadataDirty || pageMetadataBusy))) {
-    invalidateArchivePreview();
-    $("archive-status").textContent = "Catalog draft changed. Save or discard it, then preview again.";
-    return;
-  }
   const generation = archiveGeneration;
-  const detailsGeneration = detailGeneration;
   const epoch = authEpoch;
   const id = archiveBookId;
+  await previewArchiveWrite();
+  if (epoch !== authEpoch || generation !== archiveGeneration || id !== archiveBookId || archiveBusy) return;
+  if (!archivePreview?.canApply || archivePreview.bookId !== id) return;
+  if ((metadataBookIds.includes(archiveBookId) && (metadataDirty || metadataBusy)) || (pageMetadata?.bookId === archiveBookId && (pageMetadataDirty || pageMetadataBusy))) {
+    invalidateArchivePreview();
+    $("archive-status").textContent = "Catalog draft changed. Save or discard it before trying again.";
+    return;
+  }
+  const detailsGeneration = detailGeneration;
   const preview = archivePreview;
-  const restoring = preview.operation === "restore";
   archiveBusy = true;
   invalidateArchivePreview();
-  $("archive-status").textContent = restoring ? "Restoring verified original comicbook bytes. Do not close this page…" : "Backing up the original and applying reviewed metadata. Do not close this page…";
+  $("archive-status").textContent = "Writing saved metadata. Do not close this page…";
   try {
-    const path = `/api/books/${encodeURIComponent(id)}/${restoring ? `archive-backups/${encodeURIComponent(preview.backupId)}/restore` : "archive-write"}`;
-    const result = await api(path, { method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true }) });
+    await api(`/api/books/${encodeURIComponent(id)}/archive-write`, { method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true }) });
     if (epoch !== authEpoch || generation !== archiveGeneration) return;
-    $("archive-status").textContent = `${result.message || (restoring ? "Original comicbook restored. Catalog metadata edits were kept." : "Metadata written to the comicbook.")} Backup: ${result.backupId}. Private reading data is unchanged.`;
+    $("archive-status").textContent = "Metadata written to the comicbook. Private reading data is unchanged.";
     invalidateReaderNextIssue(id);
     try {
       await refreshReaderSource(id);
@@ -3017,12 +2969,12 @@ $("archive-form").addEventListener("submit", async (event) => {
   } catch (error) {
     if (epoch === authEpoch && generation === archiveGeneration)
       $("archive-status").textContent = error.status === 409
-        ? `${error.message} The preview is invalid. Review refreshed backup history and preview again before confirming a new operation.`
-        : `Could not confirm the comicbook operation: ${error.message}. It may have completed; inspect refreshed backup history and the source before previewing again. Nothing will be retried automatically.`;
+        ? `${error.message} Source checks are no longer valid. Check the source and catalog status before trying again.`
+        : `Could not confirm the comicbook operation: ${error.message}. It may have completed; inspect the source and rescan before trying again. Nothing will be retried automatically.`;
   } finally {
     if (epoch === authEpoch && generation === archiveGeneration) {
       archiveBusy = false;
-      await refreshArchiveBackups();
+      updateArchiveControls();
     }
   }
 });
@@ -3682,29 +3634,6 @@ $("page-metadata-form").addEventListener("submit", async (event) => {
   }
 });
 
-$("preview-archive-export").addEventListener("click", async () => {
-  if (session?.role !== "admin" || $("preview-archive-export").disabled) return;
-  const generation = ++archiveExportGeneration;
-  const epoch = authEpoch;
-  $("preview-archive-export").disabled = true;
-  $("download-archive-export").hidden = true;
-  $("download-archive-export").removeAttribute("href");
-  $("archive-export-status").textContent = "Counting all retained comicbook backups…";
-  try {
-    const summary = await api("/api/archive-backups/export/preview");
-    if (epoch !== authEpoch || generation !== archiveExportGeneration) return;
-    $("archive-export-status").textContent = `${summary.backups.toLocaleString()} backups · ${summary.totalBytes.toLocaleString()} original bytes. ${summary.incomplete ? `${summary.incomplete} incomplete unpublished attempts are excluded. ` : ""}${summary.backups ? "Download verifies and stages the complete ZIP on server disk before sending; allow time and enough disk space. Backups created after download starts require a later export." : "No complete backups to export."}`;
-    if (summary.backups > 0) {
-      $("download-archive-export").href = "/api/archive-backups/export";
-      $("download-archive-export").hidden = false;
-    }
-  } catch (error) {
-    if (epoch === authEpoch && generation === archiveExportGeneration) $("archive-export-status").textContent = `Could not prepare export summary: ${error.message}. Choose Export all comicbook backups to retry.`;
-  } finally {
-    if (epoch === authEpoch && generation === archiveExportGeneration) $("preview-archive-export").disabled = false;
-  }
-});
-
 let ruleFields = [];
 const ruleOperatorLabels = { contains: "Contains", notContains: "Does not contain", equals: "Equals", notEquals: "Does not equal", startsWith: "Starts with", endsWith: "Ends with", isEmpty: "Not set", isNotEmpty: "Is set", greaterThan: "Greater than", lessThan: "Less than", greaterOrEqual: "Greater than or equal", lessOrEqual: "Less than or equal" };
 
@@ -4200,7 +4129,7 @@ $("metadata-form").addEventListener("submit", async (event) => {
     }
     if (archivePreview && ids.includes(archiveBookId)) {
       invalidateArchivePreview();
-      $("archive-status").textContent = "Saved catalog metadata changed. Preview the comicbook operation again.";
+      $("archive-status").textContent = "Saved catalog metadata changed. Source checks must run again before writing.";
     }
     clearSelection();
     loadLists();
@@ -4345,6 +4274,10 @@ $("delete-list").addEventListener("click", async () => {
 });
 
 async function openDetails(id) {
+  if (intake?.replacement) {
+    if (intake.saving) return;
+    resetIntake();
+  }
   resetComicVine();
   if (comicExport && !comicExport.selection) resetComicExport();
   const generation = ++detailGeneration;
@@ -4363,6 +4296,7 @@ async function openDetails(id) {
   $("edit-metadata").hidden = true;
   $("find-metadata").hidden = true;
   $("write-archive").hidden = true;
+  $("convert-cbz").hidden = true;
   $("intake-history").hidden = true;
   $("move-archive").hidden = true;
   $("edit-page-metadata").hidden = true;
@@ -5320,7 +5254,7 @@ $("maintenance").addEventListener("click", () => {
   $("maintenance-dialog").showModal();
   loadMaintenance();
 });
-$("maintenance-dialog").addEventListener("close", () => { maintenanceGeneration++; resetArchiveExport(); });
+$("maintenance-dialog").addEventListener("close", () => { maintenanceGeneration++; });
 $("maintenance-kind").addEventListener("change", () => {
   maintenancePage = 1;
   $("maintenance-items").replaceChildren();
@@ -5336,6 +5270,7 @@ for (const button of document.querySelectorAll("[data-close]")) button.addEventL
 });
 $("details-dialog").addEventListener("close", () => {
   resetComicVine();
+  if (intake?.replacement && !intake.saving) resetIntake();
   detailGeneration++;
   ratingDirty = false;
   if (comicExport && !comicExport.selection) resetComicExport();
@@ -5705,7 +5640,7 @@ window.addEventListener("pagehide", resetComicVine);
 window.addEventListener("pagehide", cancelIntakeRequest);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
-  if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy || $("confirm-archive").checked
+  if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy
     || intake?.saving || fileOperationBusy || organizationBusy || accountBusy || deletionBusy
     || ($("file-operation-dialog").open && fileOperationDirty())
     || ($("organization-dialog").open && organizationDirty())

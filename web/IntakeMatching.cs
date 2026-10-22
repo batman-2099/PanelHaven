@@ -169,13 +169,14 @@ public sealed partial class LibraryStore
 {
     public IntakeBook GetIntake(string id)
     {
+        using var db = Open();
+        using var command = Command(db, "SELECT availability FROM books WHERE id=$id", ("$id", id));
+        var availability = command.ExecuteScalar() as string ?? throw new KeyNotFoundException();
+        if (availability != "available")
+            throw new ComicVineException(409, "This comicbook is unavailable. Rescan before reviewing it.");
         var source = GetSource(id);
         if (unsortedPath is null || !IsContained(unsortedPath, source.Path))
             throw new ComicVineException(409, "This comicbook is no longer in Unsorted. Refresh the review queue.");
-        using var db = Open();
-        using var command = Command(db, "SELECT availability FROM books WHERE id=$id", ("$id", id));
-        if (command.ExecuteScalar() as string != "available")
-            throw new ComicVineException(409, "This comicbook is unavailable. Rescan before reviewing it.");
         return new(id, "Unsorted/" + SafeRelative(unsortedPath, source.Path).Replace('\\', '/'),
             IntakeMatching.Parse(Path.GetRelativePath(unsortedPath, source.Path), GetMetadata(id).Fields));
     }

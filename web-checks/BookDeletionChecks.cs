@@ -56,7 +56,7 @@ internal static class BookDeletionChecks
                 new(preview.Items.Select(item => item.BookId).ToArray(), preview.Revision, true), token);
             void UnchangedSources() => Check(paths.Take(4).All(File.Exists), "Preflight deleted an earlier selected source.");
 
-            // Actual immutable originals, including an intake operation whose source has already been consumed.
+            // Include written metadata and an intake operation whose source has already been consumed.
             store.EditMetadata(ids[0], new(new() { ["Title"] = "Written title" }));
             var write = store.PreviewArchiveWrite(ids[0]);
             store.ApplyArchiveWrite(ids[0], new(write.Revision, true));
@@ -65,9 +65,6 @@ internal static class BookDeletionChecks
             var prepared = store.PrepareIntake(ids[4], new(1, 2, 0), metadata);
             Check(store.ProcessIntake(ids[4], new(1, 2, 0, prepared.Revision, true), metadata).State == "completed", "Intake fixture did not complete.");
             paths[4] = (string)Sql("SELECT path FROM books WHERE id=$id", ("$id", ids[4]))!;
-            var backups = Directory.EnumerateFiles(Path.Combine(state, "archive-backups"), "*", SearchOption.AllDirectories)
-                .Concat(Directory.EnumerateFiles(Path.Combine(state, "intake-originals"), "*", SearchOption.AllDirectories))
-                .ToDictionary(path => path, File.ReadAllBytes);
             var move = store.PreviewFileMove(ids[0], new(0, "", "moved.cbz"));
             var moved = store.ApplyFileMove(ids[0], new(0, "", "moved.cbz", move.Revision, true));
             var undo = store.PreviewFileUndo(ids[0], moved.OperationId);
@@ -226,8 +223,6 @@ internal static class BookDeletionChecks
                 "Deletion removed whole private lists or unrelated membership.");
             Check(store.GetPageOrder(ids[3]).Pages.SequenceEqual([1, 0]) && store.GetPageMetadata(ids[3]).Pages[0].Bookmark == "Shared bookmark",
                 "Unselected shared reader state changed.");
-            foreach (var backup in backups) Check(File.ReadAllBytes(backup.Key).SequenceEqual(backup.Value), "Deletion changed or removed a retained original/manifest.");
-            Check(store.PreviewArchiveBackupExport().Backups == 1, "Deleted book's retained archive original was no longer exportable.");
             Sql("DROP TRIGGER fail_selected_delete");
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(store.GetBook("owner", ids[1]).Availability == "missing", "Failed catalog cleanup did not reconcile to missing.");

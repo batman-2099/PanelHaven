@@ -125,11 +125,8 @@ public static class FileOperationChecks
                 Reject<UnauthorizedAccessException>(() => store.CreateFileOperationFolder(new(0, collision)));
             var folderDatabase = Path.Combine(Path.GetDirectoryName(database)!, "folder-safety.sqlite");
             var privateRootStore = new LibraryStore(folderDatabase, [directory]);
-            foreach (var folder in new[] { "state/new", "state/archive-backups/new" })
-                Reject<UnauthorizedAccessException>(() => privateRootStore.CreateFileOperationFolder(new(0, folder)));
-            Check(!Directory.Exists(Path.Combine(directory, "state", "new"))
-                && !Directory.Exists(Path.Combine(directory, "state", "archive-backups", "new")),
-                "Folder creation entered application state or backup storage.");
+            Reject<UnauthorizedAccessException>(() => privateRootStore.CreateFileOperationFolder(new(0, "state/new")));
+            Check(!Directory.Exists(Path.Combine(directory, "state", "new")), "Folder creation entered application state.");
             Check(File.ReadAllBytes(path).SequenceEqual(original) && !Directory.EnumerateFileSystemEntries(createdPath).Any()
                 && store.GetFileOperations(id).Count == 0 && store.GetBook("owner", id).Location == "Library 1/original.cbz",
                 "Creating folders overwrote an archive, moved it, or added move history.");
@@ -214,29 +211,22 @@ public static class FileOperationChecks
                 "Undo chain did not restore original bytes/path or durable history.");
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Scan split identity after moves/undo.");
 
-            // A pre-move original-backup manifest remains immutable and usable at the new path.
-            var write = store.PreviewArchiveWrite(id);
-            var backup = store.ApplyArchiveWrite(id, new(write.Revision, true)).BackupId!;
-            var manifest = Path.Combine(directory, "state", "archive-backups", id, backup, "manifest.json");
-            var manifestBytes = File.ReadAllBytes(manifest);
-            var backupMove = Move(1, "", "with-backup.cbz");
-            var chainMove = Move(0, "nested", "backup-chain.cbz");
+            // Move/undo follows journal relationships even when the clock moves backwards.
+            var writtenMove = Move(1, "", "written.cbz");
+            var chainMove = Move(0, "nested", "move-chain.cbz");
             Sql("UPDATE file_operations SET created_at='2000-01-01T00:00:00Z' WHERE id=$value", chainMove.OperationId);
-            Check(store.PreviewArchiveRestore(id, backup).CanApply, "Backup provenance broke across a move chain or backward clock.");
             Undo(chainMove.OperationId);
-            var restore = store.PreviewArchiveRestore(id, backup);
-            Check(store.GetArchiveBackups(id).Any(item => item.Id == backup) && restore.CanApply, "Prior archive backup was unusable after move.");
-            store.RestoreArchiveBackup(id, backup, new(restore.Revision, true));
-            Check(File.ReadAllBytes(Path.Combine(second, "with-backup.cbz")).SequenceEqual(original)
-                && File.ReadAllBytes(manifest).SequenceEqual(manifestBytes), "Archive backup restore changed manifest or failed original-byte restoration.");
-            Check(!store.PreviewFileUndo(id, backupMove.OperationId).CanApply, "Move undo accepted a changed archive hash.");
+            var write = store.PreviewArchiveWrite(id);
+            store.ApplyArchiveWrite(id, new(write.Revision, true));
+            Check(!store.PreviewFileUndo(id, writtenMove.OperationId).CanApply, "Move undo accepted a changed comicbook hash.");
+            original = File.ReadAllBytes(Path.Combine(second, "written.cbz"));
             PrivateState();
 
             // SQLite failure occurs after publication; the verified original is rolled back without reimport.
             Sql("CREATE TRIGGER fail_file_move BEFORE UPDATE OF path ON books BEGIN SELECT RAISE(ABORT,'injected catalog failure'); END");
             preview = store.PreviewFileMove(id, new(0, "", "failure.cbz"));
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "failure.cbz", preview.Revision, true)));
-            Check(!File.Exists(Path.Combine(root, "failure.cbz")) && File.ReadAllBytes(Path.Combine(second, "with-backup.cbz")).SequenceEqual(original)
+            Check(!File.Exists(Path.Combine(root, "failure.cbz")) && File.ReadAllBytes(Path.Combine(second, "written.cbz")).SequenceEqual(original)
                 && store.GetFileOperations(id).Any(row => row.State == "failed"), "Catalog failure did not safely roll back filesystem state.");
             Sql("DROP TRIGGER fail_file_move");
             PrivateState();
@@ -249,7 +239,7 @@ public static class FileOperationChecks
             Sql("DROP TRIGGER fail_file_move; DROP TRIGGER fail_file_finish;");
             var pending = store.GetFileOperations(id).Single(row => row.State == "pending");
             var pendingDestination = Path.Combine(root, "pending.cbz");
-            var pendingSource = Path.Combine(second, "with-backup.cbz");
+            var pendingSource = Path.Combine(second, "written.cbz");
             var hold = Path.Combine(second, $".panelhaven-move-{pending.Id}.hold");
             var partialStage = Path.Combine(root, $".panelhaven-move-{pending.Id}.stage");
             File.WriteAllText(partialStage, "partial copy; ownership was not published");
@@ -260,9 +250,8 @@ public static class FileOperationChecks
             store.RecoverFileOperation(id, pending.Id, new(partialRecovery.Revision, true));
             store = new LibraryStore(database, roots);
             Check(File.Exists(partialStage) && File.Exists(pendingSource) && !File.Exists(pendingDestination)
-                && store.GetFileOperations(id).Single(row => row.Id == pending.Id).Message!.Contains("retained untouched")
                 && store.ScanAsync(default).GetAwaiter().GetResult().Added == 0,
-                "Partial-copy cancellation lost bytes, omitted durable guidance, or imported its staging file.");
+                "Partial-copy cancellation lost bytes or imported its staging file.");
             PrivateState();
             File.Delete(partialStage); // Remove only this check's intentionally retained partial copy.
             Sql("UPDATE file_operations SET state='pending',message=NULL WHERE id=$value", pending.Id);
@@ -284,8 +273,8 @@ public static class FileOperationChecks
                 "Recovery deleted or accepted an unknown partial staging file.");
             File.Delete(uncertainStage); // Explicit fixture-only manual quarantine simulation.
             var recovery = store.PreviewFileRecovery(id, pending.Id);
-            Check(recovery.CanApply && recovery.Operation == "recover" && recovery.Message!.StartsWith("Cancel")
-                && recovery.Destination == "Library 2/with-backup.cbz", "Recovery preview omitted exact cancellation outcome.");
+            Check(recovery.CanApply && recovery.Operation == "recover"
+                && recovery.Destination == "Library 2/written.cbz", "Recovery preview omitted its cancellation destination.");
             File.WriteAllBytes(pendingDestination, changed);
             Check(!store.PreviewFileRecovery(id, pending.Id).CanApply, "Recovery accepted a later external edit.");
             Reject<FileOperationConflictException>(() => store.RecoverFileOperation(id, pending.Id, new(recovery.Revision, true)));
@@ -305,7 +294,6 @@ public static class FileOperationChecks
             store = new LibraryStore(database, roots);
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Committed pending path split identity on restart.");
             recovery = store.PreviewFileRecovery(id, pending.Id);
-            Check(recovery.CanApply && recovery.Message!.StartsWith("Finish"), "Committed recovery did not explain finish outcome.");
             store.RecoverFileOperation(id, pending.Id, new(recovery.Revision, true));
             Check(store.GetFileOperations(id).Single(row => row.Id == pending.Id).State == "applied", "Committed recovery was not durable.");
             PrivateState();

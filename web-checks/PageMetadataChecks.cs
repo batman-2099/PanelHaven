@@ -171,11 +171,9 @@ public static class PageMetadataChecks
                 && writtenXml.Root.Element(ns + "Unknown")!.Element(ns + "Nested")!.Value == "external"
                 && File.ReadAllBytes(path).SequenceEqual(externalBytes), "Page write preview overwrote source-only metadata or mutated source.");
             var applied = store.ApplyArchiveWrite(id, new(write.Revision, true));
-            Check(!store.PreviewArchiveWrite(id).CanApply && store.GetPage(id, 2).Bytes.SequenceEqual(png), "Page write was not a stable archive update.");
-            var restore = store.PreviewArchiveRestore(id, applied.BackupId!);
-            store.RestoreArchiveBackup(id, applied.BackupId!, new(restore.Revision, true));
-            Check(File.ReadAllBytes(path).SequenceEqual(externalBytes) && store.GetPageMetadata(id).Pages[0] == draft[0],
-                "Undo failed exact source restoration or discarded page catalog edits.");
+            Check(applied.BookId == id && !store.PreviewArchiveWrite(id).CanApply && store.GetPage(id, 2).Bytes.SequenceEqual(png)
+                && !File.ReadAllBytes(path).SequenceEqual(externalBytes) && store.GetPageMetadata(id).Pages[0] == draft[0],
+                "Page write failed to publish changed metadata, refresh the comicbook, or preserve page catalog edits.");
             PrivateState();
             WriteSource(external, 2);
             Reject<ArchiveWriteConflictException>(() => store.PreviewArchiveWrite(id));

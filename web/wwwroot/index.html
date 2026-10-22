@@ -210,7 +210,7 @@
             <label>Daily time (required) — server local time<input id="settings-backup-time" type="time" required></label>
             <label>Backups to keep (required, 1–3650)<input id="settings-backup-keep" type="number" min="1" max="3650" step="1" required></label>
           </div>
-          <p class="notice">Scheduled backups contain the database and data-protection keys only. They do not include comicbooks, the comicbook-backup vault, or this server settings file. Back up those separately. Scheduling requires Linux user systemd; a saved schedule is not proof that its timer is active.</p>
+          <p class="notice">Scheduled backups contain the database and data-protection keys only. They do not include comicbooks or this server settings file. Back up those separately. Scheduling requires Linux user systemd; a saved schedule is not proof that its timer is active.</p>
         </fieldset>
       </fieldset>
       <div id="settings-save" class="form-stack" tabindex="-1">
@@ -231,7 +231,7 @@
       <h2 id="settings-data-title">Data location</h2>
       <p id="settings-data-path"></p>
       <p id="settings-relocation-status" role="status"></p>
-      <p class="muted">Data relocation is separate from configuration saving. It copies all application state, including the database, keys, and comicbook-backup vault, on the next startup. Comic libraries stay where they are. The original data is preserved for recovery.</p>
+      <p class="muted">Data relocation is separate from configuration saving. It copies all application state, including the database and keys, on the next startup. Comic libraries stay where they are. The original data is preserved for recovery.</p>
       <button id="open-data-relocation" type="button" disabled>Relocate application data…</button>
     </section>
   </section>
@@ -251,20 +251,18 @@
       <button id="edit-metadata" type="button" hidden>Edit metadata</button>
       <button id="find-metadata" type="button" hidden>Find metadata</button>
       <button id="move-archive" type="button" hidden>Move / reorganize</button>
-      <button id="intake-history" type="button" hidden>Processing status / original backup…</button>
-    </div>
-    <details class="details-advanced"><summary>Page and comicbook tools</summary><div class="actions list-actions">
+      <button id="intake-history" type="button" hidden>Processing status…</button>
       <button id="edit-page-metadata" type="button" hidden>Edit page types and embedded bookmarks</button>
       <button id="organize-pages" type="button" hidden>Organize page order</button>
-      <button id="write-archive" type="button" hidden>Write metadata to comicbook</button>
-    </div></details>
+      <button id="write-archive" type="button" hidden>Write metadata</button>
+      <button id="convert-cbz" type="button" hidden>Convert to CBZ</button>
+    </div>
     <p id="details-status" role="status"></p>
   </dialog>
-  <dialog id="comic-export-dialog" aria-labelledby="comic-export-title" aria-describedby="comic-export-scope">
+  <dialog id="comic-export-dialog" aria-labelledby="comic-export-title">
     <div class="dialog-heading"><h2 id="comic-export-title">Export comics</h2><button id="close-comic-export" type="button" class="quiet">Close</button></div>
     <p id="comic-export-selection"></p>
-    <p id="comic-export-scope">Downloads supported page images in saved page order with shared catalog metadata, including custom values and embedded page metadata. No private reading progress, ratings, bookmarks, lists, or preferences are included. Original files, catalog, and access permissions remain untouched.</p>
-    <p class="muted">One book downloads as a CBZ; multiple books download as a ZIP containing CBZs. Up to 100 books and 1 GiB per download. The complete file is prepared and verified on the server before transfer, then received by your browser before saving. Allow enough free space. Closing this dialog or pressing Escape cancels an active download.</p>
+    <p class="muted">One book downloads as a CBZ; multiple books download as a ZIP containing CBZs. Up to 100 books and 1 GiB per download. Closing this dialog or pressing Escape cancels an active download.</p>
     <progress id="comic-export-progress" aria-label="Comic export transfer" aria-describedby="comic-export-status" hidden></progress>
     <p id="comic-export-status" role="status" aria-live="polite" aria-atomic="true"></p>
     <div class="actions list-actions"><button id="download-comics" type="button" class="primary">Download</button><button id="cancel-comic-export" type="button" hidden>Cancel download</button></div>
@@ -272,14 +270,6 @@
 
   <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">
     <div class="dialog-heading"><h2 id="maintenance-title">Library maintenance</h2><button type="button" data-close="maintenance-dialog" class="quiet">Close</button></div>
-    <details>
-      <summary id="archive-export-title">Comicbook original backups</summary>
-      <p class="muted">Export originals for every book, including books removed from the catalog. The unencrypted ZIP contains complete original comicbooks and manifests, including sensitive private paths. It can be large. Application state is excluded: protect this ZIP separately and keep it with an application-state snapshot.</p>
-      <p class="muted">To recover backups, restore a trusted export's archive-backups directory into the stopped application's state directory alongside its matching state snapshot. Keep directories private (0700) and files private (0600) on Linux. Export does not import or delete anything.</p>
-      <button id="preview-archive-export" type="button">Export all comicbook backups</button>
-      <p id="archive-export-status" role="status"></p>
-      <a id="download-archive-export" hidden target="_blank" rel="noopener">Download all comicbook backups (ZIP; opens a new tab)</a>
-    </details>
     <p id="maintenance-file-note" class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
     <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="missing-issues">Missing issues</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
     <p id="maintenance-status" role="status"></p>
@@ -327,7 +317,7 @@
   <dialog id="metadata-dialog" aria-labelledby="metadata-title">
     <div class="dialog-heading"><h2 id="metadata-title">Edit metadata</h2><button type="button" data-close="metadata-dialog" class="quiet">Close</button></div>
     <p class="muted">Only checked fields and custom values are saved to the library database, never automatically to source comicbooks.</p>
-    <details class="compact-disclosure"><summary>How metadata changes work</summary><p class="muted">To deliberately write saved metadata to a CBZ/ZIP, use Write metadata to comicbook in Book details. Blank means an explicit empty value; Remove resets a field.</p></details>
+    <details class="compact-disclosure"><summary>How metadata changes work</summary><p class="muted">To deliberately write saved metadata to a CBZ/ZIP, use Write metadata in Book details. For supported non-ZIP sources, use Convert to CBZ. Blank means an explicit empty value; Remove resets a field.</p></details>
     <p id="metadata-source" class="muted" hidden></p>
     <div class="metadata-tools form-stack"><label for="metadata-field-search">Find a field</label><input id="metadata-field-search" type="search" placeholder="Title, writer, publisher…"><label class="checkbox"><input id="metadata-changed-only" type="checkbox">Checked fields only</label><p id="metadata-change-summary" role="status"></p></div>
     <form id="metadata-form" class="form-stack">
@@ -341,7 +331,7 @@
   <dialog id="page-order-dialog" aria-labelledby="page-order-title">
     <div class="dialog-heading"><h2 id="page-order-title">Organize page order</h2><button type="button" data-close="page-order-dialog" class="quiet">Close</button></div>
     <p>Change the reading order for everyone without changing the comicbook file, original page numbers, private bookmarks, or reading progress. Drag a thumbnail to another position, or use Move earlier / Move later with a keyboard or touch. Choose Save page order to apply your changes.</p>
-    <p class="muted">If the comicbook file changes, its custom reading order can no longer be used. This includes writing metadata to the file or restoring a backup. Scan externally changed files before organizing pages. Scanning an unchanged file or moving it keeps its saved order.</p>
+    <p class="muted">If the comicbook file changes, its custom reading order can no longer be used. This includes writing metadata to the file. Scan externally changed files before organizing pages. Scanning an unchanged file or moving it keeps its saved order.</p>
     <div class="actions">
       <button id="save-page-order" type="button" class="success" disabled>Save page order</button>
       <button id="reset-page-order" type="button" disabled>Reset to comicbook order (draft)</button>
@@ -353,7 +343,7 @@
   </dialog>
   <dialog id="page-metadata-dialog" aria-labelledby="page-metadata-title">
     <div class="dialog-heading"><h2 id="page-metadata-title">Page types and embedded bookmarks</h2><button type="button" data-close="page-metadata-dialog" class="quiet">Close</button></div>
-    <p class="muted">Shared embedded metadata, not your private bookmarks. Physical page numbers always refer to the original comicbook. Save updates only the catalog; use Write metadata to comicbook in Book details to deliberately preview, write, or restore a source comicbook.</p>
+    <p class="muted">Shared embedded metadata, not your private bookmarks. Physical page numbers refer to the original comicbook. Save updates only the catalog; use Write metadata in Book details to update the file.</p>
     <form id="page-metadata-form" class="form-stack">
       <fieldset id="page-metadata-controls" disabled><legend>Physical page metadata</legend>
         <label>Physical page<select id="page-metadata-page"></select></label>
@@ -375,7 +365,13 @@
     <label for="intake-root">Destination library</label><select id="intake-root" disabled></select>
     <p id="intake-source"></p>
     <p id="intake-outcome" role="status"></p>
-    <div class="actions"><button id="intake-refresh" type="button">Refresh processing status</button><button id="intake-recover" type="button" hidden>Recover interrupted processing</button><a id="intake-original" class="button-link" hidden>Download verified original</a></div>
+    <div class="actions"><button id="intake-refresh" type="button">Refresh processing status</button><button id="intake-recover" type="button" hidden>Recover interrupted processing</button></div>
+    <section id="cbz-replacement" hidden>
+      <p class="notice">Replaces the original after verification. This cannot be undone.</p>
+      <form id="cbz-replacement-form" class="form-stack">
+        <button id="apply-cbz-replacement" type="submit" class="primary" disabled>Convert to CBZ</button>
+      </form>
+    </section>
     <form id="intake-form" class="form-stack">
       <div class="intake-candidate">
         <div id="intake-current-cover" class="intake-cover"></div>
@@ -396,34 +392,14 @@
     <div id="intake-candidates" aria-label="Ranked candidate issues"></div>
   </dialog>
   <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-safety">
-    <div class="dialog-heading"><h2 id="archive-title">Write metadata to comicbook</h2><button type="button" data-close="archive-dialog" class="quiet" aria-label="Close comicbook write and restore">Close</button></div>
+    <div class="dialog-heading"><h2 id="archive-title">Write metadata</h2><button type="button" data-close="archive-dialog" class="quiet" aria-label="Close metadata write">Close</button></div>
     <p id="archive-book"></p>
-    <p id="archive-safety" class="notice">Only CBZ/ZIP sources support write-back and restore; other formats remain read-only. Preview checks the source and saved catalog metadata. Nothing is written until you explicitly confirm and apply. A write keeps a verified complete original comicbook backup first.</p>
-    <p class="muted">Writing may change XML formatting/encoding and ZIP compression, but keeps non-metadata entry contents. Stop other programs from changing this source: portable file APIs cannot atomically coordinate with noncooperating external writers.</p>
-    <p class="muted">Restoring replaces the whole comicbook with the selected original bytes; it does not undo catalog metadata edits. Book identity, private progress, ratings, bookmarks, and list memberships stay unchanged. Comicbook backups are retained separately, are never automatically deleted, and their payloads are excluded from application-state backups.</p>
-    <div class="actions list-actions"><button id="preview-archive" type="button">Preview metadata write</button><button id="refresh-archive-backups" type="button">Refresh backup history</button></div>
+    <p id="archive-safety" class="notice">Writes saved metadata to CBZ/ZIP. This cannot be undone. For other formats, use Convert to CBZ.</p>
+    <p class="muted">Page images and reading progress stay unchanged. Close other programs editing this file.</p>
     <p id="archive-status" role="status"></p>
-    <section id="archive-preview" aria-labelledby="archive-preview-title" tabindex="-1" hidden>
-      <h3 id="archive-preview-title">Review comicbook changes</h3>
-      <p id="archive-preview-summary"></p>
-      <p id="archive-source-hash" class="duplicate-key"></p>
-      <h4>Scalar and custom metadata changes</h4>
-      <p class="muted">Compared with the current source comicbook, not unsaved editor drafts. Quoted values preserve whitespace; absent and empty values are distinct.</p>
-      <div id="archive-changes"></div>
-      <h4>Metadata XML entry changes</h4>
-      <p id="archive-xml-note" class="muted"></p>
-      <div id="archive-entries"></div>
-    </section>
     <form id="archive-form" class="form-stack">
-      <label class="archive-confirm"><input id="confirm-archive" type="checkbox" required disabled><span id="archive-confirm-label">I reviewed the preview and confirm replacing this source comicbook.</span></label>
-      <button id="apply-archive" type="submit" class="success" disabled>Apply reviewed metadata write</button>
+      <button id="apply-archive" type="submit" class="success" disabled>Write metadata</button>
     </form>
-    <section aria-labelledby="archive-backups-title">
-      <h3 id="archive-backups-title">Original comicbook backup history</h3>
-      <p class="muted">Each record identifies the original bytes and the written version. Restore re-verifies the backup and refuses to overwrite a later or externally changed source. Preview a backup before confirming its restore.</p>
-      <p id="archive-backups-status" role="status"></p>
-      <div id="archive-backups" role="region" aria-labelledby="archive-backups-title" tabindex="0"></div>
-    </section>
   </dialog>
   <dialog id="file-operation-dialog" aria-labelledby="file-operation-title">
     <div class="dialog-heading"><h2 id="file-operation-title" tabindex="-1" autofocus>Rename / move comicbook</h2><button type="button" data-close="file-operation-dialog" class="quiet">Close</button></div>

@@ -187,17 +187,13 @@
           nextLookups++;
           return json({ id: sourceLocation === book.location ? "audit-next-issue" : null });
         }
-        if (sourceOrder && path === `${bookPath}/archive-backups`) return json([{
-          id: "audit-backup", createdAt: new Date().toISOString(), originalSize: 1, originalHash: "audit", writtenHash: "audit"
-        }]);
-        if (sourceOrder && (path === `${bookPath}/archive-write/preview` || path === `${bookPath}/archive-backups/audit-backup/preview`))
-          return json({ bookId, operation: path.includes("archive-backups") ? "restore" : "write", backupId: "audit-backup",
+        if (sourceOrder && path === `${bookPath}/archive-write/preview`)
+          return json({ bookId,
             revision: "audit", canApply: true, title: book.title, location: sourceLocation, sourceHash: "audit", changes: [], entries: [] });
-        if (sourceOrder && (path === `${bookPath}/archive-write` || path === `${bookPath}/archive-backups/audit-backup/restore`)) {
+        if (sourceOrder && path === `${bookPath}/archive-write`) {
           sourceWrites++;
           sourceOrder = Array.from({ length: book.pageCount }, (_, page) => page);
-          if (sourceWrites === 2) sourceOrder.reverse();
-          return json({ backupId: "audit-backup", message: "Simulated source replacement." });
+          return json({ bookId });
         }
         if (sourceOrder && path === `${bookPath}/file-operations` && method === "POST") {
           sourceLocation = book.location === "archived" ? "library" : "archived";
@@ -368,21 +364,22 @@
       element("reader-details").click();
       await waitFor(() => !element("write-archive").hidden);
       element("write-archive").click();
-      await waitFor(() => !element("preview-archive").disabled);
-      for (const restoring of [false, true]) {
-        const previous = sourceImage();
-        if (restoring) element("archive-backups").querySelector('[data-backup-id="audit-backup"]').click();
-        else element("preview-archive").click();
-        await waitFor(() => !element("archive-preview").hidden && !element("confirm-archive").disabled);
-        element("confirm-archive").click();
-        element("archive-form").requestSubmit();
-        await waitFor(() => !element("preview-archive").disabled && sourceImage()?.naturalWidth === 600 + sourceWrites && sourceImage() !== previous);
-        assert(sourceWrites === (restoring ? 2 : 1) && element("page-number").value === String(sourceOrder.indexOf(physical) + 1),
-          "Write/restore must reload saved reading order while retaining the physical page.");
-        assert(element("embedded-bookmarks").textContent.includes(`Source revision ${sourceWrites}`),
-          "Write/restore must refresh source-dependent page metadata and embedded bookmarks.");
-        assert(!element("retry-save").hidden, "Source refresh must not clear a failed progress save.");
-      }
+      await waitFor(() => !element("apply-archive").disabled);
+      const previous = sourceImage();
+      holdPath = `${bookPath}/archive-write/preview`;
+      element("archive-form").requestSubmit();
+      await waitFor(() => Boolean(releaseRequest));
+      assert(sourceWrites === 0 && element("apply-archive").disabled, "Direct writing must wait for preflight and prevent duplicate submission.");
+      const writeCancel = new win.Event("cancel", { cancelable: true });
+      element("archive-dialog").dispatchEvent(writeCancel);
+      assert(writeCancel.defaultPrevented, "Escape must not close an active metadata write.");
+      releaseRequest(); releaseRequest = null;
+      await waitFor(() => !element("apply-archive").disabled && sourceImage()?.naturalWidth === 601 && sourceImage() !== previous);
+      assert(sourceWrites === 1 && element("page-number").value === String(sourceOrder.indexOf(physical) + 1),
+        "Writing must reload saved reading order while retaining the physical page.");
+      assert(element("embedded-bookmarks").textContent.includes(`Source revision ${sourceWrites}`),
+        "Writing must refresh source-dependent page metadata and embedded bookmarks.");
+      assert(!element("retry-save").hidden, "Source refresh must not clear a failed progress save.");
       close("archive-dialog");
       close("details-dialog");
       element("close-reader").click();

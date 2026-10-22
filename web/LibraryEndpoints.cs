@@ -24,6 +24,7 @@ public static class LibraryEndpoints
             catch (DirectoryNotFoundException) { return Error(404, "Source comicbook not found."); }
             catch (MetadataRevisionException exception) { return Error(409, exception.Message); }
             catch (ArchiveWriteConflictException exception) { return Error(409, exception.Message); }
+            catch (ArchiveWriteRecoveryException exception) { return Error(409, exception.Message); }
             catch (FileOperationConflictException exception) { return Error(409, exception.Message); }
             catch (ArgumentException) { return Error(400, "Invalid page, bookmark, search, sort, filter, metadata, or file-operation fields."); }
             catch (XmlException) { return Error(400, "Metadata contains invalid XML characters."); }
@@ -135,19 +136,19 @@ public static class LibraryEndpoints
             var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
             return Results.Ok(store.ProcessIntake(id, request, metadata, cancellationToken));
         }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/cbz-replacement/preview", (LibraryStore store, string id, CancellationToken cancellationToken) =>
+            Results.Ok(store.PreviewCbzReplacement(id, cancellationToken)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPost("/books/{id}/cbz-replacement", (LibraryStore store, string id,
+            FileOperationRequest request, CancellationToken cancellationToken) =>
+            Results.Ok(store.ReplaceWithCbz(id, request, cancellationToken)))
+            .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/books/{id}/intake-processing", (LibraryStore store, string id) => Results.Ok(store.GetIntakeProcessing(id)))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapPost("/books/{id}/intake-processing/recover", (LibraryStore store, string id,
             FileOperationRequest request, CancellationToken cancellationToken) =>
             Results.Ok(store.RecoverIntakeProcessing(id, request, cancellationToken)))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapGet("/books/{id}/intake-processing/original", (LibraryStore store, string id, HttpContext context) =>
-        {
-            var original = store.ExportIntakeOriginal(id);
-            context.Response.Headers.CacheControl = "private, no-store";
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            return Results.File(original.Stream, "application/octet-stream", original.Name);
-        }).RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/books/{id}/pages/{page:int}", (LibraryStore store, HttpContext context, string id, int page) =>
         {
             var image = store.GetPage(id, page, context.RequestAborted);
@@ -288,25 +289,6 @@ public static class LibraryEndpoints
         api.MapPost("/books/{id}/archive-write", (LibraryStore store, string id, ArchiveWriteRequest request, CancellationToken cancellationToken) =>
             Results.Ok(store.ApplyArchiveWrite(id, request, cancellationToken)))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapGet("/books/{id}/archive-backups", (LibraryStore store, string id) =>
-            Results.Ok(store.GetArchiveBackups(id)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/archive-backups/{backupId}/preview", (LibraryStore store, string id, string backupId, CancellationToken cancellationToken) =>
-            Results.Ok(store.PreviewArchiveRestore(id, backupId, cancellationToken)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/archive-backups/{backupId}/restore",
-            (LibraryStore store, string id, string backupId, ArchiveWriteRequest request, CancellationToken cancellationToken) =>
-                Results.Ok(store.RestoreArchiveBackup(id, backupId, request, cancellationToken)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapGet("/archive-backups/export/preview", (LibraryStore store) => Results.Ok(store.PreviewArchiveBackupExport()))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapGet("/archive-backups/export", (LibraryStore store, HttpContext context, CancellationToken cancellationToken) =>
-        {
-            context.Response.Headers.CacheControl = "private, no-store";
-            context.Response.Headers.XContentTypeOptions = "nosniff";
-            return Results.File(store.ExportArchiveBackups(cancellationToken), "application/zip",
-                $"panelhaven-archive-backups-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip");
-        }).RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/file-operation-roots", (LibraryStore store) => Results.Ok(store.GetFileOperationRoots()))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapPost("/file-operation-folders", (LibraryStore store, FileOperationFolderRequest request) =>

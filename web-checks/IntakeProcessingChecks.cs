@@ -1,3 +1,4 @@
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -18,6 +19,7 @@ internal static class IntakeProcessingChecks
     public static void Run()
     {
         if (!OperatingSystem.IsLinux()) return;
+        CheckCbzReplacement();
         foreach (var format in new[] { "cbz", "zip", "rar4.cbr", "rar5.cbr", "directories-rar4.cbr", "directories-rar5.cbr" })
         {
             using var fixture = new Fixture(format);
@@ -52,7 +54,7 @@ internal static class IntakeProcessingChecks
             }
             Check(store.GetIntakeProcessing(id).State == "none", "Preflight failures created a pending mutation.");
             var result = store.ProcessIntake(id, new(1, 2, 0, prepared.Revision, true), Metadata);
-            Check(result.State == "completed" && result.OriginalAvailable && !result.CanRecover && result.Converted == format.EndsWith(".cbr"),
+            Check(result.State == "completed" && !result.CanRecover && result.Converted == format.EndsWith(".cbr"),
                 format + ": processing did not complete: " + result.Message);
             Check(!File.Exists(fixture.Source), format + ": original source was not removed after success.");
             var destination = (string)fixture.Sql("SELECT path FROM books WHERE id=$id")!;
@@ -78,18 +80,8 @@ internal static class IntakeProcessingChecks
                         && zip.GetEntry("empty/") is not null && legacy.Contains("legacy-extension"), "Nonmetadata/legacy ZIP contents changed.");
                 if (format.StartsWith("directories", StringComparison.Ordinal)) Check(zip.GetEntry("empty.png/") is not null, "RAR directory entries were dropped.");
             }
-            var download = store.ExportIntakeOriginal(id);
-            using (download.Stream)
-            using (var bytes = new MemoryStream())
-            {
-                download.Stream.CopyTo(bytes);
-                Check(bytes.ToArray().SequenceEqual(fixture.Original) && download.Name == Path.GetFileName(fixture.Source), "Original download was not byte-exact or had wrong format/name.");
-                var restoreRoot = Path.Combine(fixture.Directory, "restored");
-                System.IO.Directory.CreateDirectory(restoreRoot);
-                File.WriteAllBytes(Path.Combine(restoreRoot, download.Name), bytes.ToArray());
-                var restored = new LibraryStore(Path.Combine(fixture.Directory, "restore-state", "library.sqlite"), [restoreRoot]);
-                Check(restored.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Verified original is not readable in its actual format.");
-            }
+            fixture.CheckNoOriginals();
+            Check(result.Message.Contains("undo is unavailable"), "Intake result implied original recovery.");
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0 && (long)fixture.Sql("SELECT count(*) FROM books")! == 1,
                 "Post-processing scan duplicated the original identity.");
             var restarted = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted);
@@ -169,25 +161,37 @@ internal static class IntakeProcessingChecks
         }
 
         // SQLite faults deterministically interrupt real transitions without production test hooks.
-        foreach (var checkpoint in new[] { "backup", "stage", "published", "cleaned" })
+        foreach (var replacement in new[] { false, true })
+        foreach (var checkpoint in new[] { "stage", "published", "cleaned" })
+        foreach (var historical in new[] { false, true })
         {
-            using var fixture = new Fixture("rar5.cbr");
+            using var fixture = new Fixture("rar5.cbr", replacement);
             var condition = checkpoint switch
             {
-                "backup" => "json_extract(NEW.journal,'$.BackupReady')=1",
                 "stage" => "json_extract(NEW.journal,'$.OutputHash') IS NOT NULL",
                 "published" => "json_extract(NEW.journal,'$.Committed')=1",
                 _ => "NEW.state='completed'"
             };
             fixture.Sql($"CREATE TRIGGER interrupt_intake BEFORE UPDATE ON intake_operations WHEN {condition} BEGIN SELECT RAISE(ABORT,'disposable interruption'); END");
-            var preview = fixture.Prepare();
-            var result = fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, preview.Revision, true), Metadata);
+            var preview = replacement ? fixture.Store.PreviewCbzReplacement(fixture.Id) : fixture.Prepare();
+            var result = replacement ? fixture.Store.ReplaceWithCbz(fixture.Id, new(preview.Revision, true))
+                : fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, preview.Revision, true), Metadata);
             Check(result.State == "pending" && result.CanRecover, checkpoint + ": interruption did not retain a recoverable reservation: " + result.Message);
+            fixture.CheckNoOriginals();
             fixture.Sql("DROP TRIGGER interrupt_intake");
+            if (historical)
+                fixture.Sql("""
+                    UPDATE intake_operations SET journal=json_set(journal,
+                        '$.BackupReady',json('true'),'$.BackupOwner',book_id,'$.OriginalName','original.cbr')
+                    WHERE book_id=$id
+                    """);
             var restarted = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted);
+            fixture.CheckNoOriginals();
             Check(restarted.ScanAsync(default).GetAwaiter().GetResult().Added == 0 && (long)fixture.Sql("SELECT count(*) FROM books")! == 1,
                 "Scan imported a reserved output/source after interruption.");
             Reject<FileOperationConflictException>(() => restarted.EditMetadata(fixture.Id, new(new() { ["Title"] = "Unsafe concurrent edit" })));
+            Reject<FileOperationConflictException>(() => restarted.PreviewCbzReplacement(fixture.Id));
+            Reject<FileOperationConflictException>(() => restarted.ReplaceWithCbz(fixture.Id, new(preview.Revision, true)));
             Reject<FileOperationConflictException>(() => restarted.RecoverIntakeProcessing(fixture.Id, new("stale", true)));
             if (checkpoint == "published")
             {
@@ -213,16 +217,34 @@ internal static class IntakeProcessingChecks
             if (checkpoint != "cleaned")
             {
                 Check(File.ReadAllBytes(fixture.Source).SequenceEqual(fixture.Original), "Rollback changed original bytes.");
-                var retry = restarted.PrepareIntake(fixture.Id, new(1, 2, 0), Metadata);
-                Check(restarted.ProcessIntake(fixture.Id, new(1, 2, 0, retry.Revision, true), Metadata).State == "completed", "Explicit fresh retry after rollback failed.");
+                var retry = replacement ? restarted.PreviewCbzReplacement(fixture.Id) : restarted.PrepareIntake(fixture.Id, new(1, 2, 0), Metadata);
+                var retried = replacement ? restarted.ReplaceWithCbz(fixture.Id, new(retry.Revision, true))
+                    : restarted.ProcessIntake(fixture.Id, new(1, 2, 0, retry.Revision, true), Metadata);
+                Check(retried.State == "completed", "Explicit fresh retry after rollback failed.");
+                fixture.CheckNoOriginals();
             }
         }
 
         // Reconstruct the exact committed-before-cleanup window, with a verified source inode and timestamp.
-        using (var fixture = new Fixture("rar4.cbr"))
+        foreach (var replacement in new[] { false, true })
+        foreach (var historical in new[] { false, true })
+        using (var fixture = new Fixture("rar4.cbr", replacement))
         {
-            var preview = fixture.Prepare();
-            Check(fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, preview.Revision, true), Metadata).State == "completed", "Commit fixture failed.");
+            var preview = replacement ? fixture.Store.PreviewCbzReplacement(fixture.Id) : fixture.Prepare();
+            var processed = replacement ? fixture.Store.ReplaceWithCbz(fixture.Id, new(preview.Revision, true))
+                : fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, preview.Revision, true), Metadata);
+            Check(processed.State == "completed", "Commit fixture failed.");
+            if (historical)
+            {
+                fixture.Sql("""
+                    UPDATE intake_operations SET journal=json_set(journal,
+                        '$.BackupReady',json('true'),'$.BackupOwner',book_id,'$.OriginalName','original.cbr')
+                    WHERE book_id=$id
+                    """);
+                var migrated = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted);
+                Check(migrated.GetIntakeProcessing(fixture.Id).State == "completed", "Legacy completed journal required a deleted original.");
+                fixture.CheckNoOriginals();
+            }
             var journal = JsonNode.Parse((string)fixture.Sql("SELECT journal FROM intake_operations WHERE book_id=$id")!)!;
             File.WriteAllBytes(fixture.Source, fixture.Original);
             File.SetUnixFileMode(fixture.Source, (UnixFileMode)journal["Security"]!["Mode"]!.GetValue<int>());
@@ -230,32 +252,137 @@ internal static class IntakeProcessingChecks
             journal["SourceIdentity"] = (string)typeof(LibraryStore).GetMethod("FileIdentity", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [fixture.Source])!;
             journal["State"] = "pending";
             fixture.Sql("UPDATE intake_operations SET state='pending',journal=$value WHERE book_id=$id", journal.ToJsonString());
-            var result = fixture.Store.GetIntakeProcessing(fixture.Id);
-            Check(result.CanRecover, "Committed cleanup window was not recoverable.");
-            result = fixture.Store.RecoverIntakeProcessing(fixture.Id, new(result.Revision, true));
-            Check(result.State == "completed" && !File.Exists(fixture.Source) && result.OriginalAvailable, "Committed cleanup did not safely remove verified source.");
+            var restarted = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted);
+            var result = restarted.GetIntakeProcessing(fixture.Id);
+            Check(result.CanRecover, "Committed cleanup was not recoverable after restart.");
+            result = restarted.RecoverIntakeProcessing(fixture.Id, new(result.Revision, true));
+            Check(result.State == "completed" && !File.Exists(fixture.Source),
+                "Committed cleanup did not safely remove verified source.");
+            fixture.CheckNoOriginals();
         }
-        using (var fixture = new Fixture("cbz"))
+        foreach (var replacement in new[] { false, true })
+        using (var fixture = new Fixture(replacement ? "plain.cbt" : "cbz", replacement))
         {
-            var prepared = fixture.Prepare();
-            Check(fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, prepared.Revision, true), Metadata).State == "completed", "Relocation fixture processing failed.");
+            var prepared = replacement ? fixture.Store.PreviewCbzReplacement(fixture.Id) : fixture.Prepare();
+            var processed = replacement ? fixture.Store.ReplaceWithCbz(fixture.Id, new(prepared.Revision, true))
+                : fixture.Store.ProcessIntake(fixture.Id, new(1, 2, 0, prepared.Revision, true), Metadata);
+            Check(processed.State == "completed", "Relocation fixture processing failed.");
             var moved = Path.Combine(fixture.Directory, "relocated-library");
             Directory.Move(fixture.Library, moved);
             typeof(LibraryStore).GetMethod("Relocate", BindingFlags.NonPublic | BindingFlags.Static)!
                 .Invoke(null, [fixture.Database, new[] { moved, fixture.Unsorted }, fixture.Library, moved, true]);
             var relocated = new LibraryStore(fixture.Database, [moved], unsortedPath: fixture.Unsorted);
             Check(relocated.GetIntakeProcessing(fixture.Id).State == "completed", "Root relocation lost processing history.");
-            var original = relocated.ExportIntakeOriginal(fixture.Id);
-            using (original.Stream)
-            using (var bytes = new MemoryStream())
-            {
-                original.Stream.CopyTo(bytes);
-                Check(bytes.ToArray().SequenceEqual(fixture.Original), "Root relocation orphaned the original backup.");
-            }
         }
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         foreach (var json in new[] { "{}", "{\"issueId\":1,\"volumeId\":2,\"rootIndex\":\"0\"}", "{\"issueId\":1,\"volumeId\":2,\"rootIndex\":0,\"path\":\"/private\"}" })
             Reject<JsonException>(() => JsonSerializer.Deserialize<IntakePrepareRequest>(json, options));
+    }
+
+    private static void CheckCbzReplacement()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        foreach (var format in new[] { "rar4.cbr", "rar5.cbr", "directories-rar4.cbr", "directories-rar5.cbr",
+            "nonsolid.cb7", "solid.cb7", "lzma2.cb7", "directories.cb7", "plain.cbt", "directories.cbt", "payload.cbt",
+            "rar5.rar", "nonsolid.7z", "plain.tar" })
+        {
+            using var fixture = new Fixture(format, true);
+            var store = fixture.Store;
+            var id = fixture.Id;
+            var page0 = store.GetPage(id, 0).Bytes;
+            var page1 = store.GetPage(id, 1).Bytes;
+            store.SaveProgress("owner", id, new(1, true));
+            store.SaveRating("owner", id, new(5));
+            store.SaveBookmark("owner", id, 0, new("Keep bookmark"));
+            var list = store.CreateList("owner", new("Keep list", "manual", "all", []));
+            store.AddListBooks("owner", list.Id, [id]);
+            store.SavePageOrder(id, new(store.GetPageOrder(id).Revision, [1, 0]));
+            store.EditMetadata(id, new(new() { ["Title"] = "Saved title", ["Genre"] = "Saved genre" }, new() { ["Custom"] = "Saved custom" }));
+            var pages = new[] { new PageMetadataRow(0, "FrontCover", "Saved annotation") };
+            var pagePreview = store.PreviewPageMetadata(id, new(store.GetPageMetadata(id).Revision, pages));
+            store.EditPageMetadata(id, new(pagePreview.Revision, pages));
+            var catalogXml = fixture.Sql("SELECT info_xml || COALESCE(book_xml,'') FROM books WHERE id=$id");
+            var preview = store.PreviewCbzReplacement(id);
+            var destination = Path.ChangeExtension(fixture.Source, ".cbz");
+            Check(preview.Converted && preview.Destination == "Library 1/nested folder/original.cbz"
+                && !File.Exists(destination) && File.ReadAllBytes(fixture.Source).SequenceEqual(fixture.Original), "Replacement preview changed files or filename.");
+            Reject<FileOperationConflictException>(() => store.ReplaceWithCbz(id, new("stale", true)));
+            Reject<ArgumentException>(() => store.ReplaceWithCbz(id, new(preview.Revision, false)));
+            using (var canceled = new CancellationTokenSource())
+            {
+                canceled.Cancel();
+                Reject<OperationCanceledException>(() => store.ReplaceWithCbz(id, new(preview.Revision, true), canceled.Token));
+            }
+            var mode = File.GetUnixFileMode(fixture.Source);
+            var result = store.ReplaceWithCbz(id, new(preview.Revision, true));
+            Check(result.State == "completed" && result.Converted && !File.Exists(fixture.Source)
+                && File.Exists(destination) && File.GetUnixFileMode(destination) == mode, format + ": conversion failed: " + result.Message);
+            Check((string)fixture.Sql("SELECT path FROM books WHERE id=$id")! == destination
+                && Equals(catalogXml, fixture.Sql("SELECT info_xml || COALESCE(book_xml,'') FROM books WHERE id=$id")),
+                "Replacement changed catalog metadata or destination.");
+            var current = store.GetBook("owner", id);
+            Check(current.Id == id && current.Completed && current.CurrentPage == 1 && current.PersonalRating == 5
+                && store.GetBookmarks("owner", id).Single().Name == "Keep bookmark" && store.GetList("owner", list.Id).BookIds!.Single() == id
+                && !store.GetBook("other", id).Started && store.GetBookmarks("other", id).Count == 0, "Replacement lost private state.");
+            Check(store.GetPageOrder(id).Pages.SequenceEqual([1, 0]) && store.GetPageOrder(id).Custom
+                && store.GetPage(id, 0).Bytes.SequenceEqual(page0) && store.GetPage(id, 1).Bytes.SequenceEqual(page1)
+                && store.GetPageMetadata(id).Pages[0] == pages[0], "Replacement changed physical pages or page metadata/order.");
+            using (var zip = ZipFile.OpenRead(destination))
+            {
+                var info = Read(zip, "ComicInfo.xml");
+                var legacy = Read(zip, "ComicBook.xml");
+                Check(info.Contains("Saved title") && info.Contains("Saved genre") && info.Contains("keep=\"yes\"")
+                    && info.Contains("Saved annotation") && legacy.Contains("Custom=Saved custom"), "Replacement dropped saved or unknown metadata.");
+                if (format.StartsWith("directories", StringComparison.Ordinal))
+                    Check(zip.GetEntry("empty.png/") is not null, "Replacement dropped empty directories.");
+                if (format == "payload.cbt")
+                    Check(Read(zip, "notes.txt") == "nonmetadata payload" && legacy.Contains("legacy-extension"), "Replacement dropped unknown payload/legacy XML.");
+            }
+            fixture.CheckNoOriginals();
+            Check(result.Message.Contains("undo is unavailable"), "Conversion result implied original recovery.");
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0 && (long)fixture.Sql("SELECT count(*) FROM books")! == 1,
+                "Replacement scan changed identity.");
+            Reject<ArgumentException>(() => store.PreviewCbzReplacement(id));
+        }
+        using (var fixture = new Fixture("rar5.cbr", true))
+        {
+            var store = fixture.Store;
+            var id = fixture.Id;
+            var preview = store.PreviewCbzReplacement(id);
+            var destination = Path.ChangeExtension(fixture.Source, ".cbz");
+            File.WriteAllText(destination, "foreign collision");
+            Reject<FileOperationConflictException>(() => store.PreviewCbzReplacement(id));
+            Reject<FileOperationConflictException>(() => store.ReplaceWithCbz(id, new(preview.Revision, true)));
+            Check(File.ReadAllText(destination) == "foreign collision", "Replacement overwrote a collision.");
+            File.Delete(destination);
+            Directory.CreateDirectory(destination);
+            Reject<FileOperationConflictException>(() => store.PreviewCbzReplacement(id));
+            Directory.Delete(destination);
+            store.EditMetadata(id, new(new() { ["Title"] = "Changed" }));
+            Reject<FileOperationConflictException>(() => store.ReplaceWithCbz(id, new(preview.Revision, true)));
+            preview = store.PreviewCbzReplacement(id);
+            var mode = File.GetUnixFileMode(fixture.Source);
+            File.SetUnixFileMode(fixture.Source, UnixFileMode.UserRead);
+            Reject<UnauthorizedAccessException>(() => store.PreviewCbzReplacement(id));
+            File.SetUnixFileMode(fixture.Source, mode);
+            File.Move(fixture.Source, fixture.Source + ".saved");
+            File.CreateSymbolicLink(fixture.Source, fixture.Source + ".saved");
+            Reject<UnauthorizedAccessException>(() => store.PreviewCbzReplacement(id));
+            File.Delete(fixture.Source);
+            File.Move(fixture.Source + ".saved", fixture.Source);
+            Check(SetXattr(fixture.Source, "user.panelhaven-check", [1], 1, 0) == 0, "Cannot set disposable source xattr.");
+            Reject<UnauthorizedAccessException>(() => store.PreviewCbzReplacement(id));
+            Check(RemoveXattr(fixture.Source, "user.panelhaven-check") == 0, "Cannot remove disposable source xattr.");
+            File.SetLastWriteTimeUtc(fixture.Source, File.GetLastWriteTimeUtc(fixture.Source).AddSeconds(1));
+            Reject<FileOperationConflictException>(() => store.ReplaceWithCbz(id, new(preview.Revision, true)));
+            Check(store.GetIntakeProcessing(id).State == "none" && File.ReadAllBytes(fixture.Source).SequenceEqual(fixture.Original),
+                "Replacement preflight failures mutated files or reserved the book.");
+        }
+        foreach (var format in new[] { "cbz", "zip" })
+        {
+            using var fixture = new Fixture(format, true);
+            Reject<ArgumentException>(() => fixture.Store.PreviewCbzReplacement(fixture.Id));
+        }
     }
 
     private static string Read(ZipArchive zip, string name)
@@ -286,13 +413,32 @@ internal static class IntakeProcessingChecks
         public byte[] Original { get; }
         public LibraryStore Store { get; }
         public string Id { get; }
-        public Fixture(string format)
+        public Fixture(string format, bool replacement = false)
         {
             System.IO.Directory.CreateDirectory(Library);
             System.IO.Directory.CreateDirectory(Unsorted);
-            Source = Path.Combine(Unsorted, "original." + (format is "cbz" or "zip" ? format : "cbr"));
+            var parent = replacement ? Path.Combine(Library, "nested folder") : Unsorted;
+            System.IO.Directory.CreateDirectory(parent);
+            Source = Path.Combine(parent, "original." + (format.Contains('.') ? Path.GetExtension(format)[1..] : format));
             var fixtures = Path.Combine(AppContext.BaseDirectory, "fixtures");
-            if (format is not ("cbz" or "zip")) File.Copy(Path.Combine(fixtures, format), Source);
+            if (format == "payload.cbt")
+            {
+                using var tar = new TarWriter(File.Create(Source));
+                foreach (var name in new[] { "page2.gif", "page10.png", "ComicInfo.xml" })
+                {
+                    using var input = File.OpenRead(Path.Combine(fixtures, "source", name));
+                    tar.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, name) { DataStream = input });
+                }
+                foreach (var (name, text) in new[] {
+                    ("ComicBook.xml", "<ComicBook marker='legacy-extension'><Unknown>retained</Unknown></ComicBook>"),
+                    ("notes.txt", "nonmetadata payload") })
+                {
+                    using var input = new MemoryStream(Encoding.UTF8.GetBytes(text));
+                    tar.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, name) { DataStream = input });
+                }
+            }
+            else if (format is not ("cbz" or "zip"))
+                File.Copy(Path.Combine(fixtures, format switch { "rar5.rar" => "rar5.cbr", "nonsolid.7z" => "nonsolid.cb7", "plain.tar" => "plain.cbt", _ => format }), Source);
             else
             {
                 using var zip = ZipFile.Open(Source, ZipArchiveMode.Create);
@@ -318,6 +464,14 @@ internal static class IntakeProcessingChecks
             Id = (string)Sql("SELECT id FROM books")!;
         }
         public IntakeProcessingPreview Prepare() => Store.PrepareIntake(Id, new(1, 2, 0), Metadata);
+        public void CheckNoOriginals()
+        {
+            Check(!System.IO.Directory.Exists(Path.Combine(Directory, "state", "intake-originals")), "Processing created an original backup directory.");
+            Check((long)Sql("""
+                SELECT count(*) FROM intake_operations WHERE json_type(journal,'$.BackupReady') IS NOT NULL
+                    OR json_type(journal,'$.BackupOwner') IS NOT NULL OR json_type(journal,'$.OriginalName') IS NOT NULL
+                """)! == 0, "Processing retained obsolete backup journal fields.");
+        }
         public object? Sql(string sql, object? value = null)
         {
             using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Database }.ToString());

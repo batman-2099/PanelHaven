@@ -29,10 +29,11 @@ public static class ArchiveWriteChecks
             command.CommandText = "DROP TRIGGER block_archive_commit;";
             command.ExecuteNonQuery();
         }
-        // Recovery is explicit verified-backup restore, not automatic startup rollback.
-        var backup = store.GetArchiveBackups(id).Single();
-        var restore = store.PreviewArchiveRestore(id, backup.Id);
-        store.RestoreArchiveBackup(id, backup.Id, new(restore.Revision, true));
+        if (store.GetBook("owner", id).Availability != "unavailable")
+            throw new Exception("Restart exposed the interrupted replacement as available.");
+        try { store.GetPage(id, 0); throw new Exception("Restart served an unreconciled replacement."); }
+        catch (InvalidOperationException) { }
+        store.ScanAsync(default).GetAwaiter().GetResult();
     }
 
     private static void CrashRecovery()
@@ -90,7 +91,7 @@ public static class ArchiveWriteChecks
                 db.Open();
                 using var command = db.CreateCommand();
                 // UNION ALL of a constant never completes and uses constant memory. This blocks only
-                // the isolated fixture's post-replace UPDATE; it cannot throw and exercise catch rollback.
+                // the isolated fixture's post-replace UPDATE, before catalog commit.
                 command.CommandText = """
                     CREATE TRIGGER block_archive_commit BEFORE UPDATE OF content_hash ON books BEGIN
                         SELECT count(*) FROM (
@@ -115,7 +116,10 @@ public static class ArchiveWriteChecks
                 finally { Stop(child); }
                 Check(child.ExitCode != 0, "Crash fixture exited normally instead of being killed.");
             }
-            Check(!File.ReadAllBytes(path).SequenceEqual(original), "Killed writer ran managed rollback.");
+            var published = File.ReadAllBytes(path);
+            Check(!published.SequenceEqual(original), "Killed writer removed the published replacement.");
+            Check(!Directory.Exists(Path.Combine(directory, "state", "archive-backups"))
+                && !Directory.EnumerateFiles(root, ".panelhaven-*.tmp").Any(), "Killed writer retained a hidden original or staging copy.");
             using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString()))
             {
                 db.Open();
@@ -126,6 +130,8 @@ public static class ArchiveWriteChecks
                 command.CommandText = "SELECT pages_json FROM page_orders;";
                 Check(JsonSerializer.Deserialize<int[]>((string)command.ExecuteScalar()!)!.SequenceEqual(order.Pages),
                     "Killed writer committed a page-order reset.");
+                command.CommandText = "SELECT availability FROM books;";
+                Check((string)command.ExecuteScalar()! == "unavailable", "Killed writer lost its durable serving guard.");
             }
             using (var child = Start("recover"))
             {
@@ -136,7 +142,7 @@ public static class ArchiveWriteChecks
                 }
                 finally { Stop(child); }
             }
-            Check(File.ReadAllBytes(path).SequenceEqual(original), "Restart recovery did not restore byte-exact original.");
+            Check(File.ReadAllBytes(path).SequenceEqual(published), "Restart recovery changed the verified published bytes.");
             store = new LibraryStore(database, [root]);
             store.ScanAsync(default).GetAwaiter().GetResult();
             var book = store.ListBooks("owner", null).Items.Single();
@@ -146,10 +152,10 @@ public static class ArchiveWriteChecks
                 && !store.GetBook("other", id).Started && store.GetBookmarks("other", id).Count == 0,
                 "Crash recovery lost identity or private/account-scoped data.");
             Check(store.GetMetadata(id).Fields["Title"] == "Edited"
-                && store.GetPageOrder(id).Revision == order.Revision
-                && store.GetPageOrder(id).Pages.SequenceEqual(order.Pages)
+                && store.GetPageOrder(id).Revision != order.Revision
+                && !store.GetPageOrder(id).Custom
                 && store.GetPage(id, 2).Bytes.SequenceEqual(png),
-                "Restore before rescan lost catalog edits, custom physical order or page payload.");
+                "Rescan lost catalog edits or page payload, or retained stale source-bound order.");
         }
         finally
         {
@@ -164,10 +170,10 @@ public static class ArchiveWriteChecks
         {
             if (!condition) throw new Exception(message);
         }
-        static void Reject<T>(Action action) where T : Exception
+        static T Reject<T>(Action action) where T : Exception
         {
             try { action(); }
-            catch (T) { return; }
+            catch (T exception) { return exception; }
             throw new Exception($"Expected {typeof(T).Name}.");
         }
         var directory = Path.Combine(Path.GetTempPath(), "panelhaven-archive-write-" + Guid.NewGuid().ToString("N"));
@@ -204,8 +210,8 @@ public static class ArchiveWriteChecks
             var id = store.ListBooks("owner", null).Items.Single().Id;
             var empty = store.PreviewArchiveWrite(id);
             Check(!empty.CanApply && empty.Entries.Count == 0 && empty.Changes.Count == 0, "Unedited archive was not a no-op.");
-            Check(store.ApplyArchiveWrite(id, new(empty.Revision, true)).BackupId is null
-                && store.GetArchiveBackups(id).Count == 0 && File.ReadAllBytes(path).SequenceEqual(original), "No-op wrote or backed up the source.");
+            Check(store.ApplyArchiveWrite(id, new(empty.Revision, true)).BookId == id
+                && File.ReadAllBytes(path).SequenceEqual(original), "No-op changed the source or comicbook identity.");
             store.SaveProgress("owner", id, new(0, true));
             store.SaveRating("owner", id, new(4));
             store.SaveBookmark("owner", id, 0, new("Personal"));
@@ -237,7 +243,8 @@ public static class ArchiveWriteChecks
             Reject<ArchiveWriteConflictException>(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
             preview = store.PreviewArchiveWrite(id);
             var result = store.ApplyArchiveWrite(id, new(preview.Revision, true));
-            Check(result.BackupId is not null && !result.Restored, "Write did not retain its backup.");
+            Check(result.BookId == id && !Directory.Exists(Path.Combine(directory, "archive-backups"))
+                && !Directory.EnumerateFiles(directory, ".panelhaven-*.tmp").Any(), "Write retained an original backup or staging copy.");
             using (var archive = ZipFile.OpenRead(path))
             {
                 Check(archive.Comment == "Archive comment"
@@ -264,23 +271,10 @@ public static class ArchiveWriteChecks
             CheckPrivate();
             Reject<ArchiveWriteConflictException>(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
             Check(!store.PreviewArchiveWrite(id).CanApply, "Applied write was not subsequently a no-op.");
-            var restore = store.PreviewArchiveRestore(id, result.BackupId!);
-            var backupFile = Path.Combine(directory, "archive-backups", id, result.BackupId!, "original.bin");
-            Check(File.ReadAllBytes(backupFile).SequenceEqual(original), "Backup was not the complete original archive.");
-            File.WriteAllBytes(backupFile, original.Select((value, index) => index == 40 ? (byte)(value ^ 1) : value).ToArray());
-            Reject<InvalidDataException>(() => store.RestoreArchiveBackup(id, result.BackupId!, new(restore.Revision, true)));
-            File.WriteAllBytes(backupFile, original);
-            File.Move(backupFile, backupFile + ".missing");
-            Reject<FileNotFoundException>(() => store.PreviewArchiveRestore(id, result.BackupId!));
-            File.Move(backupFile + ".missing", backupFile);
-            var restored = store.RestoreArchiveBackup(id, result.BackupId!, new(restore.Revision, true));
-            Check(restored.Restored && File.ReadAllBytes(path).SequenceEqual(original)
-                && store.GetMetadata(id).Fields["Title"] == "Edited" && store.GetMetadata(id).Custom["Keep"] == "new", "Undo failed exact bytes or discarded catalog edits.");
-            CheckPrivate();
-            Reject<ArchiveWriteConflictException>(() => store.RestoreArchiveBackup(id, result.BackupId!, new(restore.Revision, true)));
+            var written = File.ReadAllBytes(path);
             if (!OperatingSystem.IsWindows()) Check(File.GetUnixFileMode(path) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead), "Source permissions changed.");
 
-            // Real database failure after replacement exercises rollback, rather than a production-only test hook.
+            // Real SQLite failures exercise both sides of atomic publication without production test hooks.
             using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString());
             db.Open();
             void Sql(string text)
@@ -289,17 +283,46 @@ public static class ArchiveWriteChecks
                 command.CommandText = text;
                 command.ExecuteNonQuery();
             }
+            store.EditMetadata(id, new(new() { ["Title"] = "Recovery write" }));
             preview = store.PreviewArchiveWrite(id);
             var stamp = File.GetLastWriteTimeUtc(path);
-            Sql("CREATE TRIGGER reject_archive_refresh BEFORE UPDATE OF content_hash ON books BEGIN SELECT RAISE(ABORT,'Injected catalog failure'); END;");
+            Sql("CREATE TRIGGER reject_archive_reservation BEFORE UPDATE OF availability ON books BEGIN SELECT RAISE(ABORT,'Injected reservation failure'); END;");
             Reject<SqliteException>(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
+            Sql("DROP TRIGGER reject_archive_reservation;");
+            Check(File.ReadAllBytes(path).SequenceEqual(written) && File.GetLastWriteTimeUtc(path) == stamp
+                && store.GetBook("owner", id).Availability == "available"
+                && !Directory.EnumerateFiles(directory, ".panelhaven-*.tmp").Any(), "Pre-publication failure changed source or leaked staging.");
+            Sql("CREATE TRIGGER reject_archive_refresh BEFORE UPDATE OF content_hash ON books BEGIN SELECT RAISE(ABORT,'Injected catalog failure'); END;");
+            var failure = Reject<ArchiveWriteRecoveryException>(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
+            var published = File.ReadAllBytes(path);
+            Check(failure.InnerException is SqliteException && failure.Message.Contains("cannot undo")
+                && !published.SequenceEqual(written) && store.GetBook("owner", id).Availability == "unavailable",
+                "Post-publication failure hid its cause, discarded verified output, or exposed stale catalog data.");
             Sql("DROP TRIGGER reject_archive_refresh;");
-            Check(File.ReadAllBytes(path).SequenceEqual(original) && File.GetLastWriteTimeUtc(path) == stamp
-                && store.GetArchiveBackups(id).Count == 3, "Catalog failure lost original/version or durable recovery history.");
+            // Equal size/timestamp is not evidence that an interrupted publication was cataloged.
+            using (var matchVersion = db.CreateCommand())
+            {
+                matchVersion.CommandText = "UPDATE books SET file_size=$size,modified_ticks=$ticks WHERE id=$id";
+                matchVersion.Parameters.AddWithValue("$size", new FileInfo(path).Length);
+                matchVersion.Parameters.AddWithValue("$ticks", File.GetLastWriteTimeUtc(path).Ticks);
+                matchVersion.Parameters.AddWithValue("$id", id);
+                matchVersion.ExecuteNonQuery();
+            }
+            store = new LibraryStore(database, [directory]);
+            Reject<InvalidOperationException>(() => store.GetPage(id, 0));
+            Reject<InvalidOperationException>(() => store.GetCoverVersion(id));
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Updated == 1
+                && File.ReadAllBytes(path).SequenceEqual(published)
+                && !store.PreviewArchiveWrite(id).CanApply, "Rescan did not reconcile the retained replacement.");
             CheckPrivate();
+            Check(!Directory.Exists(Path.Combine(directory, "archive-backups"))
+                && !Directory.EnumerateFiles(directory, ".panelhaven-*.tmp").Any(),
+                "Write failure created an original backup or leaked staging.");
+            stamp = File.GetLastWriteTimeUtc(path);
 
+            store.EditMetadata(id, new(new() { ["Title"] = "Stale guarded write" }));
             preview = store.PreviewArchiveWrite(id);
-            var altered = original.ToArray();
+            var altered = published.ToArray();
             var comment = Encoding.UTF8.GetBytes("Archive comment");
             var offset = altered.AsSpan().IndexOf(comment);
             Check(offset >= 0, "Fixture has no archive comment.");
@@ -308,7 +331,7 @@ public static class ArchiveWriteChecks
             File.SetLastWriteTimeUtc(path, stamp);
             Reject<ArchiveWriteConflictException>(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
             Check(File.ReadAllBytes(path).SequenceEqual(altered), "Stale write overwrote a same-size/mtime external edit.");
-            File.WriteAllBytes(path, original);
+            File.WriteAllBytes(path, published);
             File.SetLastWriteTimeUtc(path, stamp);
             if (!OperatingSystem.IsWindows())
             {
@@ -322,7 +345,7 @@ public static class ArchiveWriteChecks
                 File.Delete(path);
                 File.Move(link, path);
             }
-            Check(store.ScanAsync(default).GetAwaiter().GetResult().Scanned == 1, "Private archive backups entered scanner imports.");
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Scanned == 1, "Written comicbook did not remain scannable.");
             var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
             Reject<JsonException>(() => JsonSerializer.Deserialize<ArchiveWriteRequest>("{\"confirmed\":true}", json));
             Reject<JsonException>(() => JsonSerializer.Deserialize<ArchiveWriteRequest>("{\"expectedRevision\":\"x\"}", json));
@@ -344,6 +367,7 @@ public static class ArchiveWriteChecks
                     else input.CopyTo(output);
                 }
             File.Move(external, path, true);
+            store.EditMetadata(id, new(new() { ["Title"] = "External extension write" }));
             preview = store.PreviewArchiveWrite(id);
             Check(preview.Entries.Single(entry => entry.Name == "comicinfo.XML").After!.Contains(">external</Nested>"),
                 "Preview would overwrite source-only unknown XML with stale catalog XML.");
@@ -372,6 +396,9 @@ public static class ArchiveWriteChecks
             Check(fresh.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Written archive did not re-import.");
             Check(!fresh.GetMetadata(fresh.ListBooks("owner", null).Items.Single().Id).Fields.ContainsKey("Title"),
                 "Re-import resurrected a scalar removed by write-back.");
+            Check(!Directory.Exists(Path.Combine(directory, "archive-backups"))
+                && !Directory.EnumerateFiles(directory, ".panelhaven-*.tmp").Any(),
+                "Later metadata writes created an original backup or leaked staging.");
         }
         finally
         {

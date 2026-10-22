@@ -137,7 +137,6 @@ public sealed partial class LibraryStore
         }
         if (count > MaxEntries - metadata.Count) throw new InvalidDataException("Export requires room for pages and shared metadata.");
         var root = roots.FirstOrDefault(value => IsContained(value, path)) ?? throw new UnauthorizedAccessException();
-        if (IsContained(archiveBackupRoot, path)) throw new UnauthorizedAccessException();
         if (ReadSourceVersion(root, path) != (size, ticks)) throw new InvalidOperationException("Source comicbook changed.");
         using var source = OpenArchive(root, path);
         if (ArchiveHash(source, cancellationToken) != hash) throw new InvalidOperationException("Source comicbook changed.");
@@ -257,15 +256,14 @@ public sealed partial class LibraryStore
 
     private FileStream NewComicExport(CancellationToken cancellationToken)
     {
-        var directory = Path.GetDirectoryName(archiveBackupRoot)!;
-        EnsureSafePath(directory, directory);
+        EnsureSafePath(stateDirectory, stateDirectory);
         var options = new FileStreamOptions
         {
             Mode = FileMode.CreateNew, Access = FileAccess.ReadWrite, Share = FileShare.None,
             Options = FileOptions.DeleteOnClose | FileOptions.SequentialScan
         };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        return new LimitedComicExportStream(Path.Combine(directory, ".panelhaven-comic-export-" + Guid.NewGuid().ToString("N") + ".tmp"), options, cancellationToken);
+        return new LimitedComicExportStream(Path.Combine(stateDirectory, ".panelhaven-comic-export-" + Guid.NewGuid().ToString("N") + ".tmp"), options, cancellationToken);
     }
 
     // Enforce the final download ceiling on every ZIP write, including central-directory overhead.

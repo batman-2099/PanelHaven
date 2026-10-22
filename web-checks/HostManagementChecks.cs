@@ -44,9 +44,9 @@ public static class HostManagementChecks
             var accounts = new Accounts(database);
             var owner = accounts.Create("relocation-reader", "relocation-check-password", "reader");
             var protectedValue = Protector(source).Protect("durable-cookie-secret");
-            var vault = Path.Combine(source, "archive-backups", "book", "version");
-            Directory.CreateDirectory(vault);
-            File.WriteAllText(Path.Combine(vault, "original.cbz"), "opaque original archive");
+            var durableDirectory = Path.Combine(source, "durable", "nested");
+            Directory.CreateDirectory(durableDirectory);
+            File.WriteAllText(Path.Combine(durableDirectory, "state.bin"), "opaque durable state");
             File.WriteAllText(Path.Combine(source, "durable-state"), "all state, not only the backup scope");
             var options = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -72,11 +72,11 @@ public static class HostManagementChecks
             DataRelocation.Execute(store);
             Check(store.Document.Settings.DataPath == destination && store.Document.PendingDataPath is null
                 && store.Document.RelocationError is null, "Verified relocation was not committed.");
-            Check(Directory.Exists(source) && File.ReadAllText(Path.Combine(vault, "original.cbz")) == "opaque original archive",
+            Check(Directory.Exists(source) && File.ReadAllText(Path.Combine(durableDirectory, "state.bin")) == "opaque durable state",
                 "Relocation deleted or changed the recovery source.");
-            Check(File.ReadAllText(Path.Combine(destination, "archive-backups", "book", "version", "original.cbz")) == "opaque original archive"
+            Check(File.ReadAllText(Path.Combine(destination, "durable", "nested", "state.bin")) == "opaque durable state"
                 && File.ReadAllText(Path.Combine(destination, "durable-state")) == "all state, not only the backup scope",
-                "Relocation omitted durable state or the original-archive vault.");
+                "Relocation omitted nested durable state.");
             Check(Protector(destination).Unprotect(protectedValue) == "durable-cookie-secret", "Relocation lost key material.");
             Check(new Accounts(Path.Combine(destination, "panelhaven.sqlite")).Authenticate("relocation-reader", "relocation-check-password")?.Id == owner.Id,
                 "Relocated database failed account recovery.");

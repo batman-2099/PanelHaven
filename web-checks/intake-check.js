@@ -1,13 +1,13 @@
 // Run in the browser console, signed in as admin on an idle DISPOSABLE server.
 // Configure a writable Library root, Unsorted, and a real server-side Comic Vine key.
-// Scan a disposable CBZ/ZIP or real CBR fixture; keep its original SHA-256 separately.
+// Scan a disposable CBZ/ZIP or real CBR fixture with no earlier processing operation.
 // Put the fixture on the current flat-books page. Use a fresh fixture for each run.
 // window.panelHavenIntakeCheck = { disposable: true, bookId: "fixture-id", destinationRoot: 0,
-//   issueId: 1109530, volumeId: 164287, originalSha256: "64 hex digits", converted: false };
+//   issueId: 1109530, volumeId: 164287, converted: false };
 // Then paste this file. It saves/embeds real provider metadata, creates directories,
-// renames/moves the fixture and, for CBR, converts and deletes the backed-up original.
+// renames/moves the fixture and, for CBR, converts and permanently deletes the original.
 // Matching responses alone simulate provider failure/empty/tied results. Preparation,
-// processing, stale-write refusal, status and original download all use the REAL server.
+// processing, stale-write refusal and status use the REAL server.
 // A real concurrent catalog edit and a lost successful response are injected below.
 // Discard the entire disposable server state and roots afterward. Never use live sources.
 (async () => {
@@ -15,8 +15,8 @@
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const config = window.panelHavenIntakeCheck;
   assert(config?.disposable === true && typeof config.bookId === "string" && Number.isInteger(config.destinationRoot)
-    && Number.isInteger(config.issueId) && Number.isInteger(config.volumeId) && /^[a-f0-9]{64}$/i.test(config.originalSha256)
-    && typeof config.converted === "boolean", "Explicit disposable fixture, provider IDs, original SHA-256 and conversion expectation are required.");
+    && Number.isInteger(config.issueId) && Number.isInteger(config.volumeId)
+    && typeof config.converted === "boolean", "Explicit disposable fixture, provider IDs and conversion expectation are required.");
   assert(!$('library-view').hidden && !document.querySelector('dialog[open]'), "Start on an idle library page.");
   const waitFor = async (condition, message) => {
     const deadline = Date.now() + 180000;
@@ -134,7 +134,7 @@
     accept.click();
     await waitFor(() => !accept.disabled && processStatuses.length === 1);
     assert(processStatuses[0] === 409 && (await readJson(`${base}/metadata`)).fields.Title === "Concurrent disposable edit", "Real stale-revision refusal did not protect the concurrent edit.");
-    assert((await readJson(base)).location === originalBook.location && $("intake-original").hidden, "Stale processing moved the source or created a committed backup.");
+    assert((await readJson(base)).location === originalBook.location, "Stale processing moved the source.");
     holdProcess = true;
     accept.click();
     await waitFor(() => !!release);
@@ -146,7 +146,7 @@
     release(); release = null;
     await waitFor(() => !$("intake-dialog").open && !$("intake-queue").options.length && processStatuses.length === 2);
     const status = await readJson(`${base}/intake-processing`), saved = await readJson(`${base}/metadata`), moved = await readJson(base);
-    assert(status.state === "completed" && status.converted === config.converted && status.originalAvailable && !status.canRecover, "Real persisted processing did not complete with expected format and backup.");
+    assert(status.state === "completed" && status.converted === config.converted && !status.canRecover, "Real persisted processing did not complete.");
     assert(moved.id === originalBook.id && moved.location !== originalBook.location && moved.currentPage === originalBook.currentPage
       && moved.completed === originalBook.completed, "Processing lost comic identity/progress or did not move the comicbook.");
     assert(saved.fields.Series === series && saved.fields.Number === proposal.fields.Number
@@ -165,20 +165,17 @@
     await waitFor(() => $("details-dialog").open && !$("intake-history").hidden);
     $("intake-history").focus();
     $("intake-history").click();
-    await waitFor(() => $("intake-dialog").open && !$("intake-refresh").disabled && !$("intake-original").hidden);
+    await waitFor(() => $("intake-dialog").open && !$("intake-refresh").disabled);
     assert($("intake-form").hidden && $("intake-root").hidden && $("intake-outcome").textContent.includes(status.destination),
       "Reopened processing history exposed new processing or lost the completed outcome.");
-    const reopenedBackup = await originalFetch($("intake-original").href);
-    assert(reopenedBackup.ok && processStatuses.length === 2, "Reopened Book details lost original access or reprocessed the book.");
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await reopenedBackup.arrayBuffer()))].map(byte => byte.toString(16).padStart(2, "0")).join("");
-    assert(digest === config.originalSha256.toLowerCase(), "Downloaded backup does not match original fixture bytes.");
+    assert(processStatuses.length === 2, "Reopening history reprocessed the book.");
     $("intake-refresh").click();
     await waitFor(() => !$("intake-refresh").disabled);
-    assert($("intake-dialog").open && !$("intake-original").hidden, "Viewing completed history should not auto-close it.");
+    assert($("intake-dialog").open, "Completed processing history must remain open after refresh.");
     close("intake-dialog");
     await waitFor(() => !$("intake-dialog").open && document.activeElement === $("intake-history"));
     close("details-dialog");
-    console.log("PASS: real prepare/process, stale rejection, cancelled preflight, guarded mutation, lost-response status reconciliation, identity/progress, metadata preservation, destination, verified-original download and reopened Book details history. Matching only was simulated; no processing endpoint was mocked. Recovery needs a separate interrupted-operation fixture.");
+    console.log("PASS: real prepare/process, stale rejection, cancelled preflight, guarded mutation, lost-response status reconciliation, identity/progress, metadata preservation, destination, and reopened Book details history. Matching only was simulated; no processing endpoint was mocked. Recovery needs a separate interrupted-operation fixture.");
   } finally {
     release?.();
     window.fetch = originalFetch;

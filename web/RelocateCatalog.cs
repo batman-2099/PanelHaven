@@ -63,12 +63,12 @@ public sealed partial class LibraryStore
             while (reader.Read()) sources.Add((reader.GetString(0), reader.GetString(1)));
         var sourceIds = sources.Select(book => book.Id).ToHashSet(StringComparer.Ordinal);
         // A book may have moved out of this root while its undo destination still lives here.
-        foreach (var table in new[] { "file_operations", "intake_operations", "book_path_provenance" })
+        foreach (var table in new[] { "file_operations", "intake_operations" })
         {
             if (!RelocationTableExists(db, table)) continue;
             using var command = Command(db, $"""
                 SELECT DISTINCT b.id,b.path FROM books b JOIN {table} h ON h.book_id=b.id
-                WHERE {(table != "book_path_provenance" ? "substr(h.source,1,length($prefix))=$prefix OR " : "")}substr(h.destination,1,length($prefix))=$prefix
+                WHERE substr(h.source,1,length($prefix))=$prefix OR substr(h.destination,1,length($prefix))=$prefix
                 """, ("$prefix", prefix));
             using var reader = command.ExecuteReader();
             while (reader.Read())

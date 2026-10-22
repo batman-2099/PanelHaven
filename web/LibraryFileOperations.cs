@@ -78,9 +78,10 @@ public sealed partial class LibraryStore
             );
             CREATE INDEX IF NOT EXISTS file_operations_book ON file_operations(book_id,created_at DESC);
             CREATE UNIQUE INDEX IF NOT EXISTS file_operations_pending ON file_operations(book_id) WHERE state='pending';
+            DROP TABLE IF EXISTS archive_backup_owners;
+            DROP TABLE IF EXISTS book_path_provenance;
             """);
         command.ExecuteNonQuery();
-        InitializeRelocationProvenance(db);
         InitializeIntakeProcessing(db);
         // Pending rows are the recovery journal. Startup never guesses which of two files to delete.
         using var reserve = Command(db, "UPDATE books SET availability='unavailable' WHERE id IN (SELECT book_id FROM file_operations WHERE state='pending')");
@@ -98,8 +99,8 @@ public sealed partial class LibraryStore
         var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(root, request.Folder)));
         if (!IsContained(root, path) || path.Any(char.IsControl))
             throw new ArgumentException("Folder must be a canonical path inside the selected library.");
-        if (IsContained(Path.GetDirectoryName(archiveBackupRoot)!, path))
-            throw new UnauthorizedAccessException("File organization cannot use the application state or comicbook backup directory.");
+        if (IsContained(stateDirectory, path))
+            throw new UnauthorizedAccessException("File organization cannot use the application state directory.");
         EnsureSafePath(root, root);
 
         const int directoryFlags = 0x10000 | 0x20000 | 0x80000; // O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
@@ -213,8 +214,8 @@ public sealed partial class LibraryStore
         if (!Path.IsPathFullyQualified(path) || Path.GetFullPath(path) != path || path.Any(char.IsControl))
             throw new ArgumentException("The comicbook path is not canonical or contains control characters.");
         var root = roots.FirstOrDefault(root => IsContained(root, path)) ?? throw new UnauthorizedAccessException("Path is outside the configured libraries.");
-        if (IsContained(Path.GetDirectoryName(archiveBackupRoot)!, path))
-            throw new UnauthorizedAccessException("File organization cannot use the application state or comicbook backup directory.");
+        if (IsContained(stateDirectory, path))
+            throw new UnauthorizedAccessException("File organization cannot use the application state directory.");
         var parent = Path.GetDirectoryName(path)!;
         try { EnsureSafePath(root, parent); }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
@@ -637,36 +638,6 @@ public sealed partial class LibraryStore
         reader.GetString(6), reader.IsDBNull(7) ? null : reader.GetString(7), reader.GetInt64(8) != 0, reader.GetString(9),
         reader.IsDBNull(10) ? null : reader.GetString(10), JsonSerializer.Deserialize<ArchiveSecurity>(reader.GetString(11)) ?? throw new InvalidDataException(),
         reader.GetInt64(12), reader.GetInt64(13), reader.IsDBNull(14) ? null : reader.GetString(14));
-
-    private bool FileOperationProvesPath(string bookId, string original, string current)
-    {
-        if (original.Equals(current, PathComparison)) return true;
-        using var db = Open();
-        using var command = Command(db, """
-            SELECT source,destination FROM file_operations WHERE book_id=$id AND committed=1
-            UNION SELECT source,destination FROM book_path_provenance WHERE book_id=$id
-            UNION SELECT source,destination FROM intake_operations WHERE book_id=$id AND state='completed'
-            """, ("$id", bookId));
-        using var reader = command.ExecuteReader();
-        var edges = new Dictionary<string, List<string>>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-        while (reader.Read())
-        {
-            var source = reader.GetString(0);
-            if (!edges.TryGetValue(source, out var destinations)) edges[source] = destinations = [];
-            destinations.Add(reader.GetString(1));
-        }
-        var reachable = new HashSet<string>(edges.Comparer) { original };
-        var pending = new Queue<string>();
-        pending.Enqueue(original);
-        while (pending.TryDequeue(out var source))
-            if (edges.TryGetValue(source, out var destinations))
-                foreach (var destination in destinations)
-                {
-                    if (destination.Equals(current, PathComparison)) return true;
-                    if (reachable.Add(destination)) pending.Enqueue(destination);
-                }
-        return false;
-    }
 
     private static void RefuseFileOperationRelocation(SqliteConnection db, string from, string to)
     {

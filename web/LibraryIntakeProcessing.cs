@@ -21,20 +21,17 @@ public sealed record IntakeProcessRequest([property: JsonRequired, JsonNumberHan
     [property: JsonRequired] string ExpectedRevision, [property: JsonRequired] bool Confirmed);
 public sealed record IntakeProcessingPreview(string Revision, string Source, string Destination, bool Converted, string[] Warnings);
 public sealed record IntakeProcessingStatus(string BookId, string State, string Source, string Destination, bool Converted,
-    bool OriginalAvailable, string Message, string Revision, bool CanRecover);
+    string Message, string Revision, bool CanRecover);
 
 public sealed partial class LibraryStore
 {
     private sealed record IntakePlan(ArchiveCatalog Catalog, MetadataUpdate Metadata, string SourceRoot, string Destination,
         int RootIndex, string Folder, ArchiveSecurity Security, string Identity, string Hash, long Size, long Ticks,
         string[] Pages, string Contents, Dictionary<string, byte[]> Replacements, IntakeProcessingPreview Preview);
-    private sealed record IntakeJournal(string Id, string BookId, string BackupOwner, string Source, string Destination,
-        string OriginalName, string State, bool Committed, ArchiveCatalog Catalog, ArchiveSecurity Security,
+    private sealed record IntakeJournal(string Id, string BookId, string Source, string Destination,
+        string State, bool Committed, ArchiveCatalog Catalog, ArchiveSecurity Security,
         string SourceIdentity, string SourceHash, long SourceSize, long SourceTicks,
-        string? OutputIdentity = null, string? OutputHash = null, long OutputSize = 0, bool BackupReady = false);
-    private string IntakeBackupRoot => Path.Combine(Path.GetDirectoryName(archiveBackupRoot)!, "intake-originals");
-    private string IntakeBackupDirectory(IntakeJournal row) => Path.Combine(IntakeBackupRoot, row.BackupOwner, row.Id);
-    private string IntakeBackupPath(IntakeJournal row) => Path.Combine(IntakeBackupDirectory(row), "original" + Path.GetExtension(row.OriginalName));
+        string? OutputIdentity = null, string? OutputHash = null, long OutputSize = 0);
     private static string IntakeStage(IntakeJournal row) => Path.Combine(Path.GetDirectoryName(row.Destination)!, ".panelhaven-intake-" + row.Id + ".stage");
 
     private static void InitializeIntakeProcessing(SqliteConnection db)
@@ -45,6 +42,9 @@ public sealed partial class LibraryStore
                 source TEXT NOT NULL, destination TEXT NOT NULL, state TEXT NOT NULL,
                 journal TEXT NOT NULL);
             CREATE UNIQUE INDEX IF NOT EXISTS intake_pending ON intake_operations(book_id) WHERE state='pending';
+            UPDATE intake_operations SET journal=json_remove(journal,'$.BackupReady','$.BackupOwner','$.OriginalName')
+                WHERE (instr(journal,'"BackupReady"')>0 OR instr(journal,'"BackupOwner"')>0 OR instr(journal,'"OriginalName"')>0)
+                    AND json_valid(journal);
             UPDATE books SET availability='unavailable' WHERE id IN (SELECT book_id FROM intake_operations WHERE state='pending');
             """);
         command.ExecuteNonQuery();
@@ -56,6 +56,50 @@ public sealed partial class LibraryStore
         scanLock.Wait(cancellationToken);
         try { using var db = Open(); return PlanIntake(db, id, request, metadata, cancellationToken).Preview; }
         finally { scanLock.Release(); }
+    }
+
+    public IntakeProcessingPreview PreviewCbzReplacement(string id, CancellationToken cancellationToken = default)
+    {
+        scanLock.Wait(cancellationToken);
+        try { using var db = Open(); return PlanCbzReplacement(db, id, cancellationToken).Preview; }
+        finally { scanLock.Release(); }
+    }
+
+    private IntakePlan PlanCbzReplacement(SqliteConnection db, string id, CancellationToken cancellationToken)
+    {
+        RefusePendingFileOperation(db, id);
+        var catalog = ReadArchiveCatalog(db, null, id);
+        if (Path.GetExtension(catalog.Path).ToLowerInvariant() is not (".cbr" or ".rar" or ".cb7" or ".7z" or ".cbt" or ".tar"))
+            throw new ArgumentException("CBZ replacement supports CBR, RAR, CB7, 7Z, CBT and TAR comicbooks only.");
+        var root = FileOperationRootFor(catalog.Path);
+        var destination = Path.ChangeExtension(catalog.Path, ".cbz");
+        if (FileEntryExists(destination) || FileCatalogCollision(db, destination, null))
+            throw new FileOperationConflictException("The same-name CBZ destination already exists or is reserved. Nothing was replaced.");
+        var security = ArchiveWritePermissions(root, catalog.Path, preserveInode: true);
+        _ = ReadIntakeNfsAcl(catalog.Path);
+        var identity = FileIdentity(catalog.Path);
+        var version = ReadSourceVersion(root, catalog.Path);
+        using var source = OpenArchive(root, catalog.Path);
+        var hash = ArchiveHash(source, cancellationToken);
+        if (catalog.Size != version.Size || catalog.Ticks != version.Ticks || catalog.Hash != hash)
+            throw new FileOperationConflictException("Source changed; rescan before converting this comicbook.");
+        source.Position = 0;
+        using var archive = new ComicArchive(source, catalog.Path, cancellationToken);
+        if (archive.Pages.Count != catalog.PageCount) throw new FileOperationConflictException();
+        var desired = ParseXml(catalog.Xml, "ComicInfo");
+        var update = new MetadataUpdate(id, catalog.Title, desired.Root!, catalog.Xml, catalog.BookXml, new(id, catalog.Title, []));
+        var replacements = IntakeMetadataReplacements(archive, catalog, update, cancellationToken);
+        var destinationSecurity = IntakeDestinationStamp(root, destination);
+        var revision = FileRevision(new { catalog, destination, destinationSecurity, security, identity, hash, version });
+        if (ArchiveWritePermissions(root, catalog.Path, preserveInode: true) != security || FileIdentity(catalog.Path) != identity
+            || ReadSourceVersion(root, catalog.Path) != version || ArchiveHash(source, cancellationToken) != hash)
+            throw new FileOperationConflictException();
+        var folder = Path.GetRelativePath(root, Path.GetDirectoryName(destination)!);
+        return new(catalog, update, root, destination, Array.IndexOf(roots, root), folder == "." ? "" : folder,
+            security, identity, hash, version.Size, version.Ticks,
+            archive.Pages.Select(page => page.Name).ToArray(), IntakeContents(archive, cancellationToken), replacements,
+            new(revision, FileDisplayPath(catalog.Path), FileDisplayPath(destination), true,
+                ["Creates a same-folder CBZ with saved metadata. Replaces the source after verified publication and catalog commit. This cannot be undone."]));
     }
 
     private IntakePlan PlanIntake(SqliteConnection db, string id, IntakePrepareRequest request, ComicVineMetadata metadata,
@@ -82,20 +126,12 @@ public sealed partial class LibraryStore
             throw new FileOperationConflictException("Source changed; rescan before accepting this candidate.");
         source.Position = 0;
         using var archive = new ComicArchive(source, catalog.Path, cancellationToken);
-        var embedded = archive.ReadMetadata(cancellationToken);
         if (archive.Pages.Count != catalog.PageCount) throw new FileOperationConflictException();
         MetadataUpdate update;
         using (var transaction = db.BeginTransaction(deferred: true))
             update = StageMetadata(db, transaction, new([id], metadata.Fields.ToDictionary(pair => pair.Key, pair => (string?)pair.Value)), out _).Single();
+        var replacements = IntakeMetadataReplacements(archive, catalog, update, cancellationToken);
         var desired = ParseXml(update.Xml, "ComicInfo");
-        var info = embedded.Info is null ? new XDocument(desired) : ReadXml(embedded.Info, "ComicInfo", cancellationToken);
-        var desiredBook = update.BookXml is null ? null : ParseXml(update.BookXml, "ComicBook");
-        var book = embedded.Book is null ? desiredBook : ReadXml(embedded.Book, "ComicBook", cancellationToken);
-        MergeEmbeddedMetadata(info.Root!, book?.Root, desired.Root!, desiredBook?.Root,
-            catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
-        var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
-        { ["ComicInfo.xml"] = Encoding.UTF8.GetBytes(SerializeMetadata(info)) };
-        if (book is not null) replacements["ComicBook.xml"] = Encoding.UTF8.GetBytes(SerializeMetadata(book));
         string Field(string name) => desired.Root!.Element(desired.Root.Name.Namespace + name)?.Value.Trim() ?? "";
         var series = IntakeComponent(Field("Series"), "Unknown Series");
         var publisher = IntakeComponent(Field("Publisher"), "Unknown Publisher");
@@ -124,7 +160,23 @@ public sealed partial class LibraryStore
         return new(catalog, update, root, destination, request.RootIndex, folder, security, identity, hash, version.Size, version.Ticks,
             archive.Pages.Select(page => page.Name).ToArray(), IntakeContents(archive, cancellationToken), replacements,
             new(revision, FileDisplayPath(catalog.Path), FileDisplayPath(destination), extension == ".cbr",
-                ["Original bytes are retained in a verified server backup. The source is removed only after publication and catalog commit."]));
+                ["Replaces the source after verified publication and catalog commit. This cannot be undone."]));
+    }
+
+    private static Dictionary<string, byte[]> IntakeMetadataReplacements(ComicArchive archive, ArchiveCatalog catalog,
+        MetadataUpdate update, CancellationToken cancellationToken)
+    {
+        var embedded = archive.ReadMetadata(cancellationToken);
+        var desired = ParseXml(update.Xml, "ComicInfo");
+        var info = embedded.Info is null ? new XDocument(desired) : ReadXml(embedded.Info, "ComicInfo", cancellationToken);
+        var desiredBook = update.BookXml is null ? null : ParseXml(update.BookXml, "ComicBook");
+        var book = embedded.Book is null ? desiredBook : ReadXml(embedded.Book, "ComicBook", cancellationToken);
+        MergeEmbeddedMetadata(info.Root!, book?.Root, desired.Root!, desiredBook?.Root,
+            catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
+        var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+        { ["ComicInfo.xml"] = Encoding.UTF8.GetBytes(SerializeMetadata(info)) };
+        if (book is not null) replacements["ComicBook.xml"] = Encoding.UTF8.GetBytes(SerializeMetadata(book));
+        return replacements;
     }
 
     private static string IntakeContents(ComicArchive archive, CancellationToken cancellationToken)
@@ -194,72 +246,88 @@ public sealed partial class LibraryStore
         {
             using var db = Open();
             var plan = PlanIntake(db, id, new(request.IssueId, request.VolumeId, request.RootIndex), metadata, cancellationToken);
-            if (plan.Preview.Revision != request.ExpectedRevision) throw new FileOperationConflictException();
-            cancellationToken.ThrowIfCancellationRequested();
-            // Once reserved, finish independently of a disconnected request; only explicit recovery resumes a crash.
-            var row = new IntakeJournal(Guid.NewGuid().ToString("N"), id, id, plan.Catalog.Path, plan.Destination,
-                Path.GetFileName(plan.Catalog.Path), "pending", false, plan.Catalog, plan.Security, plan.Identity, plan.Hash, plan.Size, plan.Ticks);
-            using (var transaction = db.BeginTransaction(deferred: false))
-            {
-                if (ReadArchiveCatalog(db, transaction, id) != plan.Catalog) throw new FileOperationConflictException();
-                RefusePendingFileOperation(db, id, transaction);
-                if (FileCatalogCollision(db, row.Destination, null, transaction)) throw new FileOperationConflictException();
-                SaveIntakeJournal(db, transaction, row);
-                using var reserve = Command(db, "UPDATE books SET availability='unavailable' WHERE id=$id", ("$id", id));
-                reserve.Transaction = transaction;
-                reserve.ExecuteNonQuery();
-                transaction.Commit();
-            }
-            try
-            {
-                CreateFileOperationFolder(new(plan.RootIndex, plan.Folder));
-                ValidateIntakeDestination(roots[plan.RootIndex], row.Destination);
-                SaveIntakeOriginal(row);
-                row = row with { BackupReady = true };
-                SaveIntakeJournal(db, null, row);
-                var stage = IntakeStage(row);
-                using (var output = NewPrivateFile(stage))
-                {
-                    WriteIntakeStage(plan, output);
-                    output.Flush(true);
-                }
-                ApplyIntakePermissions(row, stage);
-                using (var output = OpenArchive(roots[plan.RootIndex], stage, row.Destination))
-                {
-                    using var archive = new ComicArchive(output, row.Destination);
-                    var written = archive.ReadMetadata(default);
-                    if (written.Info is null || !XNode.DeepEquals(ReadXml(written.Info, "ComicInfo", default), ReadXml(plan.Replacements["ComicInfo.xml"], "ComicInfo", default))
-                        || !archive.Pages.Select(page => page.Name).SequenceEqual(plan.Pages, StringComparer.Ordinal)
-                        || IntakeContents(archive, default) != plan.Contents)
-                        throw new InvalidDataException("Processed comicbook metadata or physical pages failed verification.");
-                    if (plan.Replacements.TryGetValue("ComicBook.xml", out var expectedBook)
-                        && (written.Book is null || !XNode.DeepEquals(ReadXml(written.Book, "ComicBook", default), ReadXml(expectedBook, "ComicBook", default))))
-                        throw new InvalidDataException("Processed legacy metadata failed verification.");
-                    row = row with { OutputHash = ArchiveHash(output, default), OutputSize = output.Length, OutputIdentity = FileIdentity(stage) };
-                }
-                SaveIntakeJournal(db, null, row);
-                CheckIntakeSource(row);
-                using (var transaction = db.BeginTransaction(deferred: false))
-                {
-                    if (ReadArchiveCatalog(db, transaction, id) != plan.Catalog || FileCatalogCollision(db, row.Destination, row.Id, transaction))
-                        throw new FileOperationConflictException();
-                    MoveFileNoReplace(IntakeOutputJournal(row), stage, row.Destination, default);
-                    CheckIntakeOutput(row, row.Destination);
-                    CommitIntakeCatalog(db, transaction, row, plan.Metadata);
-                    row = row with { Committed = true };
-                    SaveIntakeJournal(db, transaction, row);
-                    transaction.Commit();
-                }
-                FinishIntake(db, row);
-            }
-            catch (Exception exception) when (IsArchiveError(exception) || exception is SqliteException or FileOperationConflictException or MetadataRevisionException)
-            {
-                // Keep the reservation and exact ownership evidence. Never guess whether commit/publication succeeded.
-                return IntakeStatus(db, id);
-            }
-            return IntakeStatus(db, id);
+            return ExecuteIntakePlan(db, id, plan, request.ExpectedRevision, cancellationToken);
         }
         finally { scanLock.Release(); }
+    }
+
+    public IntakeProcessingStatus ReplaceWithCbz(string id, FileOperationRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request is null || !request.Confirmed) throw new ArgumentException("Explicit confirmation is required.");
+        scanLock.Wait(cancellationToken);
+        try
+        {
+            using var db = Open();
+            return ExecuteIntakePlan(db, id, PlanCbzReplacement(db, id, cancellationToken), request.ExpectedRevision, cancellationToken);
+        }
+        finally { scanLock.Release(); }
+    }
+
+    private IntakeProcessingStatus ExecuteIntakePlan(SqliteConnection db, string id, IntakePlan plan,
+        string expectedRevision, CancellationToken cancellationToken)
+    {
+        if (plan.Preview.Revision != expectedRevision) throw new FileOperationConflictException();
+        cancellationToken.ThrowIfCancellationRequested();
+        // Once reserved, finish independently of a disconnected request; only explicit recovery resumes a crash.
+        var row = new IntakeJournal(Guid.NewGuid().ToString("N"), id, plan.Catalog.Path, plan.Destination,
+            "pending", false, plan.Catalog, plan.Security, plan.Identity, plan.Hash, plan.Size, plan.Ticks);
+        using (var transaction = db.BeginTransaction(deferred: false))
+        {
+            if (ReadArchiveCatalog(db, transaction, id) != plan.Catalog) throw new FileOperationConflictException();
+            RefusePendingFileOperation(db, id, transaction);
+            if (FileCatalogCollision(db, row.Destination, null, transaction)) throw new FileOperationConflictException();
+            SaveIntakeJournal(db, transaction, row);
+            using var reserve = Command(db, "UPDATE books SET availability='unavailable' WHERE id=$id", ("$id", id));
+            reserve.Transaction = transaction;
+            reserve.ExecuteNonQuery();
+            transaction.Commit();
+        }
+        try
+        {
+            if (Path.GetDirectoryName(row.Source) != Path.GetDirectoryName(row.Destination))
+                CreateFileOperationFolder(new(plan.RootIndex, plan.Folder));
+            ValidateIntakeDestination(roots[plan.RootIndex], row.Destination);
+            var stage = IntakeStage(row);
+            using (var output = NewPrivateFile(stage))
+            {
+                WriteIntakeStage(plan, output);
+                output.Flush(true);
+            }
+            ApplyIntakePermissions(row, stage);
+            using (var output = OpenArchive(roots[plan.RootIndex], stage, row.Destination))
+            {
+                using var archive = new ComicArchive(output, row.Destination);
+                var written = archive.ReadMetadata(default);
+                if (written.Info is null || !XNode.DeepEquals(ReadXml(written.Info, "ComicInfo", default), ReadXml(plan.Replacements["ComicInfo.xml"], "ComicInfo", default))
+                    || !archive.Pages.Select(page => page.Name).SequenceEqual(plan.Pages, StringComparer.Ordinal)
+                    || IntakeContents(archive, default) != plan.Contents)
+                    throw new InvalidDataException("Processed comicbook metadata or physical pages failed verification.");
+                if (plan.Replacements.TryGetValue("ComicBook.xml", out var expectedBook)
+                    && (written.Book is null || !XNode.DeepEquals(ReadXml(written.Book, "ComicBook", default), ReadXml(expectedBook, "ComicBook", default))))
+                    throw new InvalidDataException("Processed legacy metadata failed verification.");
+                row = row with { OutputHash = ArchiveHash(output, default), OutputSize = output.Length, OutputIdentity = FileIdentity(stage) };
+            }
+            SaveIntakeJournal(db, null, row);
+            CheckIntakeSource(row);
+            using (var transaction = db.BeginTransaction(deferred: false))
+            {
+                if (ReadArchiveCatalog(db, transaction, id) != plan.Catalog || FileCatalogCollision(db, row.Destination, row.Id, transaction))
+                    throw new FileOperationConflictException();
+                MoveFileNoReplace(IntakeOutputJournal(row), stage, row.Destination, default);
+                CheckIntakeOutput(row, row.Destination);
+                CommitIntakeCatalog(db, transaction, row, plan.Metadata);
+                row = row with { Committed = true };
+                SaveIntakeJournal(db, transaction, row);
+                transaction.Commit();
+            }
+            FinishIntake(db, row);
+        }
+        catch (Exception exception) when (IsArchiveError(exception) || exception is SqliteException or FileOperationConflictException or MetadataRevisionException)
+        {
+            // Keep the reservation and exact ownership evidence. Never guess whether commit/publication succeeded.
+            return IntakeStatus(db, id);
+        }
+        return IntakeStatus(db, id);
     }
 
     private static void WriteIntakeStage(IntakePlan plan, FileStream output)
@@ -296,46 +364,6 @@ public sealed partial class LibraryStore
         if (output.Length > MaxArchiveBytes) throw new InvalidDataException("Processed comicbook exceeds the safety limit.");
     }
 
-    private void SaveIntakeOriginal(IntakeJournal row)
-    {
-        PrivateArchiveDirectory(IntakeBackupRoot);
-        PrivateArchiveDirectory(Path.Combine(IntakeBackupRoot, row.BackupOwner));
-        PrivateArchiveDirectory(IntakeBackupDirectory(row));
-        CheckIntakeSource(row);
-        using (var source = OpenArchive(FileOperationRootFor(row.Source), row.Source))
-        using (var output = NewPrivateFile(IntakeBackupPath(row)))
-        {
-            if (CopyArchiveBytes(source, output, MaxArchiveBytes, default) != row.SourceSize || ArchiveHash(output, default) != row.SourceHash)
-                throw new FileOperationConflictException();
-            output.Flush(true);
-        }
-        FlushArchivePath(IntakeBackupDirectory(row), true);
-        using var verified = OpenIntakeOriginal(row);
-    }
-
-    private FileStream OpenIntakeOriginal(IntakeJournal row)
-    {
-        if (!Guid.TryParseExact(row.Id, "N", out _) || !Guid.TryParseExact(row.BackupOwner, "N", out _)
-            || Path.GetFileName(row.OriginalName) != row.OriginalName || Path.GetExtension(row.OriginalName).ToLowerInvariant() is not (".cbz" or ".zip" or ".cbr"))
-            throw new InvalidDataException("Invalid original backup identity.");
-        var stream = OpenArchive(IntakeBackupRoot, IntakeBackupPath(row), row.OriginalName);
-        try
-        {
-            if (stream.Length != row.SourceSize || ArchiveHash(stream, default) != row.SourceHash) throw new InvalidDataException("Original backup verification failed.");
-            stream.Position = 0;
-            return stream;
-        }
-        catch { stream.Dispose(); throw; }
-    }
-
-    public (FileStream Stream, string Name) ExportIntakeOriginal(string id)
-    {
-        using var db = Open();
-        var row = ReadIntakeJournal(db, id) ?? throw new KeyNotFoundException();
-        if (!row.BackupReady) throw new FileOperationConflictException("No verified original backup is available.");
-        return (OpenIntakeOriginal(row), row.OriginalName);
-    }
-
     private static void SaveIntakeJournal(SqliteConnection db, SqliteTransaction? transaction, IntakeJournal row)
     {
         using var command = Command(db, """
@@ -349,7 +377,10 @@ public sealed partial class LibraryStore
 
     private static IntakeJournal? ReadIntakeJournal(SqliteConnection db, string id)
     {
-        using var command = Command(db, "SELECT journal,source,destination,state FROM intake_operations WHERE book_id=$id ORDER BY (state='pending') DESC,rowid DESC LIMIT 1", ("$id", id));
+        using var command = Command(db, """
+            SELECT journal,source,destination,state FROM intake_operations
+            WHERE book_id=$id ORDER BY state='pending' DESC,rowid DESC LIMIT 1
+            """, ("$id", id));
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         var row = JsonSerializer.Deserialize<IntakeJournal>(reader.GetString(0)) ?? throw new InvalidDataException("Invalid processing journal.");
@@ -397,28 +428,7 @@ public sealed partial class LibraryStore
     private void ApplyIntakePermissions(IntakeJournal row, string stage)
     {
         CheckIntakeSource(row);
-        var acl = ReadIntakeNfsAcl(row.Source);
-        var inherited = ReadIntakeNfsAcl(stage);
-        if (acl is null && inherited is not null)
-            throw new UnauthorizedAccessException("Destination inherits an ACL absent from the source; no ACL will be stripped.");
-        if (row.Security.Owner.HasValue && ArchiveChown(stage, row.Security.Owner.Value, row.Security.Group!.Value) != 0)
-            throw new UnauthorizedAccessException("Cannot preserve comicbook owner and group.");
-        if (!OperatingSystem.IsWindows() && row.Security.Mode.HasValue) File.SetUnixFileMode(stage, row.Security.Mode.Value);
-        File.SetAttributes(stage, row.Security.Attributes);
-        if (acl is not null)
-        {
-            var descriptor = ArchiveOpen(stage, 0x20000 | 0x80000 | 0x800);
-            if (descriptor < 0) throw new UnauthorizedAccessException("Cannot open processing stage security.");
-            try
-            {
-                if (IntakeSetXattr(descriptor, IntakeNfsAclName, acl, (nuint)acl.Length, 0) != 0)
-                    throw new UnauthorizedAccessException("Cannot preserve the source NFS4 ACL.");
-            }
-            finally { ArchiveClose(descriptor); }
-        }
-        if (ReadArchiveExtendedAttributesHash(stage) != row.Security.ExtendedAttributesHash)
-            throw new UnauthorizedAccessException("Copied comicbook security did not verify.");
-        FlushArchivePath(stage, false);
+        ApplyArchivePermissions(stage, row.Security, ReadIntakeNfsAcl(row.Source));
         CheckIntakeSource(row);
     }
 
@@ -458,10 +468,9 @@ public sealed partial class LibraryStore
     private void ValidateIntakeRecovery(SqliteConnection db, IntakeJournal row)
     {
         var catalog = ReadArchiveCatalog(db, null, row.BookId);
-        if (row.BackupReady) { using var original = OpenIntakeOriginal(row); }
         if (row.Committed)
         {
-            if (catalog.Path != row.Destination || catalog.Hash != row.OutputHash || !row.BackupReady) throw new FileOperationConflictException();
+            if (catalog.Path != row.Destination || catalog.Hash != row.OutputHash) throw new FileOperationConflictException();
             CheckIntakeOutput(row, row.Destination);
             if (FileEntryExists(row.Source)) CheckIntakeSource(row);
         }
@@ -519,14 +528,11 @@ public sealed partial class LibraryStore
     {
         _ = ReadArchiveCatalog(db, null, id);
         var row = ReadIntakeJournal(db, id);
-        if (row is null) return new(id, "none", "", "", false, false, "No processing operation has started.", "", false);
-        var originalAvailable = false;
-        if (row.BackupReady)
-            try { using var original = OpenIntakeOriginal(row); originalAvailable = true; }
-            catch (Exception exception) when (IsArchiveError(exception)) { }
+        if (row is null) return new(id, "none", "", "", false, "No processing operation has started.", "", false);
         var canRecover = false;
-        var message = row.State == "completed" ? "Metadata embedded, comicbook organized, original backed up and source removed."
-            : row.State == "failed" ? "Processing rolled back safely; the original source remains unchanged. You may accept again."
+        var converted = Path.GetExtension(row.Source).ToLowerInvariant() is not (".cbz" or ".zip");
+        var message = row.State == "completed" ? (converted ? "Metadata embedded, comicbook converted to CBZ and source removed." : "Metadata embedded, comicbook organized and source removed.")
+            : row.State == "failed" ? "Processing rolled back safely; the original source remains unchanged. You may preview again."
             : "Processing is interrupted. Files are reserved; inspect status before recovery.";
         if (row.State == "pending")
         {
@@ -538,12 +544,13 @@ public sealed partial class LibraryStore
                     : "Catalog was not committed. Recover to roll back verified output and keep the original source.";
             }
             catch (Exception exception) when (IsArchiveError(exception) || exception is FileOperationConflictException)
-            { message = "File ownership, security, backup or catalog changed. Automatic recovery is unsafe; preserve all files for administrator recovery."; }
+            { message = "File ownership, security or catalog changed. Automatic recovery is unsafe; preserve all files for administrator recovery."; }
         }
         if (!row.Committed && row.OutputIdentity is null && FileEntryExists(IntakeStage(row)))
             message += " Unverified staging is retained untouched at " + FileDisplayPath(IntakeStage(row)) + ".";
-        return new(id, row.State, FileDisplayPath(row.Source), FileDisplayPath(row.Destination), Path.GetExtension(row.OriginalName).Equals(".cbr", StringComparison.OrdinalIgnoreCase),
-            originalAvailable, message, FileRevision(new { row, canRecover, originalAvailable }), canRecover);
+        message += " Original-file undo is unavailable.";
+        return new(id, row.State, FileDisplayPath(row.Source), FileDisplayPath(row.Destination), converted,
+            message, FileRevision(new { row, canRecover }), canRecover);
     }
 
     public IntakeProcessingStatus RecoverIntakeProcessing(string id, FileOperationRequest request, CancellationToken cancellationToken = default)

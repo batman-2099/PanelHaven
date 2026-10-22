@@ -4,7 +4,6 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
@@ -15,22 +14,21 @@ namespace PanelHaven.Web;
 public sealed record ArchiveWriteRequest([property: JsonRequired] string ExpectedRevision,
     [property: JsonRequired] bool Confirmed);
 public sealed record ArchiveMetadataEntry(string Name, string? Before, string? After);
-public sealed record ArchiveWritePreview(string BookId, string Title, string Location, string Operation,
-    string Revision, string? BackupId, string SourceHash, IReadOnlyList<MetadataChange> Changes,
+public sealed record ArchiveWritePreview(string BookId, string Title, string Location,
+    string Revision, string SourceHash, IReadOnlyList<MetadataChange> Changes,
     IReadOnlyList<ArchiveMetadataEntry> Entries, bool CanApply);
-public sealed record ArchiveWriteResult(string BookId, string? BackupId, bool Restored);
-public sealed record ArchiveBackup(string Id, string CreatedAt, string OriginalHash, string WrittenHash, long OriginalSize);
+public sealed record ArchiveWriteResult(string BookId);
 public sealed class ArchiveWriteConflictException() : Exception("Comicbook or catalog changed. Preview again before applying.") { }
+public sealed class ArchiveWriteRecoveryException(Exception inner) : Exception(
+    "Comicbook replacement was published, but finalization failed. This operation cannot undo the replacement. Preserve the current file and rescan the library before further changes.", inner) { }
 
 public sealed partial class LibraryStore
 {
     private sealed record ArchiveCatalog(string Id, string Path, string Title, string Xml, string? BookXml,
         long Size, long Ticks, long Edited, string? Hash, int PageCount, string PageEdits);
-    private sealed record ArchiveManifest(string Id, string CreatedAt, string BookId, string SourcePath,
-        string OriginalHash, string WrittenHash, long OriginalSize);
     private sealed record ArchivePlan(ArchiveCatalog Catalog, string Root, long Size, long Ticks,
         ArchiveSecurity Security, ArchiveWritePreview Preview,
-        Dictionary<string, byte[]> Replacements, ArchiveManifest? Restore);
+        Dictionary<string, byte[]> Replacements);
     private sealed record ArchiveSecurity(UnixFileMode? Mode, FileAttributes Attributes, uint? Owner, uint? Group,
         string? ExtendedAttributesHash = null);
 
@@ -69,48 +67,15 @@ public sealed partial class LibraryStore
     [DllImport("libc", EntryPoint = "close")]
     private static extern int ArchiveClose(int descriptor);
 
-    public ArchiveWritePreview PreviewArchiveWrite(string id, CancellationToken cancellationToken = default) =>
-        PreviewArchiveOperation(id, null, cancellationToken);
-
-    public ArchiveWritePreview PreviewArchiveRestore(string id, string backupId, CancellationToken cancellationToken = default) =>
-        PreviewArchiveOperation(id, backupId, cancellationToken);
-
-    private ArchiveWritePreview PreviewArchiveOperation(string id, string? backupId, CancellationToken cancellationToken)
+    public ArchiveWritePreview PreviewArchiveWrite(string id, CancellationToken cancellationToken = default)
     {
         scanLock.Wait(cancellationToken);
         try
         {
             using var db = Open();
-            return PlanArchiveOperation(ReadArchiveCatalog(db, null, id), backupId, cancellationToken).Preview;
+            return PlanArchiveWrite(ReadArchiveCatalog(db, null, id), cancellationToken).Preview;
         }
         finally { scanLock.Release(); }
-    }
-
-    public ArchiveWriteResult ApplyArchiveWrite(string id, ArchiveWriteRequest request, CancellationToken cancellationToken = default) =>
-        ApplyArchiveOperation(id, null, request, cancellationToken);
-
-    public ArchiveWriteResult RestoreArchiveBackup(string id, string backupId, ArchiveWriteRequest request,
-        CancellationToken cancellationToken = default) => ApplyArchiveOperation(id, backupId, request, cancellationToken);
-
-    public IReadOnlyList<ArchiveBackup> GetArchiveBackups(string id)
-    {
-        using var db = Open();
-        var catalog = ReadArchiveCatalog(db, null, id);
-        var backups = new List<ArchiveBackup>();
-        foreach (var owner in ArchiveBackupOwners(db, id))
-        {
-            var directory = ArchiveBackupDirectory(owner);
-            if (!Directory.Exists(directory)) continue;
-            EnsureSafePath(archiveBackupRoot, directory);
-            foreach (var backup in Directory.EnumerateDirectories(directory).Select(Path.GetFileName)
-                .Where(value => value is not null && Guid.TryParseExact(value, "N", out _))
-                .Where(value => File.Exists(Path.Combine(directory, value!, "manifest.json"))))
-            {
-                var manifest = ReadArchiveManifest(catalog.Id, backup!, catalog.Path);
-                backups.Add(new(manifest.Id, manifest.CreatedAt, manifest.OriginalHash, manifest.WrittenHash, manifest.OriginalSize));
-            }
-        }
-        return backups.OrderByDescending(value => value.CreatedAt, StringComparer.Ordinal).ToArray();
     }
 
     private static ArchiveCatalog ReadArchiveCatalog(SqliteConnection db, SqliteTransaction? transaction, string id)
@@ -124,15 +89,15 @@ public sealed partial class LibraryStore
             reader.GetInt32(8), ReadPageEditIntents(db, transaction, id));
     }
 
-    private ArchivePlan PlanArchiveOperation(ArchiveCatalog catalog, string? backupId, CancellationToken cancellationToken)
+    private ArchivePlan PlanArchiveWrite(ArchiveCatalog catalog, CancellationToken cancellationToken)
     {
         using (var db = Open()) RefusePendingFileOperation(db, catalog.Id);
         if (Path.GetExtension(catalog.Path).ToLowerInvariant() is not (".cbz" or ".zip"))
             throw new ArgumentException("Comicbook metadata write-back is supported only for CBZ/ZIP files.");
         var root = roots.FirstOrDefault(value => IsContained(value, catalog.Path)) ?? throw new UnauthorizedAccessException();
-        if (IsContained(archiveBackupRoot, catalog.Path)) throw new UnauthorizedAccessException();
         var version = ReadSourceVersion(root, catalog.Path);
-        var security = ArchiveWritePermissions(root, catalog.Path);
+        var security = ArchiveWritePermissions(root, catalog.Path, preserveInode: true);
+        if (OperatingSystem.IsLinux()) _ = ReadIntakeNfsAcl(catalog.Path);
         using var source = OpenArchive(root, catalog.Path);
         var hash = ArchiveHash(source, cancellationToken);
         source.Position = 0;
@@ -140,28 +105,13 @@ public sealed partial class LibraryStore
         var metadata = archive.ReadMetadata(cancellationToken);
         var beforeInfo = metadata.Info is null ? null : ReadXml(metadata.Info, "ComicInfo", cancellationToken);
         var beforeBook = metadata.Book is null ? null : ReadXml(metadata.Book, "ComicBook", cancellationToken);
-        XDocument? afterInfo, afterBook;
-        ArchiveManifest? restore = null;
+        var desiredInfo = ParseXml(catalog.Xml, "ComicInfo");
+        var desiredBook = catalog.BookXml is null ? null : ParseXml(catalog.BookXml, "ComicBook");
+        var afterInfo = beforeInfo is null ? new XDocument(desiredInfo) : new XDocument(beforeInfo);
+        var afterBook = beforeBook is null ? desiredBook is null ? null : new XDocument(desiredBook) : new XDocument(beforeBook);
+        MergeEmbeddedMetadata(afterInfo.Root!, afterBook?.Root, desiredInfo.Root!, desiredBook?.Root,
+            catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
         var replacements = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        if (backupId is not null)
-        {
-            restore = ReadArchiveManifest(catalog.Id, backupId, catalog.Path);
-            if (hash != restore.WrittenHash) throw new ArchiveWriteConflictException();
-            using var original = OpenVerifiedBackup(catalog.Path, restore, cancellationToken);
-            using var originalArchive = new ComicArchive(original, catalog.Path, cancellationToken);
-            var originalMetadata = originalArchive.ReadMetadata(cancellationToken);
-            afterInfo = originalMetadata.Info is null ? null : ReadXml(originalMetadata.Info, "ComicInfo", cancellationToken);
-            afterBook = originalMetadata.Book is null ? null : ReadXml(originalMetadata.Book, "ComicBook", cancellationToken);
-        }
-        else
-        {
-            var desiredInfo = ParseXml(catalog.Xml, "ComicInfo");
-            var desiredBook = catalog.BookXml is null ? null : ParseXml(catalog.BookXml, "ComicBook");
-            afterInfo = beforeInfo is null ? new XDocument(desiredInfo) : new XDocument(beforeInfo);
-            afterBook = beforeBook is null ? desiredBook is null ? null : new XDocument(desiredBook) : new XDocument(beforeBook);
-            MergeEmbeddedMetadata(afterInfo.Root!, afterBook?.Root, desiredInfo.Root!, desiredBook?.Root,
-                catalog.PageEdits, catalog.PageCount, archive.Pages.Count);
-        }
         var entries = new List<ArchiveMetadataEntry>();
         source.Position = 0;
         using (var zip = new ZipArchive(source, ZipArchiveMode.Read, true))
@@ -172,7 +122,7 @@ public sealed partial class LibraryStore
                 var name = zip.Entries.FirstOrDefault(entry => entry.FullName.Equals(canonical, StringComparison.OrdinalIgnoreCase))?.FullName ?? canonical;
                 var text = after is null ? null : SerializeMetadata(after);
                 entries.Add(new(name, before?.ToString(SaveOptions.DisableFormatting), text));
-                if (backupId is null && text is not null) replacements.Add(name, Encoding.UTF8.GetBytes(text));
+                if (text is not null) replacements.Add(name, Encoding.UTF8.GetBytes(text));
             }
             Compare("ComicInfo.xml", beforeInfo, afterInfo);
             Compare("ComicBook.xml", beforeBook, afterBook);
@@ -191,17 +141,17 @@ public sealed partial class LibraryStore
         }
         Diff(beforeValues.Fields, afterValues.Fields, false);
         Diff(beforeValues.Custom, afterValues.Custom, true);
-        var operation = backupId is null ? "write" : "restore";
-        var revision = FileRevision(new { catalog, hash, version.Size, version.Ticks, security, operation, restore, entries });
+        var revision = FileRevision(new { catalog, hash, version.Size, version.Ticks, security, entries });
         using var latest = OpenArchive(root, catalog.Path);
-        if (ReadSourceVersion(root, catalog.Path) != version || ArchiveHash(latest, cancellationToken) != hash)
+        if (ArchiveWritePermissions(root, catalog.Path, preserveInode: true) != security
+            || ReadSourceVersion(root, catalog.Path) != version || ArchiveHash(latest, cancellationToken) != hash)
             throw new ArchiveWriteConflictException();
         return new(catalog, root, version.Size, version.Ticks, security,
-            new(catalog.Id, catalog.Title, SourceLocation(catalog.Path).Location, operation, revision, backupId, hash,
-                changes, entries, backupId is null ? replacements.Count != 0 : hash != restore!.OriginalHash), replacements, restore);
+            new(catalog.Id, catalog.Title, SourceLocation(catalog.Path).Location, revision, hash,
+                changes, entries, replacements.Count != 0), replacements);
     }
 
-    private ArchiveWriteResult ApplyArchiveOperation(string id, string? backupId, ArchiveWriteRequest request, CancellationToken cancellationToken)
+    public ArchiveWriteResult ApplyArchiveWrite(string id, ArchiveWriteRequest request, CancellationToken cancellationToken = default)
     {
         if (request is null || !request.Confirmed) throw new ArgumentException("Explicit confirmation is required.");
         if (string.IsNullOrEmpty(request.ExpectedRevision)) throw new ArchiveWriteConflictException();
@@ -211,18 +161,13 @@ public sealed partial class LibraryStore
         try
         {
             using var db = Open();
-            var plan = PlanArchiveOperation(ReadArchiveCatalog(db, null, id), backupId, cancellationToken);
+            var plan = PlanArchiveWrite(ReadArchiveCatalog(db, null, id), cancellationToken);
             if (plan.Preview.Revision != request.ExpectedRevision) throw new ArchiveWriteConflictException();
-            if (!plan.Preview.CanApply) return new(id, null, backupId is not null);
+            if (!plan.Preview.CanApply) return new(id);
             staged = Path.Combine(Path.GetDirectoryName(plan.Catalog.Path)!, ".panelhaven-" + Guid.NewGuid().ToString("N") + ".tmp");
             using (var output = NewPrivateFile(staged))
             {
-                if (plan.Restore is not null)
-                {
-                    using var original = OpenVerifiedBackup(plan.Catalog.Path, plan.Restore, cancellationToken);
-                    CopyArchiveBytes(original, output, MaxArchiveBytes, cancellationToken);
-                }
-                else WriteArchiveStage(plan.Root, plan.Catalog.Path, plan.Replacements, output, cancellationToken);
+                WriteArchiveStage(plan.Root, plan.Catalog.Path, plan.Replacements, output, cancellationToken);
                 output.Flush(true);
             }
             string writtenHash;
@@ -235,13 +180,22 @@ public sealed partial class LibraryStore
                 if (checkedMetadata.Book is not null) ReadXml(checkedMetadata.Book, "ComicBook", cancellationToken);
                 pages = checkedArchive.Pages.Count;
                 writtenHash = ArchiveHash(stagedFile, cancellationToken);
-                if (plan.Restore is not null && writtenHash != plan.Restore.OriginalHash) throw new InvalidDataException("Comicbook backup verification failed.");
             }
-            var manifest = SaveArchiveBackup(plan, writtenHash, cancellationToken);
-            ApplyArchivePermissions(staged, plan.Security);
-            // Metadata edits take the same SQLite write reservation. No DB lock during compression or backup copying.
+            ApplyArchivePermissions(staged, plan.Security,
+                OperatingSystem.IsLinux() ? ReadIntakeNfsAcl(plan.Catalog.Path) : null);
+            // Persist the serving guard before publication so interruption cannot expose a stale catalog.
+            using (var reservation = db.BeginTransaction(deferred: false))
+            {
+                if (ReadArchiveCatalog(db, reservation, id) != plan.Catalog) throw new ArchiveWriteConflictException();
+                CheckArchiveSource(plan, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                using var reserve = Command(db, "UPDATE books SET availability='unavailable',edited=1 WHERE id=$id", ("$id", id));
+                reserve.Transaction = reservation;
+                if (reserve.ExecuteNonQuery() != 1) throw new ArchiveWriteConflictException();
+                reservation.Commit();
+            }
             using var transaction = db.BeginTransaction(deferred: false);
-            if (ReadArchiveCatalog(db, transaction, id) != plan.Catalog) throw new ArchiveWriteConflictException();
+            if (ReadArchiveCatalog(db, transaction, id) != (plan.Catalog with { Edited = 1 })) throw new ArchiveWriteConflictException();
             CheckArchiveSource(plan, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var replaced = false;
@@ -254,6 +208,8 @@ public sealed partial class LibraryStore
                 var version = ReadSourceVersion(plan.Root, plan.Catalog.Path);
                 using var current = OpenArchive(plan.Root, plan.Catalog.Path);
                 if (ArchiveHash(current, default) != writtenHash) throw new ArchiveWriteConflictException();
+                if (ArchiveWritePermissions(plan.Root, plan.Catalog.Path, preserveInode: true) != plan.Security)
+                    throw new UnauthorizedAccessException("Published comicbook security did not verify.");
                 var (location, folder) = SourceLocation(plan.Catalog.Path);
                 using var update = Command(db, """
                     UPDATE books SET file_size=$size,modified_ticks=$ticks,content_hash=$hash,page_count=$pages,
@@ -264,12 +220,12 @@ public sealed partial class LibraryStore
                 if (update.ExecuteNonQuery() != 1) throw new ArchiveWriteConflictException();
                 transaction.Commit();
             }
-            catch
+            catch (Exception exception) when (replaced)
             {
-                if (replaced) RollbackArchive(plan, manifest, writtenHash);
-                throw;
+                // There is no retained original. Leave the published file and durable rescan guard intact.
+                throw new ArchiveWriteRecoveryException(exception);
             }
-            return new(id, manifest.Id, backupId is not null);
+            return new(id);
         }
         finally
         {
@@ -390,14 +346,30 @@ public sealed partial class LibraryStore
         finally { ArchiveClose(descriptor); }
     }
 
-    private static void ApplyArchivePermissions(string path, ArchiveSecurity security)
+    private static void ApplyArchivePermissions(string path, ArchiveSecurity security, byte[]? nfsAcl = null)
     {
+        if (OperatingSystem.IsLinux() && ReadIntakeNfsAcl(path) is not null && nfsAcl is null)
+            throw new UnauthorizedAccessException("Destination inherits an ACL absent from the source; no ACL will be stripped.");
         if (security.Owner.HasValue && ArchiveChown(path, security.Owner.Value, security.Group!.Value) != 0)
             throw new UnauthorizedAccessException("Cannot preserve the comicbook owner and group.");
-        if (OperatingSystem.IsLinux() && ArchiveListXattr(path, 0, 0) != 0)
-            throw new UnauthorizedAccessException("Comicbook staging inherited unsupported extended attributes.");
         if (!OperatingSystem.IsWindows() && security.Mode.HasValue) File.SetUnixFileMode(path, security.Mode.Value);
         File.SetAttributes(path, security.Attributes);
+        if (nfsAcl is not null)
+        {
+            var descriptor = ArchiveOpen(path, 0x20000 | 0x80000 | 0x800);
+            if (descriptor < 0) throw new UnauthorizedAccessException("Cannot open comicbook staging security.");
+            try
+            {
+                if (IntakeSetXattr(descriptor, IntakeNfsAclName, nfsAcl, (nuint)nfsAcl.Length, 0) != 0)
+                    throw new UnauthorizedAccessException("Cannot preserve the source NFS4 ACL.");
+            }
+            finally { ArchiveClose(descriptor); }
+        }
+        var copied = ArchiveWritePermissions(Path.GetDirectoryName(path)!, path, preserveInode: true);
+        const FileAttributes nameAttributes = FileAttributes.Hidden | FileAttributes.Normal;
+        if ((copied with { Attributes = security.Attributes }) != security
+            || (copied.Attributes & ~nameAttributes) != (security.Attributes & ~nameAttributes))
+            throw new UnauthorizedAccessException("Copied comicbook security did not verify.");
         FlushArchivePath(path, false);
     }
 
@@ -496,129 +468,8 @@ public sealed partial class LibraryStore
     private void CheckArchiveSource(ArchivePlan plan, CancellationToken cancellationToken)
     {
         if (ReadSourceVersion(plan.Root, plan.Catalog.Path) != (plan.Size, plan.Ticks)
-            || ArchiveWritePermissions(plan.Root, plan.Catalog.Path) != plan.Security) throw new ArchiveWriteConflictException();
+            || ArchiveWritePermissions(plan.Root, plan.Catalog.Path, preserveInode: true) != plan.Security) throw new ArchiveWriteConflictException();
         using var current = OpenArchive(plan.Root, plan.Catalog.Path);
         if (ArchiveHash(current, cancellationToken) != plan.Preview.SourceHash) throw new ArchiveWriteConflictException();
-    }
-
-    private string ArchiveBackupDirectory(string id, string? backupId = null)
-    {
-        if (!Guid.TryParseExact(id, "N", out _) || backupId is not null && !Guid.TryParseExact(backupId, "N", out _))
-            throw new ArgumentException("Invalid comicbook backup identifier.");
-        return backupId is null ? Path.Combine(archiveBackupRoot, id) : Path.Combine(archiveBackupRoot, id, backupId);
-    }
-
-    private static void PrivateArchiveDirectory(string path)
-    {
-        var parent = Path.GetDirectoryName(path)!;
-        EnsureSafePath(parent, parent);
-        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(path);
-        else Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        EnsureSafePath(parent, path);
-        if (!OperatingSystem.IsWindows() && (File.GetUnixFileMode(path) & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite
-            | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
-            throw new UnauthorizedAccessException("Comicbook backups require a private directory.");
-        FlushArchivePath(parent, true);
-    }
-
-    private ArchiveManifest SaveArchiveBackup(ArchivePlan plan, string writtenHash, CancellationToken cancellationToken)
-    {
-        PrivateArchiveDirectory(archiveBackupRoot);
-        PrivateArchiveDirectory(ArchiveBackupDirectory(plan.Catalog.Id));
-        var manifest = new ArchiveManifest(Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow.ToString("O"), plan.Catalog.Id,
-            plan.Catalog.Path, plan.Preview.SourceHash, writtenHash, plan.Size);
-        var directory = ArchiveBackupDirectory(plan.Catalog.Id, manifest.Id);
-        PrivateArchiveDirectory(directory);
-        var payload = Path.Combine(directory, "original.bin");
-        using (var original = OpenArchive(plan.Root, plan.Catalog.Path))
-        using (var output = NewPrivateFile(payload))
-        {
-            if (CopyArchiveBytes(original, output, MaxArchiveBytes, cancellationToken) != manifest.OriginalSize
-                || ArchiveHash(output, cancellationToken) != manifest.OriginalHash) throw new ArchiveWriteConflictException();
-            output.Flush(true);
-        }
-        // Publish the manifest last. No automatic pruning: interrupted copies and verified originals remain recoverable.
-        var temporary = Path.Combine(directory, "manifest.tmp");
-        using (var output = NewPrivateFile(temporary))
-        {
-            JsonSerializer.Serialize(output, manifest);
-            output.Flush(true);
-        }
-        File.Move(temporary, Path.Combine(directory, "manifest.json"));
-        FlushArchivePath(directory, true);
-        using var verified = OpenVerifiedBackup(plan.Catalog.Path, manifest, cancellationToken);
-        return manifest;
-    }
-
-    private ArchiveManifest ReadArchiveManifest(string bookId, string backupId, string? expectedPath = null)
-    {
-        var owner = bookId;
-        if (expectedPath is not null)
-        {
-            using var db = Open();
-            var owners = ArchiveBackupOwners(db, bookId)
-                .Where(candidate => File.Exists(Path.Combine(ArchiveBackupDirectory(candidate, backupId), "manifest.json"))).ToArray();
-            if (owners.Length != 1) throw new InvalidDataException("Comicbook backup is missing or has ambiguous ownership.");
-            owner = owners[0];
-        }
-        var directory = ArchiveBackupDirectory(owner, backupId);
-        var path = Path.Combine(directory, "manifest.json");
-        EnsureSafePath(archiveBackupRoot, path);
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (stream.Length is <= 0 or > 16384) throw new InvalidDataException("Invalid comicbook backup manifest.");
-        ArchiveManifest? manifest;
-        try { manifest = JsonSerializer.Deserialize<ArchiveManifest>(stream); }
-        catch (JsonException ex) { throw new InvalidDataException("Invalid comicbook backup manifest.", ex); }
-        if (manifest is null || manifest.Id != backupId || manifest.BookId != owner
-            || string.IsNullOrEmpty(manifest.SourcePath) || !Path.IsPathFullyQualified(manifest.SourcePath)
-            || Path.GetExtension(manifest.SourcePath).ToLowerInvariant() is not (".cbz" or ".zip")
-            || expectedPath is not null && !FileOperationProvesPath(bookId, manifest.SourcePath, expectedPath)
-            || manifest.OriginalSize is < 22 or > MaxArchiveBytes || !ValidArchiveHash(manifest.OriginalHash)
-            || !ValidArchiveHash(manifest.WrittenHash) || !DateTimeOffset.TryParse(manifest.CreatedAt, out _))
-            throw new InvalidDataException("Invalid comicbook backup manifest.");
-        return manifest;
-    }
-
-    private static bool ValidArchiveHash(string? hash) => hash is { Length: 64 } && hash.All(char.IsAsciiHexDigit);
-
-    private FileStream OpenVerifiedBackup(string sourcePath, ArchiveManifest manifest, CancellationToken cancellationToken)
-    {
-        var path = Path.Combine(ArchiveBackupDirectory(manifest.BookId, manifest.Id), "original.bin");
-        var stream = OpenArchive(archiveBackupRoot, path, sourcePath);
-        try
-        {
-            if (stream.Length != manifest.OriginalSize || ArchiveHash(stream, cancellationToken) != manifest.OriginalHash)
-                throw new InvalidDataException("Comicbook backup verification failed.");
-            stream.Position = 0;
-            return stream;
-        }
-        catch { stream.Dispose(); throw; }
-    }
-
-    private void RollbackArchive(ArchivePlan plan, ArchiveManifest manifest, string writtenHash)
-    {
-        var temporary = Path.Combine(Path.GetDirectoryName(plan.Catalog.Path)!, ".panelhaven-" + Guid.NewGuid().ToString("N") + ".tmp");
-        try
-        {
-            using (var original = OpenVerifiedBackup(plan.Catalog.Path, manifest, default))
-            using (var output = NewPrivateFile(temporary))
-            {
-                CopyArchiveBytes(original, output, MaxArchiveBytes, default);
-                output.Flush(true);
-            }
-            ApplyArchivePermissions(temporary, plan.Security);
-            File.SetLastWriteTimeUtc(temporary, new DateTime(plan.Ticks, DateTimeKind.Utc));
-            FlushArchivePath(temporary, false);
-            EnsureSafePath(plan.Root, plan.Catalog.Path);
-            using (var current = OpenArchive(plan.Root, plan.Catalog.Path))
-                if (ArchiveHash(current, default) != writtenHash) return; // Never overwrite a later external edit.
-            File.Replace(temporary, plan.Catalog.Path, null);
-            FlushArchivePath(Path.GetDirectoryName(plan.Catalog.Path)!, true);
-        }
-        catch (Exception ex) when (IsArchiveError(ex))
-        {
-            // The durable original and manifest remain available to explicit restore after failed rollback.
-        }
-        finally { File.Delete(temporary); }
     }
 }

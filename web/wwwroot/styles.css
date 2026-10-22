@@ -181,7 +181,6 @@ summary { min-height: 44px; padding: .5rem 0; font-weight: 600; }
 .details-primary { margin-block: 1rem; }
 .details-primary button { min-width: min(100%, 12rem); }
 .details-secondary { gap: .6rem; }
-.details-advanced:not(:has(button:not([hidden]))) { display: none; }
 #details-status, #user-status { margin: 1rem 0 0; white-space: pre-wrap; }
 #rating-form label { display: grid; gap: .35rem; min-width: 0; }
 #rating-form select { width: 100%; min-width: 0; }
@@ -205,15 +204,8 @@ summary { min-height: 44px; padding: .5rem 0; font-weight: 600; }
 #comic-vine-terms { display: grid; gap: .8rem; }
 #comic-vine-terms label { display: grid; gap: .35rem; min-width: 0; }
 #comic-vine-results button { display: block; margin-top: .7rem; max-width: 100%; white-space: normal; }
-#archive-preview h4, #archive-preview h5 { margin: .75rem 0; font-size: 1rem; }
-#archive-preview dl { grid-template-columns: minmax(60px, 1fr) minmax(0, 4fr); }
-#archive-status, #archive-backups-status { white-space: pre-wrap; }
-#archive-entries pre { max-width: 100%; max-height: 22rem; overflow: auto; padding: .8rem; border: 1px solid var(--line); background: var(--surface-inset); font-size: .85rem; white-space: pre; overflow-wrap: normal; }
-#archive-entries details { min-width: 0; margin: 1rem 0; }
+#archive-status { white-space: pre-wrap; }
 #archive-form { margin: 1.5rem 0; }
-#archive-form .archive-confirm { display: flex; align-items: flex-start; gap: .6rem; }
-.archive-confirm input { flex: none; }
-#archive-backups { max-height: 28rem; overflow: auto; }
 #metadata-report-dialog label { display: grid; gap: .35rem; min-width: 0; }
 #metadata-report-kind { width: 100%; min-width: 0; }
 #list-controls > label, #smart-list-controls > label, #folder-controls > label { margin-bottom: .8rem; }
@@ -290,7 +282,7 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
 #page-metadata-controls input, #page-metadata-controls select, .group-match { min-width: 0; width: 100%; }
 .group-rules { display: grid; gap: .6rem; margin: .6rem 0; }
 .rule-group > button { margin: .2rem; }
-#page-metadata-status, #archive-export-status { white-space: pre-wrap; overflow-wrap: anywhere; }
+#page-metadata-status { white-space: pre-wrap; overflow-wrap: anywhere; }
 #page-metadata-changes { max-height: 28rem; overflow: auto; }
 #page-metadata-changes p { overflow-wrap: anywhere; }
 #file-operation-controls { display: grid; gap: .5rem; min-width: 0; }

@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -22,6 +23,7 @@ public static class AclSecurityChecks
         {
             try { action(); }
             catch (TargetInvocationException exception) when (exception.InnerException is UnauthorizedAccessException) { return; }
+            catch (UnauthorizedAccessException) { return; }
             throw new Exception("Expected the archive security check to refuse this file.");
         }
         static byte[] Name(string name) => Encoding.UTF8.GetBytes(name + '\0');
@@ -116,6 +118,27 @@ public static class AclSecurityChecks
             foreach (var attribute in attributes) Remove(path, attribute.Name);
             Check(Hash(path) is null && plain.Equals(Snapshot(true)) && plain.Equals(Snapshot(false))
                 && File.ReadAllBytes(path).SequenceEqual(contents), "Inspection or attribute removal changed archive bytes or legacy security.");
+
+            using (var archive = new ZipArchive(File.Create(path), ZipArchiveMode.Create))
+            {
+                using var image = archive.CreateEntry("1.png").Open();
+                image.Write(Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII="));
+            }
+            var store = new LibraryStore(Path.Combine(directory, "library.sqlite"), [directory]);
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Security fixture did not import.");
+            var id = store.ListBooks("owner", null).Items.Single().Id;
+            store.EditMetadata(id, new(new() { ["Title"] = "Security check" }));
+            var preview = store.PreviewArchiveWrite(id);
+            var originalBytes = File.ReadAllBytes(path);
+            Set(path, attributes[0].Name, attributes[0].Value);
+            Reject(() => store.PreviewArchiveWrite(id));
+            Reject(() => store.ApplyArchiveWrite(id, new(preview.Revision, true)));
+            Check(File.ReadAllBytes(path).SequenceEqual(originalBytes) && Hash(path) is not null,
+                "Metadata writing changed a source or stripped an unsupported attribute.");
+            Remove(path, attributes[0].Name);
+            store.ApplyArchiveWrite(id, new(preview.Revision, true));
+            Check(File.GetUnixFileMode(path) == mode && Hash(path) is null,
+                "Attribute-free metadata replacement changed file security.");
         }
         finally { Directory.Delete(directory, true); }
     }

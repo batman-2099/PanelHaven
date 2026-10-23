@@ -72,7 +72,7 @@
     assert(visibleFocus() && $("management-status").textContent.includes("cleared"), "Clearing selection must preserve visible focus and announce its result.");
     checkbox.click();
     $("bulk-metadata").click();
-    await waitFor(() => !$("metadata-controls").disabled);
+    await waitFor(() => !$("metadata-view").hidden && !$("metadata-controls").disabled);
     const apply = $("metadata-fields").querySelector(".apply-change");
     apply.click();
     $("metadata-changed-only").click();
@@ -80,7 +80,8 @@
     apply.click();
     assert(visibleFocus(), "Unchecking the last filtered metadata row must not hide keyboard focus.");
     window.confirm = () => true;
-    document.querySelector('[data-close="metadata-dialog"]').click();
+    $("metadata-back").click();
+    await waitFor(() => !$("library-view").hidden && idle());
     $("clear-selection").click();
     $("account-menu").open = true;
     $("maintenance").focus();

@@ -23,10 +23,14 @@
     if ($("books").querySelector(".book-selection input:not(:checked)")) $("select-page").click();
     assert(!$("bulk-metadata").disabled, "At least one available book is required.");
     $("bulk-metadata").click();
-    await waitFor(() => !$("metadata-controls").disabled);
+    await waitFor(() => !$("metadata-view").hidden && !$("metadata-controls").disabled);
+    assert(location.hash.startsWith("#metadata/") && $("library-view").hidden && !document.querySelector("dialog[open]"),
+      "Metadata editing did not open as a separate page.");
     const schema = await fetch("/api/metadata-fields").then(response => response.json());
     const rows = [...$("metadata-fields").querySelectorAll(".metadata-change")];
     assert(rows.length === schema.length && schema.every(field => rows.some(row => row.dataset.field === field.name)), "Grouping lost a metadata field.");
+    assert(rows.every(row => row.checkVisibility()) && $("add-custom-value").checkVisibility(),
+      "Metadata fields or custom values start collapsed.");
     assert(rows.every(row => row.tagName === "FIELDSET" && row.querySelector("legend")), "Metadata fields lack contextual groups.");
     const title = rows.find(row => row.dataset.field === "Title");
     const selected = title.querySelector(".apply-change");
@@ -67,10 +71,28 @@
     custom.querySelector("button").click();
     assert(document.activeElement === $("add-custom-value") && document.activeElement.checkVisibility(), "Discarding a filtered row lost visible focus.");
     window.confirm = () => false;
-    document.querySelector('[data-close="metadata-dialog"]').click();
-    assert($("metadata-dialog").open, "Metadata close discarded the draft without approval.");
+    const metadataHash = location.hash;
+    $("metadata-back").click();
+    await waitFor(() => location.hash === metadataHash);
+    assert(!$("metadata-view").hidden && selected.checked, "Metadata navigation discarded the draft without approval.");
+    const back = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
+    history.back();
+    await back;
+    await waitFor(() => location.hash === metadataHash);
+    assert(selected.checked, "Browser Back discarded an unapproved metadata draft.");
     window.confirm = () => true;
-    document.querySelector('[data-close="metadata-dialog"]').click();
+    $("metadata-back").click();
+    await waitFor(() => !$("library-view").hidden && $("books").getAttribute("aria-busy") !== "true");
+    const reopen = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
+    history.back();
+    await reopen;
+    await waitFor(() => !$("metadata-view").hidden && !$("metadata-controls").disabled);
+    assert(!$("metadata-controls").querySelector(".apply-change:checked"),
+      "Browser history resurrected a discarded metadata draft.");
+    const forward = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
+    history.forward();
+    await forward;
+    await waitFor(() => !$("library-view").hidden && $("books").getAttribute("aria-busy") !== "true");
     $("clear-selection").click();
     $("create-list").click();
     assert($("list-kind").value === "manual" && !$("list-controls").disabled && !$("save-list").disabled, "Manual list depends on smart-rule loading.");

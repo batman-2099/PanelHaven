@@ -76,7 +76,7 @@ public sealed class ComicVine : IDisposable
         var volumes = await VolumesAsync(hints.Series, 0, cancellationToken);
         var warnings = new List<string>();
         var candidates = new List<IntakeCandidate>();
-        // ponytail: one search and at most three issue pages; manual provider search covers deeper results.
+        // ponytail: one search and at most three issue pages; pagination would require an explicit larger search budget.
         var selected = volumes.Results.DistinctBy(volume => volume.Id)
             .OrderByDescending(volume => IntakeMatching.SeriesScore(hints.Series, volume.Name)
                 + (hints.Publisher.Length != 0 && IntakeMatching.SamePublisher(hints.Publisher, volume.Publisher) ? 10 : 0)
@@ -84,7 +84,7 @@ public sealed class ComicVine : IDisposable
             .ThenByDescending(volume => hints.Year is { } year && int.TryParse(volume.StartYear, out var start) && start <= year ? start : 0)
             .ThenBy(volume => volume.Id).Take(3).ToArray();
         if (volumes.Total > selected.Length)
-            warnings.Add("Search is bounded to the first 10 volumes and the three closest series/publisher/volume matches. Refine hints or use manual Comic Vine search for other volumes.");
+            warnings.Add("Search is bounded to the first 10 volumes and the three closest series/publisher/volume matches. Refine the series and publisher hints for other volumes.");
         if (hints.Number.Length == 0)
             warnings.Add("No issue hint: only the first 20 issues per selected volume are considered. Enter an issue number to narrow the search.");
         if (hints.Volume is > 0 and < 1000)
@@ -100,7 +100,7 @@ public sealed class ComicVine : IDisposable
         }
         var ranked = candidates.DistinctBy(candidate => candidate.IssueId).OrderByDescending(candidate => candidate.Score)
             .ThenBy(candidate => candidate.VolumeId).ThenBy(candidate => candidate.IssueId).ToArray();
-        if (ranked.Length == 0) warnings.Add("No candidates found. Refine the editable hints or use manual Comic Vine search; no metadata was changed.");
+        if (ranked.Length == 0) warnings.Add("No candidates found. Refine the editable hints and retry; no metadata was changed.");
         else
         {
             if (ranked[0].Score < 70) warnings.Add("Low-confidence match: important hints are absent or disagree. Check every proposed field.");

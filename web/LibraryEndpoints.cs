@@ -44,8 +44,8 @@ public static class LibraryEndpoints
             Results.Ok(await provider.VolumesAsync(q, offset ?? 0, cancellationToken)));
         comicVine.MapGet("/issues", async (ComicVine provider, int volumeId, string? number, int? offset, CancellationToken cancellationToken) =>
             Results.Ok(await provider.IssuesAsync(volumeId, number, offset ?? 0, cancellationToken)));
-        comicVine.MapGet("/issues/{id}/metadata", async (ComicVine provider, int id, int volumeId, CancellationToken cancellationToken) =>
-            Results.Ok(await provider.MetadataAsync(id, volumeId, cancellationToken)));
+        comicVine.MapGet("/issues/{id}/metadata", async (ComicVine provider, int id, int volumeId, bool? intake, CancellationToken cancellationToken) =>
+            Results.Ok(await provider.MetadataAsync(id, volumeId, cancellationToken, intake: intake == true)));
         api.MapGet("/reader-preferences", (Accounts accounts, ClaimsPrincipal user) =>
             Results.Ok(accounts.GetReaderPreferences(UserId(user))));
         api.MapPut("/reader-preferences", async (Accounts accounts, ClaimsPrincipal user, HttpRequest request) =>
@@ -105,22 +105,25 @@ public static class LibraryEndpoints
             Results.Ok(store.GetBook(UserId(user), id)));
         api.MapGet("/books/{id}/next-issue", (LibraryStore store, string id) =>
             Results.Ok(new { id = store.GetNextIssue(id) }));
-        api.MapGet("/books/{id}/intake", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/intake/matches", async (LibraryStore store, ComicVine provider, string id, HttpRequest request) =>
+        foreach (var (path, requireUnsorted) in new[] { ("intake", true), ("metadata-matches", false) })
         {
-            if (!request.HasJsonContentType()) return Error(400, "Intake matching requires a JSON hints object.");
-            try
+            api.MapGet($"/books/{{id}}/{path}", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id, requireUnsorted)))
+                .RequireAuthorization(policy => policy.RequireRole("admin"));
+            api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, ComicVine provider, string id, HttpRequest request) =>
             {
-                var hints = await request.ReadFromJsonAsync<IntakeHints>(request.HttpContext.RequestAborted);
-                var source = store.GetIntake(id);
-                var matches = await provider.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
-                if (store.GetIntake(id).Source != source.Source)
-                    return Error(409, "The comicbook moved during matching. Refresh the review queue.");
-                return Results.Ok(matches);
-            }
-            catch (JsonException) { return Error(400, "Intake hints require series, number, publisher and nullable integer year and volume only."); }
-        }).RequireAuthorization(policy => policy.RequireRole("admin"));
+                if (!request.HasJsonContentType()) return Error(400, "Matching requires a JSON hints object.");
+                try
+                {
+                    var hints = await request.ReadFromJsonAsync<IntakeHints>(request.HttpContext.RequestAborted);
+                    var source = store.GetIntake(id, requireUnsorted);
+                    var matches = await provider.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
+                    if (store.GetIntake(id, requireUnsorted).Source != source.Source)
+                        return Error(409, "The comicbook moved during matching. Refresh the search.");
+                    return Results.Ok(matches);
+                }
+                catch (JsonException) { return Error(400, "Matching hints require series, number, publisher and nullable integer year and volume only."); }
+            }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        }
         api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, ComicVine provider, string id,
             IntakePrepareRequest request, CancellationToken cancellationToken) =>
         {

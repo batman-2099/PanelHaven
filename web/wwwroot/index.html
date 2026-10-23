@@ -133,15 +133,10 @@
       </div>
     </section>
     <section id="reader-view" aria-labelledby="reader-title" hidden>
-      <div class="reader-toolbar"><h1 id="reader-title"></h1></div>
-        <div class="page-controls"><button id="previous-page" type="button" aria-label="Previous page">← Previous</button><form id="page-form"><label for="page-number">Position</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" aria-label="Next page">Next →</button></div>
-      <div id="reader-error" class="notice error" role="alert" hidden></div>
-      <p id="current-page-type" class="reader-hint" role="status"></p>
-      <p id="skip-status" class="reader-hint" role="status" hidden></p>
-      <p id="page-status" role="status">Loading book…</p>
-      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages"><div id="reader-pages" class="reader-pages"></div></div>
-      <div class="reader-controls">
-        <details class="reader-display compact-disclosure"><summary>Display settings</summary><div class="display-controls">
+      <h1 id="reader-title" class="sr-only"></h1>
+      <div class="reader-navigation">
+        <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet reader-arrow">Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button>
+        <details class="reader-display compact-disclosure"><summary>Display settings</summary><div class="reader-display-panel"><div class="display-controls">
           <label for="reader-mode">Mode <select id="reader-mode"><option value="single">Single page</option><option value="continuous">Continuous</option><option value="spread">Two-page spread</option></select></label>
           <label for="fit">Fit <select id="fit"><option value="page">Page</option><option value="width">Width</option></select></label>
           <label for="zoom">Zoom % <input id="zoom" type="number" min="50" max="300" step="1" value="100" inputmode="numeric"></label><button id="reset-zoom" type="button">100%</button>
@@ -149,11 +144,7 @@
           <label for="rotation">Rotation <select id="rotation"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
           <label for="brightness">Brightness % <input id="brightness" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"></label>
           <label for="contrast">Contrast % <input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"></label><button id="reset-visuals" type="button">Reset visuals</button>
-        </div></details>
-        <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
-      </div>
-      <div class="reader-toolbar"><button id="close-reader" type="button" class="quiet">← Library</button><button id="reader-details" type="button" aria-label="Book details" disabled>Details</button><button id="fullscreen" type="button" aria-pressed="false">Fullscreen</button><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
-      <details class="reader-options"><summary>Bookmarks and page types</summary>
+        </div>
         <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
           <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit" class="success">Add / update bookmark</button></form>
           <p id="bookmark-status" role="status"></p><button id="retry-bookmark" type="button" hidden>Retry bookmark save</button>
@@ -161,7 +152,18 @@
         </section>
         <section id="embedded-bookmarks-section" aria-labelledby="embedded-bookmarks-title" hidden><h2 id="embedded-bookmarks-title">Embedded bookmarks (read-only)</h2><ul id="embedded-bookmarks" aria-label="Embedded bookmarks"></ul></section>
         <fieldset id="skip-types"><legend>Skip page types</legend><div id="skip-type-options"></div><button id="reset-skip-types" type="button">Show all page types</button><p class="muted">Unclassified and unknown types are never skipped. Page numbers always refer to the original comicbook. A direct page or bookmark jump temporarily reveals a skipped page.</p></fieldset>
+        </div>
       </details>
+        </div>
+        <div class="page-controls"><button id="previous-page" type="button" class="reader-arrow" aria-label="Previous page">Previous</button><form id="page-form"><label for="page-number">Position</label><input id="page-number" type="number" inputmode="numeric" min="1" value="1" required><span id="page-count"></span><button type="submit" class="quiet">Go</button></form><button id="next-page" type="button" class="reader-arrow" data-direction="right" aria-label="Next page">Next</button></div>
+      </div>
+      <div id="reader-error" class="notice error" role="alert" hidden></div>
+      <p id="current-page-type" class="sr-only" role="status"></p>
+      <p id="skip-status" class="reader-hint" role="status" hidden></p>
+      <p id="page-status" role="status">Loading book…</p>
+      <div id="page-stage" class="page-stage" tabindex="0" role="region" aria-label="Comic pages"><div id="reader-pages" class="reader-pages"></div></div>
+        <div class="preference-status"><span id="preferences-status" class="muted" role="status"></span><button id="retry-preferences" type="button" hidden>Retry preference save</button></div>
+      <div class="reader-toolbar"><span id="save-status" class="muted" role="status"></span><button id="retry-save" type="button" hidden>Retry progress save</button></div>
     </section>
   <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
     <div class="section-heading"><h1 id="server-settings-title" tabindex="-1">Server settings</h1><a id="settings-catalog-back" href="#library">Back to library</a></div>
@@ -235,26 +237,41 @@
       <button id="open-data-relocation" type="button" disabled>Relocate application data…</button>
     </section>
   </section>
+  <section id="metadata-view" aria-labelledby="metadata-title" hidden>
+    <div class="section-heading"><h1 id="metadata-title" tabindex="-1">Edit metadata</h1><button id="metadata-back" type="button" class="quiet">Back</button></div>
+    <p class="muted">Only checked fields and custom values are saved to the library database, never automatically to source comicbooks.</p>
+    <div class="metadata-tools"><label for="metadata-field-search">Find a field<input id="metadata-field-search" type="search" placeholder="Title, writer, publisher…"></label><label class="checkbox"><input id="metadata-changed-only" type="checkbox">Checked fields only</label><p id="metadata-change-summary" role="status"></p></div>
+    <form id="metadata-form" class="form-stack">
+      <div class="actions list-actions">
+        <button id="save-metadata" type="submit" class="success">Save checked changes</button>
+        <button id="apply-metadata" type="submit" class="success" hidden disabled>Apply reviewed changes</button>
+      </div>
+    <p id="metadata-status" role="status"></p>
+      <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
+      <fieldset id="metadata-controls"><legend class="sr-only">Metadata changes</legend><div id="metadata-fields"></div><section class="custom-values-group" aria-labelledby="custom-values-title"><h2 id="custom-values-title">Custom values</h2><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></section></fieldset>
+    </form>
+  </section>
   </main>
   <dialog id="details-dialog" aria-labelledby="details-title">
     <div class="dialog-heading"><h2 id="details-title">Book details</h2><button type="button" data-close="details-dialog" class="quiet" aria-label="Close book details">Close</button></div>
-    <div class="details-primary"><button id="read-book" class="primary" type="button">Read book</button></div>
+    <div class="actions details-primary">
+      <button id="read-book" class="primary" type="button">Read book</button>
+      <form id="rating-form" class="actions" hidden>
+        <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+        <button id="save-rating" type="submit" class="success">Save rating</button>
+      </form>
+    </div>
+    <p id="rating-status" role="status"></p>
     <div id="details-content"></div>
     <div id="details-bookmarks"></div>
-    <form id="rating-form" class="actions list-actions" hidden>
-      <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
-      <button id="save-rating" type="submit" class="success">Save rating</button>
-    </form>
-    <p id="rating-status" role="status"></p>
     <div class="actions list-actions details-secondary">
       <button id="export-comic" type="button" disabled>Export CBZ</button>
       <button id="edit-metadata" type="button" hidden>Edit metadata</button>
       <button id="find-metadata" type="button" hidden>Find metadata</button>
+      <button id="write-archive" type="button" hidden>Write metadata</button>
       <button id="move-archive" type="button" hidden>Move / reorganize</button>
       <button id="intake-history" type="button" hidden>Processing status…</button>
-      <button id="edit-page-metadata" type="button" hidden>Edit page types and embedded bookmarks</button>
-      <button id="organize-pages" type="button" hidden>Organize page order</button>
-      <button id="write-archive" type="button" hidden>Write metadata</button>
+      <button id="edit-page-metadata" type="button" hidden>Edit pages &amp; bookmarks</button>
       <button id="convert-cbz" type="button" hidden>Convert to CBZ</button>
     </div>
     <p id="details-status" role="status"></p>
@@ -296,67 +313,22 @@
     <nav class="library-pagination" aria-label="Metadata validation pages"><button id="previous-metadata-report" type="button" disabled>Previous</button><span id="metadata-report-page" role="status">Page 1 of 1</span><button id="next-metadata-report" type="button" disabled>Next</button></nav>
     <div id="metadata-report-items"></div>
   </dialog>
-  <dialog id="comic-vine-dialog" aria-labelledby="comic-vine-title" aria-describedby="comic-vine-scope">
-    <div class="dialog-heading"><h2 id="comic-vine-title">Find metadata</h2><button type="button" data-close="comic-vine-dialog" class="quiet">Close</button></div>
-    <p id="comic-vine-scope">Search <a href="https://comicvine.gamespot.com/" target="_blank" rel="noopener noreferrer">Comic Vine</a>, choose a volume and issue, then review suggested fields. Browsing changes nothing. Applying checked changes updates only the catalog, never the comicbook or private reading data.</p>
-    <p id="comic-vine-book"></p>
-    <form id="comic-vine-form" class="form-stack">
-      <fieldset id="comic-vine-terms" disabled><legend>Search terms</legend>
-        <label>Series<input id="comic-vine-series" required maxlength="200"></label>
-        <label>Issue number (optional)<input id="comic-vine-number" maxlength="40"></label>
-        <label>Publication year (matching hint only)<input id="comic-vine-year" type="number" min="1" max="9999" aria-describedby="comic-vine-year-note"></label>
-      </fieldset>
-      <p id="comic-vine-year-note" class="muted">Compare this year with issue dates yourself. A volume may have started years earlier; this hint never filters volume runs.</p>
-      <div class="actions list-actions"><button id="comic-vine-search" type="submit" disabled>Search volumes</button><button id="comic-vine-back" type="button" hidden>Choose another volume</button></div>
-    </form>
-    <p id="comic-vine-volume" class="muted"></p>
-    <p id="comic-vine-status" role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
-    <div id="comic-vine-results" aria-busy="false"></div>
-    <div class="actions list-actions"><button id="comic-vine-previous" type="button" disabled>Previous results</button><span id="comic-vine-page"></span><button id="comic-vine-next" type="button" disabled>Next results</button></div>
-  </dialog>
-  <dialog id="metadata-dialog" aria-labelledby="metadata-title">
-    <div class="dialog-heading"><h2 id="metadata-title">Edit metadata</h2><button type="button" data-close="metadata-dialog" class="quiet">Close</button></div>
-    <p class="muted">Only checked fields and custom values are saved to the library database, never automatically to source comicbooks.</p>
-    <details class="compact-disclosure"><summary>How metadata changes work</summary><p class="muted">To deliberately write saved metadata to a CBZ/ZIP, use Write metadata in Book details. For supported non-ZIP sources, use Convert to CBZ. Blank means an explicit empty value; Remove resets a field.</p></details>
-    <p id="metadata-source" class="muted" hidden></p>
-    <div class="metadata-tools form-stack"><label for="metadata-field-search">Find a field</label><input id="metadata-field-search" type="search" placeholder="Title, writer, publisher…"><label class="checkbox"><input id="metadata-changed-only" type="checkbox">Checked fields only</label><p id="metadata-change-summary" role="status"></p></div>
-    <form id="metadata-form" class="form-stack">
-      <button id="save-metadata" type="submit" class="success">Save checked changes</button>
-    <p id="metadata-status" role="status"></p>
-      <fieldset id="metadata-controls"><legend>Metadata changes</legend><div id="metadata-fields"></div><details class="custom-values-group"><summary>Custom values</summary><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></details></fieldset>
-      <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
-      <button id="apply-metadata" type="submit" class="success" hidden disabled>Apply reviewed changes</button>
-    </form>
-  </dialog>
-  <dialog id="page-order-dialog" aria-labelledby="page-order-title">
-    <div class="dialog-heading"><h2 id="page-order-title">Organize page order</h2><button type="button" data-close="page-order-dialog" class="quiet">Close</button></div>
-    <p>Change the reading order for everyone without changing the comicbook file, original page numbers, private bookmarks, or reading progress. Drag a thumbnail to another position, or use Move earlier / Move later with a keyboard or touch. Choose Save page order to apply your changes.</p>
-    <p class="muted">If the comicbook file changes, its custom reading order can no longer be used. This includes writing metadata to the file. Scan externally changed files before organizing pages. Scanning an unchanged file or moving it keeps its saved order.</p>
-    <div class="actions">
-      <button id="save-page-order" type="button" class="success" disabled>Save page order</button>
-      <button id="reset-page-order" type="button" disabled>Reset to comicbook order (draft)</button>
-      <button id="reload-page-order" type="button">Discard draft / Reload saved order</button>
-    </div>
-    <p id="page-order-status" role="status" aria-live="polite"></p>
-    <p id="page-order-draft-state" class="muted"></p>
-    <ol id="page-order-pages" aria-label="Pages in reading order"></ol>
-  </dialog>
   <dialog id="page-metadata-dialog" aria-labelledby="page-metadata-title">
-    <div class="dialog-heading"><h2 id="page-metadata-title">Page types and embedded bookmarks</h2><button type="button" data-close="page-metadata-dialog" class="quiet">Close</button></div>
-    <p class="muted">Shared embedded metadata, not your private bookmarks. Physical page numbers refer to the original comicbook. Save updates only the catalog; use Write metadata in Book details to update the file.</p>
-    <form id="page-metadata-form" class="form-stack">
-      <fieldset id="page-metadata-controls" disabled><legend>Physical page metadata</legend>
-        <label>Physical page<select id="page-metadata-page"></select></label>
-        <label>Page type<select id="page-metadata-type"></select></label>
-        <label>Embedded bookmark<input id="page-metadata-bookmark" maxlength="200"></label>
-        <p class="muted">Blank removes the bookmark or explicit type (the reader defaults to Story). Other pages and unknown source attributes stay unchanged.</p>
-      </fieldset>
-      <button id="preview-page-metadata" type="submit" disabled>Preview page changes</button>
-      <section id="page-metadata-preview" tabindex="-1" hidden aria-label="Review page metadata changes"><h3>Review exact changes</h3><div id="page-metadata-changes"></div></section>
-      <button id="save-page-metadata" type="submit" class="success" disabled>Save reviewed changes to catalog</button>
+    <div class="dialog-heading"><h2 id="page-metadata-title">Edit pages &amp; bookmarks</h2><button type="button" data-close="page-metadata-dialog" class="quiet">Close</button></div>
+    <p class="muted">Changes apply to all readers. Source files, private bookmarks and reading progress stay unchanged.</p>
+    <p>Drag thumbnails or use Move earlier / Move later. Page details stay with their original page.</p>
+    <p class="muted">File changes, including metadata write-back, invalidate custom order. Rescan externally changed files first.</p>
+    <form id="page-metadata-form">
+      <div class="actions">
+        <button id="save-page-changes" type="submit" class="success" disabled>Save changes</button>
+        <button id="reset-page-changes" type="button">Reset changes</button>
+      </div>
+      <p id="page-order-status" role="status" aria-live="polite"></p>
+      <p id="page-order-draft-state" class="muted"></p>
+      <p id="page-metadata-status" role="status"></p>
+      <p class="muted">Blank clears the bookmark or restores the default Story type.</p>
+      <ol id="page-order-pages" aria-label="Pages in reading order"></ol>
     </form>
-    <button id="reload-page-metadata" type="button">Reload saved page metadata</button>
-    <p id="page-metadata-status" role="status"></p>
   </dialog>
   <dialog id="intake-dialog" aria-labelledby="intake-title" aria-describedby="intake-scope">
     <div class="dialog-heading"><h2 id="intake-title" tabindex="-1" autofocus>Process Unsorted</h2><button type="button" data-close="intake-dialog" class="quiet">Close</button></div>
@@ -385,10 +357,16 @@
           <label>Publisher<input id="intake-publisher" maxlength="200"></label>
         </fieldset>
       </div>
-      <div class="actions"><button id="intake-match" type="submit" disabled>Match / search</button><button id="intake-cancel" type="button" class="quiet" hidden>Cancel request</button><button id="intake-manual" type="button" disabled>Manual search / catalog only…</button></div>
-      <p class="muted">Manual search opens the separate metadata field review and changes the catalog only; it does not process, convert or move the comicbook.</p>
+      <div class="actions"><button id="intake-match" type="submit" disabled>Match / search</button><button id="intake-cancel" type="button" class="quiet" hidden>Cancel request</button></div>
     </form>
-    <p id="intake-status" role="status" tabindex="-1"></p>
+    <div id="intake-feedback">
+      <div id="intake-progress" hidden>
+        <strong id="intake-progress-label"></strong>
+        <p id="intake-progress-book" class="muted"></p>
+        <progress aria-labelledby="intake-progress-label"></progress>
+      </div>
+      <p id="intake-status" role="status" tabindex="-1"></p>
+    </div>
     <div id="intake-candidates" aria-label="Ranked candidate issues"></div>
   </dialog>
   <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-safety">

@@ -72,7 +72,7 @@
     $('reader-details').click();
     await waitFor(() => !$('edit-metadata').hidden, 'Administrator metadata action did not load.');
     $('edit-metadata').click();
-    await waitFor(() => !$('metadata-controls').disabled, 'Metadata editor did not load.');
+    await waitFor(() => !$('metadata-view').hidden && !$('metadata-controls').disabled, 'Metadata editor did not load.');
     const row = $('metadata-fields').querySelector(`[data-field="${field}"]`);
     const apply = row.querySelector('.apply-change');
     apply.click();
@@ -80,7 +80,8 @@
     row.querySelector('.metadata-value').dispatchEvent(new Event('input', { bubbles: true }));
     $('metadata-form').requestSubmit($('save-metadata'));
     await waitFor(() => !$('metadata-controls').disabled && !apply.checked, 'Metadata save did not complete.');
-    document.querySelector('[data-close="metadata-dialog"]').click();
+    $('metadata-back').click();
+    await waitFor(() => !$('reader-view').hidden && $('details-dialog').open && !$('edit-metadata').hidden, 'Metadata return did not restore reader details.');
     document.querySelector('[data-close="details-dialog"]').click();
   };
   let savedProgress = null;

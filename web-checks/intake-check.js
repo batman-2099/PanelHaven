@@ -119,18 +119,16 @@
     $("intake-match").click();
     await waitFor(() => $("intake-candidates").querySelectorAll("button").length === 2 && !$("intake-match").disabled);
     assert($("intake-candidates").textContent.includes("Rank score 80/100") && !mutations.length, "Tied ranking automatically processed a candidate.");
-    $("intake-manual").click();
-    await waitFor(() => $("comic-vine-dialog").open && !$("comic-vine-series").disabled);
-    close("comic-vine-dialog"); close("details-dialog");
-    await waitFor(() => document.activeElement === $("intake-manual"));
     const accept = $("intake-candidates").querySelector("button");
     holdPrepare = true;
     accept.click();
     await waitFor(() => !!release);
     assert(!$("intake-cancel").hidden && $("intake-root").disabled, "Read-only preparation was not cancellable or allowed destination edits.");
+    assert(!$("intake-progress").hidden && !$("intake-progress").querySelector("progress").hasAttribute("value"), "Preparing must show indeterminate progress, not a fabricated percentage.");
     $("intake-cancel").click(); release(); release = null;
     await new Promise(resolve => setTimeout(resolve, 50));
     assert(!mutations.some(item => item.path.endsWith("/intake/process")), "Cancelled preparation started processing.");
+    assert($("intake-progress").hidden, "Cancelled preparation left processing feedback active.");
     accept.click();
     await waitFor(() => !accept.disabled && processStatuses.length === 1);
     assert(processStatuses[0] === 409 && (await readJson(`${base}/metadata`)).fields.Title === "Concurrent disposable edit", "Real stale-revision refusal did not protect the concurrent edit.");
@@ -139,12 +137,14 @@
     accept.click();
     await waitFor(() => !!release);
     assert($("intake-queue").disabled && $("intake-root").disabled && $("intake-cancel").hidden, "Mutation permits queue changes, destination changes or cancellation.");
+    assert(!$("intake-progress").hidden && $("intake-progress").getBoundingClientRect().height > 0, "Active processing lost its visible progress feedback.");
     close("intake-dialog");
     assert($("intake-dialog").open, "Mutation allowed dismissal.");
     location.hash = "#library";
     await waitFor(() => location.hash === "#unsorted", "Navigation was not guarded during processing.");
     release(); release = null;
     await waitFor(() => !$("intake-dialog").open && !$("intake-queue").options.length && processStatuses.length === 2);
+    assert($("intake-progress").hidden, "Completed processing left the progress indicator active.");
     const status = await readJson(`${base}/intake-processing`), saved = await readJson(`${base}/metadata`), moved = await readJson(base);
     assert(status.state === "completed" && status.converted === config.converted && !status.canRecover, "Real persisted processing did not complete.");
     assert(moved.id === originalBook.id && moved.location !== originalBook.location && moved.currentPage === originalBook.currentPage
@@ -154,7 +154,7 @@
     for (const [field, value] of Object.entries(originalMetadata.fields)) {
       if (field !== "Volume" && field !== "Title" && !proposal.fields[field]?.trim()) assert(saved.fields[field] === value, `Omitted provider field was erased: ${field}`);
     }
-    assert(!$("metadata-dialog").open && !$("organization-dialog").open && document.activeElement === $("library-status"),
+    assert($("metadata-view").hidden && !$("organization-dialog").open && document.activeElement === $("library-status"),
       "Successful acceptance did not close the window and return focus to the library.");
     assert(!mutations.some(item => item.path === "/api/books/metadata" || item.path === "/api/file-operations"), "Candidate acceptance used obsolete catalog-only/manual-move endpoints.");
     assert(matchRequests === 4 && mutations.filter(item => item.path.endsWith("/intake/prepare")).length === 3, "Unexpected automatic matching or preparation retry.");

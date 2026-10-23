@@ -167,7 +167,7 @@ public static class IntakeMatching
 
 public sealed partial class LibraryStore
 {
-    public IntakeBook GetIntake(string id)
+    public IntakeBook GetIntake(string id, bool requireUnsorted = true)
     {
         using var db = Open();
         using var command = Command(db, "SELECT availability FROM books WHERE id=$id", ("$id", id));
@@ -175,9 +175,9 @@ public sealed partial class LibraryStore
         if (availability != "available")
             throw new ComicVineException(409, "This comicbook is unavailable. Rescan before reviewing it.");
         var source = GetSource(id);
-        if (unsortedPath is null || !IsContained(unsortedPath, source.Path))
+        if (requireUnsorted && (unsortedPath is null || !IsContained(unsortedPath, source.Path)))
             throw new ComicVineException(409, "This comicbook is no longer in Unsorted. Refresh the review queue.");
-        return new(id, "Unsorted/" + SafeRelative(unsortedPath, source.Path).Replace('\\', '/'),
-            IntakeMatching.Parse(Path.GetRelativePath(unsortedPath, source.Path), GetMetadata(id).Fields));
+        return new(id, FileDisplayPath(source.Path),
+            IntakeMatching.Parse(Path.GetRelativePath(source.Root, source.Path), GetMetadata(id).Fields));
     }
 }

@@ -31,7 +31,8 @@ public static class SeriesShelfChecks
                 using var archive = ZipFile.Open(Path.Combine(folder ?? root, title + ".cbz"), ZipArchiveMode.Create);
                 using (var stream = archive.CreateEntry("page.png").Open()) stream.Write(png);
                 using var writer = new StreamWriter(archive.CreateEntry("ComicInfo.xml").Open());
-                writer.Write(new XElement("ComicInfo", new XElement("Title", title), new XElement("Series", series)));
+                writer.Write(new XElement("ComicInfo", new XElement("Title", title), new XElement("Series", series),
+                    new XElement("Publisher", series switch { "Active" => "Zulu", "Legacy" => "alpha", _ => "Alpha" })));
             }
             foreach (var series in new[] { "Active", "Stale", "Revived", "TooLate", "Complete", "Legacy", "Mixed", "UpdateOnly", "OutsideUpdate" })
             {
@@ -87,8 +88,8 @@ public static class SeriesShelfChecks
                 "Bulk completion failed to record real activity.");
             Sql("UPDATE progress SET updated_at=$date WHERE book_id IN ($one,$two)", ("$date", now - 31 * 86400), ("$one", ids["Complete1"]), ("$two", ids["Complete2"]));
             var deck = store.ListSeriesShelf("alice", "on-deck");
-            Check(deck.Items.Select(group => group.Key).SequenceEqual(["Active", "Revived", "Legacy"]),
-                "On Deck lost activity ordering, 30/7-day windows, legacy progress, or full-read exclusion.");
+            Check(deck.Items.Select(group => group.Key).SequenceEqual(["Legacy", "Revived", "Active"]),
+                "Next Issue lost case-insensitive publisher/series ordering, 30/7-day windows, legacy progress, or full-read exclusion.");
             var active = deck.Items.Single(group => group.Key == "Active");
             Check(active.Count == 2 && active.Unread == 1 && active.InProgress == 1 && active.Completed == 0 && active.CompletionPercent == 0,
                 "Shelf counts included Archived/Unsorted or lost page-zero progress.");

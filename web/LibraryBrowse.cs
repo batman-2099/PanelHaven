@@ -249,7 +249,7 @@ public sealed partial class LibraryStore
         };
         var order = kind switch
         {
-            "on-deck" => "last_activity DESC,last_added DESC,",
+            "on-deck" => "publisher COLLATE NOCASE,",
             "recently-updated" => "last_added DESC,",
             _ => "first_added DESC,"
         };
@@ -259,7 +259,7 @@ public sealed partial class LibraryStore
         command.Transaction = transaction;
         var grouped = """
             WITH series AS (
-                SELECT b.series AS key,COUNT(*) AS count,
+                SELECT b.series AS key,MIN(b.publisher COLLATE NOCASE) AS publisher,COUNT(*) AS count,
                     MIN(CASE WHEN b.availability='available' THEN b.id END) AS cover,
                     SUM(p.book_id IS NULL) AS unread,
                     SUM(p.book_id IS NOT NULL AND p.completed=0) AS in_progress,

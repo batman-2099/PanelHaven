@@ -20,11 +20,13 @@ internal static class IntakeProcessingChecks
     {
         if (!OperatingSystem.IsLinux()) return;
         CheckCbzReplacement();
+        foreach (var location in new[] { "unsorted", "library", "archived" })
         foreach (var format in new[] { "cbz", "zip", "rar4.cbr", "rar5.cbr", "directories-rar4.cbr", "directories-rar5.cbr" })
         {
-            using var fixture = new Fixture(format);
+            using var fixture = new Fixture(format, location: location);
             var store = fixture.Store;
             var id = fixture.Id;
+            Check(store.ListBooks("owner", null, location: location).Items.Single().Id == id, "Processing fixture is in the wrong location.");
             var page0 = store.GetPage(id, 0).Bytes;
             var page1 = store.GetPage(id, 1).Bytes;
             store.SaveProgress("owner", id, new(1, true));
@@ -84,8 +86,21 @@ internal static class IntakeProcessingChecks
             Check(result.Message.Contains("undo is unavailable"), "Intake result implied original recovery.");
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0 && (long)fixture.Sql("SELECT count(*) FROM books")! == 1,
                 "Post-processing scan duplicated the original identity.");
-            var restarted = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted);
+            var restarted = new LibraryStore(fixture.Database, [fixture.Library], unsortedPath: fixture.Unsorted,
+                archivePath: location == "archived" ? fixture.Archived : null);
             Check(restarted.GetIntakeProcessing(id).State == "completed" && restarted.GetPageOrder(id).Pages.SequenceEqual([1, 0]), "Restart lost committed journal/page order.");
+            if (location == "library" && format == "cbz")
+            {
+                var updated = new ComicVineMetadata(new(Metadata.Fields) { ["Title"] = "Accepted again" }, Metadata.Url);
+                var next = restarted.PrepareIntake(id, new(1, 2, 0), updated);
+                var repeated = restarted.ProcessIntake(id, new(1, 2, 0, next.Revision, true), updated);
+                var currentPath = (string)fixture.Sql("SELECT path FROM books WHERE id=$id")!;
+                using var zip = ZipFile.OpenRead(currentPath);
+                Check(repeated.State == "completed" && repeated.Revision != result.Revision && !File.Exists(destination)
+                    && Read(zip, "ComicInfo.xml").Contains("Accepted again") && restarted.GetBook("owner", id).PersonalRating == 4,
+                    "A previously processed library comicbook could not be processed again safely.");
+                fixture.CheckNoOriginals();
+            }
         }
 
         using (var fixture = new Fixture("cbz"))
@@ -408,16 +423,17 @@ internal static class IntakeProcessingChecks
         public string Directory { get; } = Path.Combine(Path.GetTempPath(), "panelhaven-intake-processing-" + Guid.NewGuid().ToString("N"));
         public string Library => Path.Combine(Directory, "library");
         public string Unsorted => Path.Combine(Directory, "unsorted");
+        public string Archived => Path.Combine(Directory, "archived");
         public string Database => Path.Combine(Directory, "state", "library.sqlite");
         public string Source { get; }
         public byte[] Original { get; }
         public LibraryStore Store { get; }
         public string Id { get; }
-        public Fixture(string format, bool replacement = false)
+        public Fixture(string format, bool replacement = false, string location = "unsorted")
         {
             System.IO.Directory.CreateDirectory(Library);
             System.IO.Directory.CreateDirectory(Unsorted);
-            var parent = replacement ? Path.Combine(Library, "nested folder") : Unsorted;
+            var parent = replacement || location == "library" ? Path.Combine(Library, "nested folder") : location == "archived" ? Archived : Unsorted;
             System.IO.Directory.CreateDirectory(parent);
             Source = Path.Combine(parent, "original." + (format.Contains('.') ? Path.GetExtension(format)[1..] : format));
             var fixtures = Path.Combine(AppContext.BaseDirectory, "fixtures");
@@ -459,7 +475,7 @@ internal static class IntakeProcessingChecks
                 }
             }
             Original = File.ReadAllBytes(Source);
-            Store = new LibraryStore(Database, [Library], unsortedPath: Unsorted);
+            Store = new LibraryStore(Database, [Library], unsortedPath: Unsorted, archivePath: location == "archived" ? Archived : null);
             Check(Store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Intake fixture did not import.");
             Id = (string)Sql("SELECT id FROM books")!;
         }

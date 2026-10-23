@@ -105,9 +105,9 @@ public static class LibraryEndpoints
             Results.Ok(store.GetBook(UserId(user), id)));
         api.MapGet("/books/{id}/next-issue", (LibraryStore store, string id) =>
             Results.Ok(new { id = store.GetNextIssue(id) }));
-        foreach (var (path, requireUnsorted) in new[] { ("intake", true), ("metadata-matches", false) })
+        foreach (var path in new[] { "intake", "metadata-matches" })
         {
-            api.MapGet($"/books/{{id}}/{path}", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id, requireUnsorted)))
+            api.MapGet($"/books/{{id}}/{path}", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id)))
                 .RequireAuthorization(policy => policy.RequireRole("admin"));
             api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, ComicVine provider, string id, HttpRequest request) =>
             {
@@ -115,9 +115,9 @@ public static class LibraryEndpoints
                 try
                 {
                     var hints = await request.ReadFromJsonAsync<IntakeHints>(request.HttpContext.RequestAborted);
-                    var source = store.GetIntake(id, requireUnsorted);
+                    var source = store.GetIntake(id);
                     var matches = await provider.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
-                    if (store.GetIntake(id, requireUnsorted).Source != source.Source)
+                    if (store.GetIntake(id).Source != source.Source)
                         return Error(409, "The comicbook moved during matching. Refresh the search.");
                     return Results.Ok(matches);
                 }

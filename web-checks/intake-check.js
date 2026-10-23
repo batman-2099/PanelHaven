@@ -1,9 +1,9 @@
 // Run in the browser console, signed in as admin on an idle DISPOSABLE server.
-// Configure a writable Library root, Unsorted, and a real server-side Comic Vine key.
+// Configure a writable Library root, the tested source location, and a real server-side Comic Vine key.
 // Scan a disposable CBZ/ZIP or real CBR fixture with no earlier processing operation.
 // Put the fixture on the current flat-books page. Use a fresh fixture for each run.
 // window.panelHavenIntakeCheck = { disposable: true, bookId: "fixture-id", destinationRoot: 0,
-//   issueId: 1109530, volumeId: 164287, converted: false };
+//   issueId: 1109530, volumeId: 164287, converted: false, location: "unsorted" };
 // Then paste this file. It saves/embeds real provider metadata, creates directories,
 // renames/moves the fixture and, for CBR, converts and permanently deletes the original.
 // Matching responses alone simulate provider failure/empty/tied results. Preparation,
@@ -17,6 +17,8 @@
   assert(config?.disposable === true && typeof config.bookId === "string" && Number.isInteger(config.destinationRoot)
     && Number.isInteger(config.issueId) && Number.isInteger(config.volumeId)
     && typeof config.converted === "boolean", "Explicit disposable fixture, provider IDs and conversion expectation are required.");
+  const area = config.location || "unsorted", route = area === "unsorted" ? "#unsorted" : "#library";
+  assert(["library", "archived", "unsorted"].includes(area), "Choose a configured source location.");
   assert(!$('library-view').hidden && !document.querySelector('dialog[open]'), "Start on an idle library page.");
   const waitFor = async (condition, message) => {
     const deadline = Date.now() + 180000;
@@ -82,18 +84,22 @@
     $("book-status").value = $("book-availability").value = "all";
     $("group-by").value = "none";
     $("stack-by").value = "none";
-    $("library-location").value = "unsorted";
+    $("library-location").value = area;
     change("library-location");
-    await waitFor(() => location.hash === "#unsorted" && $("books").getAttribute("aria-busy") !== "true" && $("library-title").textContent === "Unsorted intake");
-    $("process-unsorted").click();
-    await waitFor(() => $("intake-dialog").open && !$("intake-hints").disabled);
-    assert($("intake-scope").textContent.includes("current page only"), "No-selection scope must explicitly say current page.");
-    close("intake-dialog");
-    await waitFor(() => !$("intake-dialog").open);
+    await waitFor(() => location.hash === route && $("books").getAttribute("aria-busy") !== "true" && document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`));
+    if (area === "unsorted") {
+      $("process-unsorted").click();
+      await waitFor(() => $("intake-dialog").open && !$("intake-hints").disabled);
+      assert($("intake-scope").textContent.includes("current page only"), "No-selection scope must explicitly say current page.");
+      close("intake-dialog");
+      await waitFor(() => !$("intake-dialog").open);
+    }
     const selection = document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`);
     assert(selection, "Put the disposable fixture on the current flat-books page before running.");
     selection.click();
-    $("process-unsorted").click();
+    document.querySelector(".selection-tools").open = true;
+    assert(!$("process-selected").hidden && !$("process-selected").disabled, "Selected processing is unavailable.");
+    $("process-selected").click();
     await waitFor(() => !$("intake-hints").disabled && $("intake-queue").value === config.bookId);
     assert($("intake-queue").options.length === 1 && $("intake-scope").textContent.includes("selected"), "Selected queue did not isolate the fixture.");
     assert([...$("intake-root").options].every(option => /^Library \d+$/.test(option.textContent)), "Non-library destination was offered.");
@@ -140,8 +146,8 @@
     assert(!$("intake-progress").hidden && $("intake-progress").getBoundingClientRect().height > 0, "Active processing lost its visible progress feedback.");
     close("intake-dialog");
     assert($("intake-dialog").open, "Mutation allowed dismissal.");
-    location.hash = "#library";
-    await waitFor(() => location.hash === "#unsorted", "Navigation was not guarded during processing.");
+    location.hash = "#settings";
+    await waitFor(() => location.hash === route, "Navigation was not guarded during processing.");
     release(); release = null;
     await waitFor(() => !$("intake-dialog").open && !$("intake-queue").options.length && processStatuses.length === 2);
     assert($("intake-progress").hidden, "Completed processing left the progress indicator active.");
@@ -175,7 +181,33 @@
     close("intake-dialog");
     await waitFor(() => !$("intake-dialog").open && document.activeElement === $("intake-history"));
     close("details-dialog");
-    console.log("PASS: real prepare/process, stale rejection, cancelled preflight, guarded mutation, lost-response status reconciliation, identity/progress, metadata preservation, destination, and reopened Book details history. Matching only was simulated; no processing endpoint was mocked. Recovery needs a separate interrupted-operation fixture.");
+    $("close-reader").click();
+    await waitFor(() => !$("library-view").hidden);
+    $("library-location").value = "library";
+    change("library-location");
+    await waitFor(() => !$("library-view").hidden && $("books").getAttribute("aria-busy") !== "true" && document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`));
+    document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`).click();
+    $("process-selected").click();
+    await waitFor(() => $("intake-dialog").open && !$("intake-hints").disabled);
+    assert($("intake-outcome").textContent.startsWith("Previous operation:") && $("selection-count").textContent.startsWith("1 "),
+      "Earlier processing blocked a new queue or cleared its selection.");
+    $("intake-match").click();
+    await waitFor(() => !$("intake-match").disabled && $("intake-candidates").querySelector("button"));
+    $("intake-root").add(new Option("Invalid test destination", "999"));
+    $("intake-root").value = "999";
+    change("intake-root");
+    $("intake-candidates").querySelector("button").click();
+    await waitFor(() => !$("intake-candidates").querySelector("button").disabled && $("intake-status").textContent.includes("Persisted status checked"));
+    assert($("intake-dialog").open && processStatuses.length === 2 && (await readJson(`${base}/intake-processing`)).revision === status.revision,
+      "Rejected preparation mistook an earlier completed operation for new success.");
+    $("intake-root").value = String(config.destinationRoot);
+    change("intake-root");
+    loseSuccess = true;
+    $("intake-candidates").querySelector("button").click();
+    await waitFor(() => !$("intake-dialog").open && processStatuses.length === 3);
+    assert((await readJson(`${base}/intake-processing`)).revision !== status.revision,
+      "Reprocessing did not create a new completed operation.");
+    console.log(`PASS (${area}): selected processing, real prepare/process, stale rejection, cancelled preflight, guarded mutation, lost-response reconciliation, identity/progress, metadata preservation, history and repeat processing. Matching only was simulated; processing endpoints were real. Recovery needs a separate interrupted-operation fixture.`);
   } finally {
     release?.();
     window.fetch = originalFetch;

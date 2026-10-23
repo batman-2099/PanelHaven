@@ -114,6 +114,7 @@
           <button id="mark-selected-unread" type="button" title="Mark selected comicbooks unread (0%) for your account" aria-label="Unread: reset selected comicbooks to unread (0%) for your account" disabled>Unread</button>
         </div>
         <details class="selection-tools compact-disclosure"><summary>More selected actions</summary><div class="actions">
+          <button id="process-selected" type="button" class="primary" hidden disabled>Process selected</button>
           <button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
           <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
           <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
@@ -331,7 +332,7 @@
     </form>
   </dialog>
   <dialog id="intake-dialog" aria-labelledby="intake-title" aria-describedby="intake-scope">
-    <div class="dialog-heading"><h2 id="intake-title" tabindex="-1" autofocus>Process Unsorted</h2><button type="button" data-close="intake-dialog" class="quiet">Close</button></div>
+    <div class="dialog-heading"><h2 id="intake-title" tabindex="-1" autofocus>Process comicbooks</h2><button type="button" data-close="intake-dialog" class="quiet">Close</button></div>
     <p id="intake-scope"></p>
     <label for="intake-queue">Review queue</label><select id="intake-queue"></select>
     <label for="intake-root">Destination library</label><select id="intake-root" disabled></select>

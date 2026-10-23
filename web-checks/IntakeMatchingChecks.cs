@@ -147,13 +147,12 @@ internal static class IntakeMatchingChecks
                 && !JsonSerializer.Serialize(intake).Contains(directory), "Intake leaked an absolute path or lost source hints.");
             Check(bytes.SequenceEqual(File.ReadAllBytes(source)) && metadata == JsonSerializer.Serialize(store.GetMetadata(book.Id)),
                 "Hint extraction mutated source or catalog metadata.");
-            foreach (var wrongArea in store.ListBooks("check", null).Items)
+            foreach (var libraryBook in store.ListBooks("check", null).Items)
             {
-                var match = store.GetIntake(wrongArea.Id, requireUnsorted: false);
+                var match = store.GetIntake(libraryBook.Id);
                 Check(match.Source.StartsWith("Library ", StringComparison.Ordinal) && !match.Source.Contains(directory)
                     && match.Hints.Series == Path.GetFileNameWithoutExtension(match.Source),
                     "Catalog matching must support ordinary libraries without exposing absolute paths.");
-                await Error(() => Task.FromResult(store.GetIntake(wrongArea.Id)), 409);
             }
             using var db = new SqliteConnection($"Data Source={database}");
             db.Open();
@@ -162,7 +161,6 @@ internal static class IntakeMatchingChecks
             command.Parameters.AddWithValue("$id", book.Id);
             command.ExecuteNonQuery();
             await Error(() => Task.FromResult(store.GetIntake(book.Id)), 409);
-            await Error(() => Task.FromResult(store.GetIntake(book.Id, requireUnsorted: false)), 409);
             command.CommandText = "UPDATE books SET availability='available' WHERE id=$id";
             command.ExecuteNonQuery();
             File.Delete(source);

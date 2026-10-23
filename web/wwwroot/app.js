@@ -1352,6 +1352,8 @@ function updateSelection() {
   $("clear-selection").disabled = deletionBusy || !count;
   $("select-page").disabled = deletionBusy || !libraryItems.length;
   $("select-page").textContent = pageSelectionFull() ? "Unselect all" : "Select page";
+  $("process-selected").hidden = session?.role !== "admin";
+  $("process-selected").disabled = deletionBusy || !count || count > 100;
   $("bulk-metadata").disabled = !count;
   $("export-selected-comics").disabled = !session || session.mustChangePassword || !count || count > 100;
   $("mark-selected-read").disabled = $("mark-selected-unread").disabled = readingStatusBusy || !session || session.mustChangePassword || !count || count > 100;
@@ -2207,7 +2209,7 @@ function updateIntakeControls() {
     $("intake-progress-book").textContent = row.title + (intake.rows.length > 1 ? ` · Queue ${intake.rows.indexOf(row) + 1} of ${intake.rows.length}` : "");
   }
   const processing = row?.processing;
-  const blocked = !intake?.metadataOnly && (intake?.historyOnly || !processing || processing.state === "pending" || processing.state === "completed" || processing.canRecover);
+  const blocked = !intake?.metadataOnly && (intake?.historyOnly || !processing || processing.state === "pending" || row.completed || processing.canRecover);
   $("intake-hints").disabled = $("intake-match").disabled = busy || !row?.hints || blocked;
   $("intake-cancel").hidden = !busy || !!intake?.saving;
   $("intake-queue").disabled = !!intake?.saving;
@@ -2220,7 +2222,7 @@ function updateIntakeControls() {
   $("intake-outcome").textContent = row?.outcome || "Processing status has not been checked. Refresh status before proceeding.";
   for (const option of $("intake-queue").options) {
     const item = intake?.rows.find((entry) => entry.id === option.value);
-    if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" ? "needs review" : item.processing?.state || "status unknown"}`;
+    if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" || item.processing?.state === "completed" && !item.completed ? "needs review" : item.processing?.state || "status unknown"}`;
   }
   for (const button of $("intake-candidates").querySelectorAll("button")) button.disabled = busy || blocked || !intake?.metadataOnly && !$("intake-root").value;
 }
@@ -2228,12 +2230,14 @@ function updateIntakeControls() {
 function setIntakeProcessing(row, result) {
   if (!result || !["none", "pending", "completed", "failed"].includes(result.state)) throw new Error("The server returned an unknown processing status");
   row.processing = result;
+  row.completed = result.state === "completed" && result.revision !== row.initialRevision;
   if (intake?.replacement) $("intake-history").hidden = result.state === "none";
   row.outcome = result.state === "none" ? intake?.historyOnly ? "No recorded processing operation." : "Not processed. Accept a candidate to save metadata and organize the comicbook."
     : [result.message, result.destination ? `Destination: ${result.destination}` : "",
       result.state === "completed" ? result.converted ? "Converted to CBZ; original source removed after verification." : "Comicbook format preserved." : "",
       result.canRecover ? "Use Recover interrupted processing to finish committed cleanup or roll back uncommitted changes safely." : ""].filter(Boolean).join("\n");
-  if (result.state === "completed") {
+  if (result.state === "completed" && !row.completed) row.outcome = "Previous operation: " + row.outcome;
+  if (row.completed) {
     selectedBooks.delete(row.id);
     updateSelection();
   }
@@ -2277,8 +2281,8 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
         loadLibrary();
         loadPublishers();
         loadLists();
-        $("intake-status").textContent = result.state === "completed" ? row.outcome
-          : `${error.message}. Persisted status checked; processing was not retried. ${state.replacement ? "Review the status below; refresh status or use recovery before converting again." : result.state === "none" || result.state === "failed" && !result.canRecover ? "You may explicitly accept again after resolving the error." : "Use the status and recovery controls below."}`;
+        $("intake-status").textContent = row.completed ? row.outcome
+          : `${error.message}. Persisted status checked; processing was not retried. ${state.replacement ? "Review the status below; refresh status or use recovery before converting again." : result.state === "none" || result.state === "completed" || result.state === "failed" && !result.canRecover ? "You may explicitly accept again after resolving the error." : "Use the status and recovery controls below."}`;
       } catch {
         if (current()) $("intake-status").textContent = row.outcome;
       }
@@ -2321,10 +2325,10 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
       state.processingStage = "";
       state.controller = null;
       updateIntakeControls();
-      if (checkProcessing && row.processing?.state === "completed") {
+      if (checkProcessing && row.completed) {
         const index = state.rows.indexOf(row);
-        const next = state.rows.find((item, position) => position > index && item.processing?.state !== "completed")
-          || state.rows.find(item => item.processing?.state !== "completed");
+        const next = state.rows.find((item, position) => position > index && !item.completed)
+          || state.rows.find(item => !item.completed);
         if (next) {
           $("intake-queue").value = next.id;
           await showIntakeRow();
@@ -2458,6 +2462,7 @@ async function showIntakeRow() {
     if (!state.metadataOnly) {
       const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake-processing`, options);
       if (!current()) return;
+      if (!state.historyOnly && row.initialRevision === undefined) row.initialRevision = result.revision;
       setIntakeProcessing(row, result);
       if (state.historyOnly) {
         $("intake-status").textContent = row.outcome;
@@ -2468,7 +2473,7 @@ async function showIntakeRow() {
         if (!current()) return;
         $("intake-root").replaceChildren(...roots.filter((root) => /^Library \d+$/.test(root.label)).map((root) => new Option(root.label, root.index)));
       }
-      if (result.state === "completed" || result.state === "pending" || result.canRecover) {
+      if (row.completed || result.state === "pending" || result.canRecover) {
         $("intake-status").textContent = row.outcome;
         return;
       }
@@ -2493,7 +2498,7 @@ function openIntake(rows, scope, mode = "process") {
   const replacement = mode === "replacement", historyOnly = mode === "history" || replacement, metadataOnly = mode === "metadata";
   resetIntake();
   intake = { epoch: authEpoch, hash: location.hash, rows, row: null, busy: false, historyOnly, replacement, metadataOnly, details: detailGeneration };
-  $("intake-title").textContent = metadataOnly ? "Find metadata" : replacement ? "Convert to CBZ" : historyOnly ? "Processing status" : "Process Unsorted";
+  $("intake-title").textContent = metadataOnly ? "Find metadata" : replacement ? "Convert to CBZ" : historyOnly ? "Processing status" : "Process comicbooks";
   $("cbz-replacement").hidden = !replacement;
   $("intake-queue").hidden = document.querySelector('label[for="intake-queue"]').hidden = replacement || metadataOnly;
   for (const id of ["intake-form", "intake-candidates"]) $(id).hidden = historyOnly;
@@ -2538,12 +2543,12 @@ $("cbz-replacement-form").addEventListener("submit", (event) => {
   }, true);
 });
 
-$("process-unsorted").addEventListener("click", () => {
-  if (session?.role !== "admin" || catalogLocation !== "unsorted") return;
+for (const trigger of ["process-unsorted", "process-selected"]) $(trigger).addEventListener("click", () => {
+  if (session?.role !== "admin" || deletionBusy || (trigger === "process-selected" ? !selectedBooks.size : catalogLocation !== "unsorted")) return;
   const selected = selectedBooks.size > 0;
   const ids = selected ? [...selectedBooks] : libraryItems.map((book) => book.id);
   if (!ids.length || ids.length > 100) {
-    $("library-status").textContent = "Choose Stack by: None or open a stack, then select up to 100 Unsorted comicbooks. With no selection, only the current page is used.";
+    $("library-status").textContent = "Choose Stack by: None or open a stack, then select up to 100 comicbooks. With no selection, Process Unsorted uses only the current page.";
     $("library-status").focus();
     return;
   }

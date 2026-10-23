@@ -9,3 +9,4 @@ web/data.settings.json.*.tmp
 __pycache__/
 .env
 /upstream/
+/kavita_backup_*.zip

@@ -24,6 +24,7 @@
             <button id="scan" type="button">Scan libraries</button>
             <button id="maintenance" type="button">Library maintenance</button>
             <button id="metadata-report" type="button">Validate metadata</button>
+            <button id="import-kavita" type="button" aria-haspopup="dialog">Import Kavita read status…</button>
             <button id="server-settings" type="button">Server settings</button>
             <button id="manage-users" type="button">Manage accounts</button>
     <details id="scan-panel" aria-label="Library scan" hidden>
@@ -284,6 +285,26 @@
     <progress id="comic-export-progress" aria-label="Comic export transfer" aria-describedby="comic-export-status" hidden></progress>
     <p id="comic-export-status" role="status" aria-live="polite" aria-atomic="true"></p>
     <div class="actions list-actions"><button id="download-comics" type="button" class="primary">Download</button><button id="cancel-comic-export" type="button" hidden>Cancel download</button></div>
+  </dialog>
+
+  <dialog id="kavita-import-dialog" aria-labelledby="kavita-import-title" aria-describedby="kavita-import-help">
+    <div class="dialog-heading"><h2 id="kavita-import-title" tabindex="-1" autofocus>Import Kavita read status</h2><button type="button" data-close="kavita-import-dialog" class="quiet">Close</button></div>
+    <p id="kavita-import-help">Marks completed matches read for your signed-in Panel Haven account only. Never marks books unread or changes comicbook files. Already-read books stay unchanged. Partial Kavita chapters are not imported.</p>
+    <p id="kavita-import-account"></p>
+    <form id="kavita-import-form" class="form-stack">
+      <label>Kavita backup ZIP (required, up to 256 MiB)<input id="kavita-import-file" type="file" accept=".zip,application/zip" required aria-describedby="kavita-import-status"></label>
+      <label>Kavita source user<select id="kavita-import-user" disabled aria-describedby="kavita-import-status"><option value="">Preview the backup to load users</option></select></label>
+      <div class="actions"><button id="preview-kavita-import" type="submit">Preview read status</button></div>
+    </form>
+    <p id="kavita-import-status" role="status" tabindex="-1"></p>
+    <section id="kavita-import-preview" aria-labelledby="kavita-import-summary-title" hidden>
+      <h3 id="kavita-import-summary-title">Preview</h3>
+      <p id="kavita-import-summary"></p>
+      <div class="actions list-actions"><button id="apply-kavita-import" type="button" class="primary" disabled>Mark matched books read</button></div>
+      <div class="library-filters"><label>Show results<select id="kavita-import-filter"><option value="">All results</option><option value="ready">Ready</option><option value="already-read">Already read</option><option value="unmatched">Unmatched</option><option value="ambiguous">Ambiguous</option></select></label></div>
+      <nav class="library-pagination" aria-label="Kavita import results"><button id="previous-kavita-import" type="button">Previous</button><span id="kavita-import-page" role="status"></span><button id="next-kavita-import" type="button">Next</button></nav>
+      <div id="kavita-import-entries"></div>
+    </section>
   </dialog>
 
   <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">

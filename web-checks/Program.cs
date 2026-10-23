@@ -11,6 +11,8 @@ if (args is ["--archive-write-crash-child", var mode, var fixture])
 
 LibraryChecks.Run();
 Console.WriteLine("PASS: archive import, natural ordering, metadata preservation, isolated progress and unsafe archive rejection.");
+await KavitaImportChecks.RunAsync();
+Console.WriteLine("PASS: bounded Kavita backup import, conservative matches, isolated/idempotent progress, stale atomic refusal and temporary-file cleanup.");
 ThumbnailChecks.Run();
 Console.WriteLine("PASS: thumbnail resizing, cache reuse, invalidation and image safety.");
 ArchiveChecks.Run();

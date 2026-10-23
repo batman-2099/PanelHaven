@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Xml;
 using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace PanelHaven.Web;
 public sealed record ListBooksSelection([property: JsonRequired] string[] BookIds);
@@ -38,6 +39,45 @@ public static class LibraryEndpoints
                 return Error(503, "Library database is unavailable. Try again later.");
             }
         });
+        foreach (var apply in new[] { false, true })
+        {
+            api.MapPost("/reading-import/kavita/" + (apply ? "apply" : "preview"), async (LibraryStore store, HttpContext context) =>
+            {
+                context.Response.Headers.CacheControl = "private, no-store";
+                var request = context.Request;
+                if (!string.Equals(request.ContentType?.Split(';')[0].Trim(), "application/zip", StringComparison.OrdinalIgnoreCase))
+                    return Error(400, "Upload the Kavita backup as application/zip.");
+                int? sourceUserId = null;
+                if (request.Query.TryGetValue("sourceUserId", out var selected))
+                {
+                    if (selected.Count != 1 || !int.TryParse(selected[0], System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out var id))
+                        return Error(400, "Choose a valid Kavita source user.");
+                    sourceUserId = id;
+                }
+                var revision = request.Query["revision"];
+                if (apply && (sourceUserId is null || revision.Count != 1 || revision[0]?.Length != 64))
+                    return Error(400, "Select a Kavita user and preview this backup before importing.");
+                if (request.ContentLength > LibraryStore.MaxKavitaUploadBytes)
+                    return Error(413, "The backup exceeds the 256 MiB upload limit.");
+                var bodyLimit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+                if (bodyLimit is { IsReadOnly: false }) bodyLimit.MaxRequestBodySize = LibraryStore.MaxKavitaUploadBytes;
+                try
+                {
+                    if (apply)
+                        return Results.Ok((object)await store.ApplyKavitaImportAsync(UserId(context.User), request.Body,
+                            sourceUserId!.Value, revision[0]!, context.RequestAborted));
+                    return Results.Ok((object)await store.PreviewKavitaImportAsync(UserId(context.User), request.Body,
+                        sourceUserId, context.RequestAborted));
+                }
+                catch (KavitaImportException exception) { return Error(exception.StatusCode, exception.Message); }
+                catch (BadHttpRequestException exception) when (exception.StatusCode == 413)
+                { return Error(413, "The backup exceeds the 256 MiB upload limit."); }
+                catch (SqliteException) { return Error(503, "Reading status could not be imported. Your account or library may have changed; preview again."); }
+                catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException)
+                { return Error(422, "The Kavita backup could not be processed safely. No reading status was imported."); }
+            }).RequireAuthorization(policy => policy.RequireRole("admin"));
+        }
         var comicVine = api.MapGroup("/comic-vine").RequireAuthorization(policy => policy.RequireRole("admin"));
         comicVine.MapGet("/status", (ComicVine provider) => Results.Ok(new { configured = provider.Configured }));
         comicVine.MapGet("/volumes", async (ComicVine provider, string? q, int? offset, CancellationToken cancellationToken) =>

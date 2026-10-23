@@ -237,6 +237,7 @@ let libraryItems = [];
 const selectedBooks = new Set();
 let readingStatusBusy = false;
 let comicExport = null;
+let kavitaImport = null;
 let readingLists = [];
 let listFolders = [];
 let folderEditingId = "";
@@ -373,6 +374,7 @@ function clearReader() {
 
 function showLogin() {
   resetIntake();
+  resetKavitaImport();
   authEpoch++;
   session = null;
   accountBusy = false;
@@ -502,7 +504,7 @@ async function api(path, options = {}) {
   const epoch = authEpoch;
   const headers = new Headers(options.headers);
   if (options.method && options.method !== "GET") headers.set("X-PanelHaven-Request", "1");
-  if (options.body) headers.set("Content-Type", "application/json");
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
   if (!response.ok) {
     let message = `Request failed (${response.status}). Please try again.`;
@@ -537,6 +539,7 @@ function signedIn(data) {
   authEpoch++;
   resetServerSettings();
   resetIntake();
+  resetKavitaImport();
   session = data;
   resetComicExport();
   resetPageOrder();
@@ -1816,6 +1819,7 @@ $("delete-selected").addEventListener("click", async () => {
 });
 
 function canCloseDialog(id) {
+  if (id === "kavita-import-dialog") return !kavitaImport?.applying;
   if (id === "details-dialog" && intake?.replacement && intake.saving) return false;
   if (id === "intake-dialog") return !intake?.saving && !metadataBusy && !organizationBusy && !archiveBusy && !fileOperationBusy;
   if (id === "data-relocation-dialog") return !serverSettingsBusy && (!dataRelocationDirty() || confirm("Discard this unsubmitted relocation request?"));
@@ -1833,8 +1837,206 @@ function canCloseDialog(id) {
   return !((rating && ratingDirty) || (folder && folderDirty)) || confirm(`Discard unsaved ${rating ? "rating" : "folder"} changes?`);
 }
 
-for (const id of ["user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
+for (const id of ["kavita-import-dialog", "user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
   if (!canCloseDialog(id)) event.preventDefault();
+});
+
+function resetKavitaImport() {
+  kavitaImport?.controller?.abort();
+  kavitaImport = null;
+  $("kavita-import-form").reset();
+  $("kavita-import-user").replaceChildren(new Option("Preview the backup to load users", ""));
+  $("kavita-import-entries").replaceChildren();
+  $("kavita-import-preview").hidden = true;
+  $("kavita-import-summary").textContent = $("kavita-import-account").textContent = $("kavita-import-status").textContent = "";
+  if ($("kavita-import-dialog").open) $("kavita-import-dialog").close();
+}
+
+function kavitaImportCurrent(state) {
+  return kavitaImport === state && state.epoch === authEpoch && session?.role === "admin"
+    && !session.mustChangePassword && $("kavita-import-dialog").open;
+}
+
+function updateKavitaImportControls() {
+  const state = kavitaImport;
+  $("kavita-import-file").disabled = !!state?.applying;
+  $("kavita-import-user").disabled = !!state?.applying || $("kavita-import-user").options.length < 2;
+  $("preview-kavita-import").disabled = !!state?.busy;
+  $("apply-kavita-import").disabled = !!state?.busy || !state?.preview?.revision || state.preview.readyBooks < 1;
+  $("kavita-import-dialog").querySelector("[data-close]").disabled = !!state?.applying;
+}
+
+function invalidateKavitaImport() {
+  if (!kavitaImport || kavitaImport.applying) return;
+  kavitaImport.controller?.abort();
+  kavitaImport.controller = null;
+  kavitaImport.preview = null;
+  kavitaImport.file = null;
+  kavitaImport.busy = false;
+  $("kavita-import-preview").hidden = true;
+  $("kavita-import-entries").replaceChildren();
+  $("kavita-import-status").textContent = "Selection changed. Preview again before marking books read.";
+  updateKavitaImportControls();
+}
+
+function renderKavitaImportEntries() {
+  const state = kavitaImport;
+  if (!state?.preview) return;
+  const filter = $("kavita-import-filter").value;
+  const entries = filter ? state.preview.entries.filter(entry => entry.status === filter) : state.preview.entries;
+  const pages = Math.max(1, Math.ceil(entries.length / 50));
+  state.page = Math.max(1, Math.min(state.page, pages));
+  $("kavita-import-page").textContent = `Page ${state.page} of ${pages} · ${entries.length} files`;
+  $("previous-kavita-import").disabled = state.page === 1;
+  $("next-kavita-import").disabled = state.page === pages;
+  $("kavita-import-entries").replaceChildren(...entries.slice((state.page - 1) * 50, state.page * 50).map(entry => {
+    const row = textElement("article", "", "maintenance-row");
+    const source = textElement("p", "");
+    source.append(textElement("strong", entry.source));
+    row.append(source, textElement("p", `${{ ready: "Ready", "already-read": "Already read", unmatched: "Unmatched", ambiguous: "Ambiguous" }[entry.status]}${entry.target ? ` · ${entry.target}` : ""}`));
+    return row;
+  }));
+  if (!entries.length) $("kavita-import-entries").append(textElement("p", "No files in this result filter."));
+}
+
+$("import-kavita").addEventListener("click", () => {
+  if (session?.role !== "admin" || session.mustChangePassword || kavitaImport || leavingReader || readingStatusBusy) return;
+  resetKavitaImport();
+  kavitaImport = { epoch: authEpoch, hash: location.hash, preview: null, busy: false, applying: false, controller: null, page: 1 };
+  $("kavita-import-account").textContent = `Target Panel Haven account: ${session.username} (signed in).`;
+  $("kavita-import-status").textContent = "Choose a Kavita backup ZIP, then preview. Nothing is imported until you mark matched books read.";
+  updateKavitaImportControls();
+  $("kavita-import-dialog").showModal();
+});
+$("kavita-import-file").addEventListener("change", () => {
+  if (kavitaImport?.applying) return;
+  $("kavita-import-user").replaceChildren(new Option("Preview the backup to load users", ""));
+  invalidateKavitaImport();
+});
+$("kavita-import-user").addEventListener("change", invalidateKavitaImport);
+$("kavita-import-filter").addEventListener("change", () => {
+  if (kavitaImport) { kavitaImport.page = 1; renderKavitaImportEntries(); }
+});
+for (const [id, direction] of [["previous-kavita-import", -1], ["next-kavita-import", 1]])
+  $(id).addEventListener("click", () => {
+    if (kavitaImport?.preview) { kavitaImport.page += direction; renderKavitaImportEntries(); }
+  });
+$("kavita-import-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const state = kavitaImport;
+  if (!state || !kavitaImportCurrent(state) || state.busy) return;
+  const file = $("kavita-import-file").files[0];
+  if (!file) return;
+  invalidateKavitaImport();
+  if (file.size > 256 * 1024 * 1024) {
+    $("kavita-import-status").textContent = "Choose a backup ZIP no larger than 256 MiB.";
+    $("kavita-import-file").focus();
+    return;
+  }
+  const sourceUserId = $("kavita-import-user").value;
+  const controller = state.controller = new AbortController();
+  state.busy = true;
+  updateKavitaImportControls();
+  $("kavita-import-status").textContent = "Uploading and checking completed chapters. No reading status is being changed…";
+  try {
+    recordVisibleProgress();
+    await flushProgress();
+    if (!kavitaImportCurrent(state) || controller.signal.aborted) return;
+    const preview = await api(`/api/reading-import/kavita/preview${sourceUserId ? `?${new URLSearchParams({ sourceUserId })}` : ""}`, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file, signal: controller.signal
+    });
+    if (!kavitaImportCurrent(state) || controller.signal.aborted) return;
+    $("kavita-import-user").replaceChildren(new Option("Choose a Kavita user", ""),
+      ...preview.users.map(user => new Option(user.name, String(user.id))));
+    $("kavita-import-user").value = preview.sourceUserId === null ? "" : String(preview.sourceUserId);
+    state.preview = preview;
+    state.file = file;
+    state.page = 1;
+    $("kavita-import-filter").value = "";
+    $("kavita-import-preview").hidden = preview.sourceUserId === null;
+    if (preview.sourceUserId === null) {
+      $("kavita-import-status").textContent = "Choose the Kavita source user, then preview again. No Panel Haven account other than your signed-in account can be targeted.";
+    } else {
+      const user = preview.users.find(user => user.id === preview.sourceUserId);
+      $("kavita-import-summary").textContent = `Kavita user: ${user.name}. Target Panel Haven account: ${session.username}. ${preview.completedFiles} completed files; ${preview.partialChapters} partial chapters skipped; ${preview.readyBooks} matched books ready; ${preview.alreadyReadBooks} matched books already read; ${preview.unmatchedFiles} unmatched files; ${preview.ambiguousFiles} ambiguous files. Book counts are deduplicated; results list each completed source file.`;
+      renderKavitaImportEntries();
+      $("kavita-import-status").textContent = preview.readyBooks
+        ? "Review the matches and source user, then mark matched books read. Unmatched and ambiguous files will be skipped."
+        : "No matched books need marking read. Review all result filters or choose another source user.";
+    }
+  } catch (error) {
+    if (kavitaImportCurrent(state) && !controller.signal.aborted)
+      $("kavita-import-status").textContent = `Preview failed: ${error.message} Nothing was imported. Resolve the problem and preview again.`;
+  } finally {
+    if (kavitaImportCurrent(state) && state.controller === controller) {
+      state.busy = false;
+      state.controller = null;
+      updateKavitaImportControls();
+      (state.preview?.sourceUserId === null ? $("kavita-import-user") : $("kavita-import-status")).focus({ preventScroll: true });
+    }
+  }
+});
+$("apply-kavita-import").addEventListener("click", async () => {
+  const state = kavitaImport;
+  if (!state || !kavitaImportCurrent(state) || state.busy || !state.preview?.revision || state.preview.readyBooks < 1) return;
+  const preview = state.preview;
+  if (state.file !== $("kavita-import-file").files[0] || String(preview.sourceUserId) !== $("kavita-import-user").value) {
+    invalidateKavitaImport();
+    return;
+  }
+  const controller = state.controller = new AbortController();
+  state.busy = state.applying = true;
+  state.preview = null;
+  $("kavita-import-preview").hidden = true;
+  $("kavita-import-entries").replaceChildren();
+  updateKavitaImportControls();
+  $("kavita-import-status").textContent = "Saving current reader progress, then marking matched books read. Keep this page open…";
+  try {
+    state.readerCleared ||= !!currentBook;
+    await leaveReader();
+    if (!kavitaImportCurrent(state) || controller.signal.aborted) return;
+    const result = await api(`/api/reading-import/kavita/apply?${new URLSearchParams({ sourceUserId: preview.sourceUserId, revision: preview.revision })}`, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: state.file, signal: controller.signal
+    });
+    if (!kavitaImportCurrent(state) || controller.signal.aborted) return;
+    $("kavita-import-status").textContent = `${result.markedRead} books marked read for ${session.username}; ${result.alreadyRead} already-read books kept unchanged. Preview again to see the updated status.`;
+    await Promise.all([loadLists(), loadLibrary()]);
+  } catch (error) {
+    if (kavitaImportCurrent(state) && !controller.signal.aborted)
+      $("kavita-import-status").textContent = error.status === 409
+        ? `${error.message} The preview is stale. Preview again and review the new matches before applying.`
+        : `Cannot confirm the import: ${error.message} It may have completed. Refresh by previewing again before any further apply. Nothing will be retried automatically.`;
+  } finally {
+    if (kavitaImportCurrent(state) && state.controller === controller) {
+      state.busy = state.applying = false;
+      state.controller = null;
+      updateKavitaImportControls();
+      $("kavita-import-status").focus({ preventScroll: true });
+    }
+  }
+});
+$("kavita-import-dialog").addEventListener("close", () => {
+  if ($("kavita-import-dialog").open) return;
+  const state = kavitaImport;
+  resetKavitaImport();
+  if (state?.epoch === authEpoch && session) {
+    if (state.readerCleared && !currentBook) scheduleRoute();
+    else $("account-menu").querySelector("summary").focus({ preventScroll: true });
+  }
+});
+window.addEventListener("pagehide", () => {
+  if (!kavitaImport) return;
+  const applying = kavitaImport.applying;
+  kavitaImport.controller?.abort();
+  kavitaImport.controller = null;
+  kavitaImport.busy = kavitaImport.applying = false;
+  kavitaImport.preview = null;
+  $("kavita-import-preview").hidden = true;
+  $("kavita-import-entries").replaceChildren();
+  $("kavita-import-status").textContent = applying
+    ? "Cannot confirm the import after leaving this page. It may have completed. Preview again before applying; nothing is retried automatically."
+    : "Preview cleared after leaving this page. Preview again before marking books read.";
+  updateKavitaImportControls();
 });
 
 function labeledControl(text, control) {
@@ -4984,6 +5186,11 @@ async function route(hash, generation) {
 }
 
 function scheduleRoute() {
+  if (kavitaImport?.applying) {
+    history.replaceState(history.state, "", kavitaImport.hash);
+    return;
+  }
+  if (kavitaImport) resetKavitaImport();
   if (metadataPage && location.hash !== metadataPage.hash) {
     if (!leaveMetadata()) {
       history.replaceState({ returnCatalog: catalogReturn, metadataOrigin: metadataPage.origin }, "", metadataPage.hash);
@@ -5047,6 +5254,8 @@ $("login-form").addEventListener("submit", async (event) => {
 });
 
 $("logout").addEventListener("click", async () => {
+  if (kavitaImport?.applying) return;
+  resetKavitaImport();
   if (!leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;
   $("logout").disabled = true;
@@ -5562,7 +5771,7 @@ window.addEventListener("pagehide", cancelIntakeRequest);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
   if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy
-    || intake?.saving || fileOperationBusy || organizationBusy || accountBusy || deletionBusy
+    || intake?.saving || kavitaImport?.applying || fileOperationBusy || organizationBusy || accountBusy || deletionBusy
     || ($("file-operation-dialog").open && fileOperationDirty())
     || ($("organization-dialog").open && organizationDirty())
     || ($("user-dialog").open && accountDirty())) { event.preventDefault(); event.returnValue = ""; }

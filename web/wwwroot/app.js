@@ -363,6 +363,20 @@ function showView(name) {
   renderScan();
 }
 
+const narrowCatalog = matchMedia("(max-width: 900px)");
+function updateCatalogArrangement() {
+  const arrangement = $("catalog-arrangement");
+  const summary = arrangement.querySelector("summary");
+  const focused = document.activeElement;
+  summary.hidden = false;
+  if (narrowCatalog.matches && arrangement.contains(focused)) summary.focus();
+  arrangement.open = !narrowCatalog.matches;
+  if (!narrowCatalog.matches && focused === summary) $("book-status").focus();
+  summary.hidden = !narrowCatalog.matches;
+}
+narrowCatalog.addEventListener("change", updateCatalogArrangement);
+updateCatalogArrangement();
+
 $("account-menu").addEventListener("click", (event) => {
   if (!event.target.closest("button") || event.target.closest("#scan-panel, #scan-log-controls")) return;
   $("account-menu").open = false;
@@ -1846,6 +1860,19 @@ $("delete-selected").addEventListener("click", async () => {
     if (!preview.canDelete) {
       status.textContent = ["Nothing was deleted. Resolve the listed problems before trying again.",
         ...preview.items.filter(item => !item.canDelete).map(item => `${item.title} (${item.source}): ${item.error || "Cannot delete this comicbook."}`)].join("\n");
+      return;
+    }
+    const dialog = $("delete-dialog");
+    dialog.returnValue = "";
+    $("delete-count").textContent = `${preview.items.length} selected comicbook${preview.items.length === 1 ? "" : "s"}:`;
+    $("delete-items").replaceChildren(...preview.items.map(item => textElement("li", `${item.title} — ${item.source}`)));
+    status.textContent = "Review the selected comicbooks before permanent deletion.";
+    dialog.showModal();
+    await new Promise(resolve => dialog.addEventListener("close", resolve, { once: true }));
+    $("delete-items").replaceChildren();
+    if (deletion !== state) return;
+    if (dialog.returnValue !== "delete") {
+      status.textContent = "Deletion cancelled. Nothing was deleted.";
       return;
     }
     status.textContent = "Deleting selected files and catalog records. Do not close this page. Completed deletions cannot be undone…";

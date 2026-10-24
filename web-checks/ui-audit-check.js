@@ -241,6 +241,22 @@
     try {
       localStorage.removeItem(storageKey);
       await loadPage();
+      frame.style.width = "1000px";
+      await waitFor(() => element("catalog-arrangement").open);
+      element("group-by").focus();
+      frame.style.width = "390px";
+      await waitFor(() => !element("catalog-arrangement").open);
+      const arrangementSummary = element("catalog-arrangement").querySelector("summary");
+      assert(doc.activeElement === arrangementSummary && element("book-status").checkVisibility() && !element("group-by").checkVisibility(),
+        "Narrow layout must retain primary browsing and move focus before collapsing arrangement controls.");
+      arrangementSummary.click();
+      assert(element("group-by").checkVisibility(), "Arrange must reveal its native controls.");
+      arrangementSummary.focus();
+      frame.style.width = "1000px";
+      await waitFor(() => !arrangementSummary.checkVisibility());
+      assert(element("group-by").checkVisibility() && doc.activeElement === element("book-status"),
+        "Desktop layout must expose arrangement controls without hiding focus.");
+      frame.style.width = "100%";
       assert(clean(), "A clean library must not block unload.");
       element("manage-users").click();
       await waitFor(() => !element("user-controls").disabled);

@@ -50,7 +50,7 @@
     <div id="error" class="notice error" role="alert" hidden></div>
     <p id="startup" class="empty" role="status">Connecting to your library…</p>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
-      <h1 id="login-title" class="brand" aria-label="Sign in to Panel Haven"><img class="brand-mark" src="/icon.svg" width="40" height="40" alt=""><img class="brand-wordmark" src="/wordmark.svg" width="176" height="28" alt=""></h1>
+      <h1 id="login-title">Sign in</h1>
       <p id="login-message" role="status"></p>
       <form id="login-form" class="panel form-stack">
         <label>Username<input name="username" autocomplete="username" required maxlength="64" pattern="[a-zA-Z0-9_.\-]+" title="Use letters, numbers, underscores, periods, or hyphens." autofocus></label>
@@ -88,12 +88,16 @@
         <div class="library-content">
           <div class="library-controls">
       <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
-      <div class="library-filters" role="group" aria-label="Arrange and filter comicbooks">
+      <div class="catalog-browse">
+      <div class="library-filters" role="group" aria-label="Browse comicbooks">
         <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option><option value="unsorted">Unsorted</option></select></label>
+        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery (clears filters)"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
+      </div>
+      <details id="catalog-arrangement" class="compact-disclosure" open><summary>Arrange</summary><div class="library-filters">
         <label>Group by<select id="group-by"><option value="none">None</option><option value="series">Series</option><option value="publisher" selected>Publisher</option><option value="folder">Folder</option></select></label>
         <label>Stack by<select id="stack-by"><option value="none">None</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
         <label>Arrange by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
-        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery (clears filters)"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
+      </div></details>
       </div>
       <p id="reading-status-hint" class="muted" hidden>Series discovery views have fixed criteria and order. Selecting one clears search, reading list, basic and advanced filters. Choose a book status to filter again.</p>
       <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">· No active filters</span></summary><div class="library-filters">
@@ -121,12 +125,12 @@
           <button id="export-metadata-json" type="button" disabled>Export selected JSON</button><button id="export-metadata-csv" type="button" disabled>Export selected CSV</button>
           <button id="export-selected-comics" type="button" disabled>Export selected comics</button>
           <label><span class="sr-only">Add to manual list</span><select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
-          <button id="delete-selected" type="button" class="danger" hidden disabled title="Immediately and permanently delete selected files and catalog records for all users. No confirmation or undo.">Delete selected permanently</button>
+          <button id="delete-selected" type="button" class="danger" hidden disabled title="Review selected files before permanently deleting them and their catalog records for all users. No undo.">Delete selected permanently…</button>
         </div></details>
       </div>
       <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
-      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button">Home</button><span id="group-label"></span></div>
+      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button" class="quiet">Back to results</button><span id="group-label"></span></div>
       <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
           </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
@@ -254,6 +258,16 @@
     </form>
   </section>
   </main>
+  <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-warning">
+    <h2 id="delete-title">Review permanent deletion</h2>
+    <p id="delete-warning">This permanently deletes the selected comicbook files and their catalog records for all users, including reading progress, ratings, bookmarks, and list memberships. There is no trash or undo.</p>
+    <p id="delete-count"></p>
+    <ul id="delete-items" tabindex="0" aria-label="Selected comicbook files"></ul>
+    <form method="dialog" class="actions">
+      <button type="submit" value="cancel" class="quiet" autofocus>Cancel</button>
+      <button type="submit" value="delete" class="danger">Delete permanently</button>
+    </form>
+  </dialog>
   <dialog id="details-dialog" aria-labelledby="details-title">
     <div class="dialog-heading"><h2 id="details-title">Book details</h2><button type="button" data-close="details-dialog" class="quiet" aria-label="Close book details">Close</button></div>
     <div class="actions details-primary">

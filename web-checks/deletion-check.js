@@ -17,7 +17,7 @@
       await new Promise(resolve => setTimeout(resolve, 25));
     }
   };
-  const originalFetch = window.fetch, originalConfirm = window.confirm;
+  const originalFetch = window.fetch;
   const select = id => {
     const checkbox = document.querySelector(`[data-book-id="${CSS.escape(id)}"]`);
     assert(checkbox, "Fixture must be on the current flat-books page.");
@@ -50,10 +50,20 @@
     return response;
   };
   try {
-    window.confirm = () => { throw new Error("Deletion must not ask for confirmation."); };
     $("clear-selection").click();
     select(first);
     $("delete-selected").click();
+    await waitFor(() => $("delete-dialog").open);
+    assert(requests === 0 && await exists(first) === 200 && $("delete-items").children.length === 1,
+      "Review must list the selected comicbook before any deletion request.");
+    assert(document.activeElement === $("delete-dialog").querySelector('[value="cancel"]'), "Review must initially focus the safe Cancel action.");
+    $("delete-dialog").querySelector('[value="cancel"]').click();
+    await waitFor(() => !document.querySelector(".selection-toolbar").inert && $("books").getAttribute("aria-busy") !== "true");
+    assert(requests === 0 && await exists(first) === 200 && $("selection-count").textContent.startsWith("1 "),
+      "Cancelling review must preserve the selected file and catalog record.");
+    $("delete-selected").click();
+    await waitFor(() => $("delete-dialog").open);
+    $("delete-dialog").querySelector('[value="delete"]').click();
     await waitFor(() => release !== null);
     const hash = location.hash;
     location.hash = "settings";
@@ -69,6 +79,9 @@
     select(second);
     loseResponse = true;
     $("delete-selected").click();
+    await waitFor(() => $("delete-dialog").open);
+    assert(requests === 1, "A previous confirmation must not authorize a new selection.");
+    $("delete-dialog").querySelector('[value="delete"]').click();
     await waitFor(() => release !== null);
     release();
     await waitFor(() => $("management-status").textContent.includes("Could not confirm deletion"));
@@ -76,10 +89,9 @@
     assert($("selection-count").textContent.startsWith("1 ") && requests === 2, "Unknown outcome must retain selection and never retry.");
     assert(!document.querySelector("dialog[open]") && document.activeElement === $("management-status"), "Failure must remain inline with stable focus.");
     assert($("management-status").textContent.includes("Refresh and inspect"), "Unknown outcome must remain visible inline.");
-    console.log("PASS: real window-free one-click deletion, busy guards, inline status/focus, deselection, unrelated book preservation and lost-response no-retry.");
+    console.log("PASS: reviewed real deletion, cancel preservation, busy guards, inline status/focus, deselection, unrelated book preservation and lost-response no-retry.");
   } finally {
     release?.();
     window.fetch = originalFetch;
-    window.confirm = originalConfirm;
   }
 })();

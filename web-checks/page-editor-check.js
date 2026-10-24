@@ -48,16 +48,47 @@
     const cancel = new Event("cancel", { cancelable: true });
     $("page-metadata-dialog").dispatchEvent(cancel);
     assert(close.disabled && cancel.defaultPrevented && $("reset-page-changes").disabled, "Editor unlocked while metadata still loads.");
+    const card = $("page-order-pages").firstElementChild;
+    const image = card.querySelector("img"), imageError = card.querySelector(".page-order-image-error");
+    const retry = card.querySelector("[data-retry-image]");
+    image.dispatchEvent(new Event("error"));
+    const initialSource = image.src;
+    retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    assert(retry.disabled && image.src === initialSource, "Thumbnail retry bypassed the loading guard.");
     release(); release = null;
     await waitFor(() => !$("reset-page-changes").disabled);
+    const mutations = new MutationObserver(() => {});
+    mutations.observe($("page-order-pages"), { attributes: true, childList: true, subtree: true });
     change(0, "bookmark", bookmark);
+    const inputMutations = mutations.takeRecords();
+    mutations.disconnect();
+    assert(inputMutations.length === 0 && !$("save-page-changes").disabled && $("page-order-draft-state").textContent === "Unsaved changes.",
+      "Typing a bookmark rewrote card controls or failed to update draft state.");
     change(1, "type", secondType);
     $("page-order-pages").firstElementChild.querySelector('[data-move="1"]').click();
+    image.loading = "eager";
+    await waitFor(() => image.complete && image.naturalWidth > 0);
+    image.dispatchEvent(new Event("error"));
+    const draftOrder = orderInView();
+    retry.focus();
+    retry.click();
+    const retrySource = image.src;
+    retry.click();
+    assert(retry.getAttribute("aria-disabled") === "true" && image.src === retrySource && new URL(retrySource).pathname === new URL(initialSource).pathname,
+      "Thumbnail retry did not guard duplicate requests or changed its image endpoint.");
+    await waitFor(() => imageError.hidden && image.complete && image.naturalWidth > 0);
+    assert(document.activeElement === card && same(orderInView(), draftOrder) && field(0, "bookmark").value === bookmark
+      && field(1, "type").value === secondType && !$("save-page-changes").disabled,
+      "Thumbnail retry lost focus, reordered pages or discarded unsaved details.");
     close.click();
     assert($("page-metadata-dialog").open && !$("save-page-changes").disabled, "Unsaved combined draft bypassed the close guard.");
     $("save-page-changes").click();
     await waitFor(() => !!release);
     assert(close.disabled && $("reset-page-changes").disabled && field(0, "bookmark").matches(":disabled"), "Editor unlocked during combined save.");
+    image.dispatchEvent(new Event("error"));
+    const savingSource = image.src;
+    retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    assert(retry.disabled && image.src === savingSource, "Thumbnail retry bypassed the save guard.");
     release(); release = null;
     await waitFor(() => !$("reset-page-changes").disabled);
     const order = await read("/page-order"), metadata = await read("/page-metadata");
@@ -89,7 +120,7 @@
     const closed = new Promise(resolve => $("page-metadata-dialog").addEventListener("close", resolve, { once: true }));
     close.click();
     await closed;
-    console.log("PASS: unified save/reset, physical-page identity, loading/save guards, cancelled reset and lost-response recovery.");
+    console.log("PASS: unified save/reset, local thumbnail retry and focus, lightweight bookmark input, physical-page identity, loading/save guards, cancelled reset and lost-response recovery.");
   } finally {
     release?.(); window.fetch = originalFetch; window.confirm = originalConfirm;
   }

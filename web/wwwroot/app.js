@@ -48,17 +48,23 @@ function resetPageOrder() {
   $("page-order-pages").replaceChildren();
 }
 
-function updatePageEditorControls() {
+function updatePageEditorDraftState() {
   const busy = pageOrderBusy || pageMetadataBusy;
   const loaded = pageOrder && pageMetadata && pageOrder.bookId === pageMetadata.bookId && pageOrder.pages.length === pageMetadata.pages.length;
   const dirty = pageOrderDirty() || pageMetadataDirty;
   $("save-page-changes").disabled = busy || !loaded || pageEditConflict || !dirty;
+  $("page-order-draft-state").textContent = !loaded ? "" : dirty ? "Unsaved changes." : "All changes saved.";
+}
+
+function updatePageEditorControls() {
+  const busy = pageOrderBusy || pageMetadataBusy;
+  updatePageEditorDraftState();
   $("reset-page-changes").disabled = busy;
   $("page-metadata-dialog").querySelector("[data-close]").disabled = busy;
   $("page-order-pages").setAttribute("aria-busy", String(busy));
-  $("page-order-draft-state").textContent = !loaded ? "" : dirty ? "Unsaved changes." : "All changes saved.";
   for (const [position, node] of [...$("page-order-pages").children].entries()) {
     node.querySelector("img").draggable = !busy;
+    node.querySelector("[data-retry-image]").disabled = busy;
     node.querySelector("[data-move='-1']").disabled = busy || position === 0;
     node.querySelector("[data-move='1']").disabled = busy || position === pageOrderDraft.length - 1;
     node.querySelector("fieldset").disabled = busy || !pageMetadataDraft[Number(node.dataset.page)];
@@ -92,13 +98,41 @@ function renderPageOrder() {
       image.width = 140;
       image.height = 180;
       image.alt = `Physical page ${page + 1}`;
-      image.src = `/api/books/${encodeURIComponent(pageOrder.bookId)}/pages/${page}`;
-      image.addEventListener("error", () => {
-        image.hidden = true;
-        node.querySelector(".page-order-image-error").hidden = false;
-      });
-      const imageError = textElement("p", "Thumbnail unavailable. Reload saved order to retry.", "page-order-image-error");
+      const imageError = textElement("div", "", "page-order-image-error");
       imageError.hidden = true;
+      const imageStatus = textElement("p", "");
+      imageStatus.setAttribute("role", "status");
+      const retry = textElement("button", "Retry thumbnail");
+      retry.type = "button";
+      retry.dataset.retryImage = "";
+      retry.setAttribute("aria-label", `Retry thumbnail: physical page ${page + 1}`);
+      let retrying = false;
+      image.addEventListener("error", () => {
+        retrying = false;
+        retry.removeAttribute("aria-disabled");
+        image.hidden = true;
+        imageError.hidden = false;
+        imageStatus.textContent = "Thumbnail unavailable. Retry without changing your draft.";
+      });
+      image.addEventListener("load", () => {
+        retrying = false;
+        retry.removeAttribute("aria-disabled");
+        if (document.activeElement === retry) node.focus({ preventScroll: true });
+        image.hidden = false;
+        imageError.hidden = true;
+      });
+      retry.addEventListener("click", () => {
+        if (pageOrderBusy || pageMetadataBusy || retrying) return;
+        retrying = true;
+        retry.setAttribute("aria-disabled", "true");
+        imageStatus.textContent = "Retrying thumbnail…";
+        image.loading = "eager";
+        const url = new URL(image.src);
+        url.searchParams.set("retry", String(Date.now()));
+        image.src = url.href;
+      });
+      image.src = `/api/books/${encodeURIComponent(pageOrder.bookId)}/pages/${page}`;
+      imageError.append(imageStatus, retry);
       node.append(image, imageError, textElement("p", "", "page-order-label"));
       for (const [direction, label] of [[-1, "Move earlier"], [1, "Move later"]]) {
         const button = textElement("button", label);
@@ -244,6 +278,7 @@ let folderEditingId = "";
 let folderDirty = false;
 let folderBusy = false;
 let accountBusy = false;
+let passwordBusy = false;
 let ratingDirty = false;
 let ratingBusy = false;
 let listsGeneration = 0;
@@ -344,6 +379,18 @@ document.addEventListener("click", (event) => {
   if (!$("account-menu").contains(event.target)) $("account-menu").open = false;
 });
 
+const readerDisplay = document.querySelector(".reader-display");
+readerDisplay.addEventListener("focusout", (event) => {
+  if (!readerDisplay.contains(event.relatedTarget)) readerDisplay.open = false;
+});
+readerDisplay.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !readerDisplay.open) return;
+  event.preventDefault();
+  event.stopPropagation();
+  readerDisplay.open = false;
+  readerDisplay.querySelector("summary").focus();
+});
+
 function clearReader() {
   stopReaderView();
   for (const entry of pages) releasePage(entry);
@@ -378,6 +425,7 @@ function showLogin() {
   authEpoch++;
   session = null;
   accountBusy = false;
+  setPasswordBusy(false);
   readingStatusBusy = false;
   resetComicExport();
   resetPageOrder();
@@ -537,6 +585,7 @@ async function api(path, options = {}) {
 function signedIn(data) {
   if (data.mustChangePassword) { requirePasswordChange(data); return; }
   authEpoch++;
+  setPasswordBusy(false);
   resetServerSettings();
   resetIntake();
   resetKavitaImport();
@@ -572,7 +621,17 @@ function requirePasswordChange(data) {
   openPasswordView();
 }
 
+function setPasswordBusy(busy) {
+  passwordBusy = busy;
+  for (const control of $("password-form").elements) control.disabled = busy;
+  $("password-form").setAttribute("aria-busy", String(busy));
+  $("logout").disabled = busy;
+  $("catalog-home").inert = busy;
+}
+
 function openPasswordView() {
+  if (passwordBusy) return;
+  routeGeneration++;
   $("password-form").reset();
   $("password-status").textContent = "";
   $("password-explanation").textContent = session.mustChangePassword
@@ -3696,7 +3755,7 @@ $("page-order-pages").addEventListener("input", (event) => {
   if (!row) return;
   row[field] = event.target.value || null;
   pageMetadataDirty = pageMetadataDraft.some((draft, i) => draft.type !== pageMetadata.pages[i].type || draft.bookmark !== pageMetadata.pages[i].bookmark);
-  updatePageEditorControls();
+  updatePageEditorDraftState();
   if (!pageEditConflict) $("page-metadata-status").textContent = "";
 });
 $("page-metadata-form").addEventListener("submit", async (event) => {
@@ -5080,7 +5139,7 @@ async function route(hash, generation) {
     await (routeQueue = routeQueue.catch(() => {}).then(() => {
       if (epoch === authEpoch && generation === routeGeneration) return leaveReader();
     }));
-    if (epoch !== authEpoch || generation !== routeGeneration || hash !== location.hash || !session) return;
+    if (epoch !== authEpoch || generation !== routeGeneration || hash !== location.hash || !session || passwordBusy) return;
     if ((id || hash === "#settings") && catalogReturn)
       history.replaceState({ returnCatalog: catalogReturn }, "", location.href);
     clearError();
@@ -5186,6 +5245,10 @@ async function route(hash, generation) {
 }
 
 function scheduleRoute() {
+  if (passwordBusy) {
+    history.replaceState(null, "", "#library");
+    return;
+  }
   if (kavitaImport?.applying) {
     history.replaceState(history.state, "", kavitaImport.hash);
     return;
@@ -5254,7 +5317,7 @@ $("login-form").addEventListener("submit", async (event) => {
 });
 
 $("logout").addEventListener("click", async () => {
-  if (kavitaImport?.applying) return;
+  if (passwordBusy || kavitaImport?.applying) return;
   resetKavitaImport();
   if (!leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;
@@ -5266,7 +5329,7 @@ $("logout").addEventListener("click", async () => {
     clearError();
     showLogin();
   } catch (error) { if (epoch === authEpoch) showError(error); }
-  finally { $("logout").disabled = false; }
+  finally { if (epoch === authEpoch) $("logout").disabled = passwordBusy; }
 });
 
 function changeLibrary(resetGroup = true, focusResults = false) {
@@ -5437,6 +5500,7 @@ for (const event of ["input", "reset"]) $("password-form").addEventListener(even
 });
 $("password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (passwordBusy) return;
   const form = event.currentTarget;
   const { currentPassword, newPassword, confirmation } = form.elements;
   if (newPassword.value !== confirmation.value) {
@@ -5452,14 +5516,20 @@ $("password-form").addEventListener("submit", async (event) => {
     return;
   }
   const epoch = authEpoch;
-  event.submitter.disabled = true;
+  setPasswordBusy(true);
   $("password-status").textContent = "Changing password…";
   try {
     await api("/api/account/password", { method: "POST", body: JSON.stringify({ currentPassword: currentPassword.value, newPassword: newPassword.value }) });
+    if (epoch !== authEpoch) return;
     showLogin();
     $("login-message").textContent = "Password changed. All your sessions have ended. Sign in with your new password.";
   } catch (error) { if (epoch === authEpoch) $("password-status").textContent = error.message; }
-  finally { event.submitter.disabled = false; }
+  finally {
+    if (epoch === authEpoch) {
+      setPasswordBusy(false);
+      form.querySelector('[type="submit"]').focus();
+    }
+  }
 });
 
 function accountDirty() {
@@ -5559,12 +5629,14 @@ async function mutateAccount(path, method, body, message, endSession = false, fo
   const focus = document.activeElement;
   const nextFocus = focus.closest(".user-row")?.nextElementSibling?.querySelector("button") || $("user-form").elements.username;
   const epoch = authEpoch;
+  let submitted = false;
   $("user-controls").disabled = true;
   $("user-dialog").querySelector("[data-close]").disabled = true;
   $("user-status").textContent = "Saving…";
   try {
     if (endSession) await leaveReader();
     if (epoch !== authEpoch) return;
+    submitted = true;
     await api(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) });
     if (epoch !== authEpoch) return;
     form?.reset();
@@ -5576,7 +5648,21 @@ async function mutateAccount(path, method, body, message, endSession = false, fo
     $("user-status").textContent = message;
     try { await loadUsers(); }
     catch (error) { if (epoch === authEpoch) $("user-status").textContent = `${message} Accounts could not refresh: ${error.message}. Other drafts are kept.`; }
-  } catch (error) { if (epoch === authEpoch) $("user-status").textContent = error.message; }
+  } catch (error) {
+    if (epoch !== authEpoch) return;
+    if (!submitted || error.name === "AbortError" || (error.status && error.status < 500)) {
+      $("user-status").textContent = error.message;
+    } else {
+      const warning = "The outcome of this account change is unknown. It may have been saved. No automatic retry was made.";
+      $("user-status").textContent = `${warning} Refreshing accounts…`;
+      try {
+        await loadUsers();
+        if (epoch === authEpoch) $("user-status").textContent = `${warning} Account details refreshed; review them before submitting again. A refreshed list cannot confirm a password change. Drafts are kept.`;
+      } catch {
+        if (epoch === authEpoch) $("user-status").textContent = `${warning} Accounts could not refresh. Close and reopen Accounts to check before submitting again. A refreshed list cannot confirm a password change. Drafts are kept until you close.`;
+      }
+    }
+  }
   finally {
     if (epoch === authEpoch) {
       accountBusy = false;
@@ -5771,7 +5857,7 @@ window.addEventListener("pagehide", cancelIntakeRequest);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
   if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy
-    || intake?.saving || kavitaImport?.applying || fileOperationBusy || organizationBusy || accountBusy || deletionBusy
+    || intake?.saving || kavitaImport?.applying || fileOperationBusy || organizationBusy || accountBusy || passwordBusy || deletionBusy
     || ($("file-operation-dialog").open && fileOperationDirty())
     || ($("organization-dialog").open && organizationDirty())
     || ($("user-dialog").open && accountDirty())) { event.preventDefault(); event.returnValue = ""; }

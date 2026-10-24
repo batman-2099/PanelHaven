@@ -340,6 +340,7 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
 @media (max-width: 900px) {
   .library-layout { grid-template-columns: minmax(0, 1fr); gap: .65rem; }
   .reading-list-sidebar { padding: 0 0 .65rem; border-right: 0; border-bottom: 1px solid var(--divider); }
+  #reading-list { height: 8rem; }
   .reading-list-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   main { padding-block: 1rem; }
 }
@@ -358,9 +359,8 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
   .library-pagination { gap: .4rem; font-size: .85rem; }
   .book-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.3rem .9rem; }
   .search-bar input { flex-basis: 100%; }
-  .page-controls { width: 100%; }
-  .page-controls { flex-wrap: wrap; gap: .35rem; }
-  #page-form { order: 3; justify-content: center; flex-wrap: wrap; gap: .35rem; width: 100%; }
+  .page-controls { width: 100%; flex-wrap: wrap; gap: .35rem; }
+  #page-form { justify-content: center; flex-wrap: wrap; gap: .35rem; width: 100%; }
   .reader-display-panel button, .page-controls button, #page-number { padding: .4rem .55rem; min-height: 44px; }
   #page-number { width: 4rem; }
   body:has(#reader-view:not([hidden])) > main { padding-block: .5rem; }

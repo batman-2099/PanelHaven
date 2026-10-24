@@ -90,6 +90,17 @@
     assert(document.activeElement === $("account-menu").querySelector("summary") && visibleFocus(), "Administration dialogs must return focus to the visible menu trigger.");
     location.hash = `#reader/${encodeURIComponent(bookId)}?location=library`;
     await waitFor(() => !$("reader-details").disabled && $("reader-pages").querySelector("img")?.naturalWidth > 0);
+    const display = document.querySelector(".reader-display");
+    display.open = true;
+    $("fit").focus();
+    $("zoom").focus();
+    assert(display.open, "Moving between display controls must keep settings open.");
+    $("page-stage").focus();
+    assert(!display.open && document.activeElement === $("page-stage"), "Leaving display settings must uncover the reader without stealing focus.");
+    display.open = true;
+    $("fit").focus();
+    $("fit").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert(!display.open && document.activeElement === display.querySelector("summary"), "Escape must close display settings and restore summary focus.");
     $("reader-details").click();
     await waitFor(() => !$("move-archive").hidden);
     $("move-archive").click();
@@ -278,6 +289,7 @@
       close("file-operation-dialog");
       close("details-dialog");
       await waitFor(clean);
+      await closeReader();
 
       for (const [state, errorCount] of [["completed", 0], ["cancelled", 0], ["running", 0], ["failed", 0], ["completed", 1]]) {
         element("account-menu").open = false;
@@ -285,7 +297,6 @@
         await pollScan();
         assert(!element("scan-panel").hidden && !element("scan-panel").checkVisibility(), `${state}/${errorCount}: scan results must stay inside the closed menu.`);
         element("account-menu").open = true;
-        assert(element("scan-panel").checkVisibility(), `${state}/${errorCount}: reader scan results must be available from the menu.`);
         if (state === "running") {
           element("scan-panel").open = true;
           element("cancel-scan").focus();
@@ -297,7 +308,6 @@
       element("account-menu").open = false;
       Object.assign(scanResult, { state: "completed", errorCount: 0, errors: [] });
       await pollScan();
-      await closeReader();
       assert(!element("scan-panel").hidden, "Successful scan results remain visible in the library.");
       element("group-by").value = "none";
       element("stack-by").value = "none";

@@ -52,7 +52,8 @@ function updatePageEditorDraftState() {
   const busy = pageOrderBusy || pageMetadataBusy;
   const loaded = pageOrder && pageMetadata && pageOrder.bookId === pageMetadata.bookId && pageOrder.pages.length === pageMetadata.pages.length;
   const dirty = pageOrderDirty() || pageMetadataDirty;
-  $("save-page-changes").disabled = busy || !loaded || pageEditConflict || !dirty;
+  for (const id of ["save-page-changes", "save-page-changes-bottom"])
+    $(id).disabled = busy || !loaded || pageEditConflict || !dirty;
   $("page-order-draft-state").textContent = !loaded ? "" : dirty ? "Unsaved changes." : "All changes saved.";
 }
 
@@ -242,6 +243,7 @@ let groupLabel = "";
 let groupOrigin = null;
 let libraryReturnFocus = null;
 let catalogReturn = null;
+let discoveryReturn = null;
 let advancedFilter = null;
 let listEditorMode = "list";
 let ruleManualLists = [];
@@ -373,6 +375,7 @@ function updateCatalogArrangement() {
   arrangement.open = !narrowCatalog.matches;
   if (!narrowCatalog.matches && focused === summary) $("book-status").focus();
   summary.hidden = !narrowCatalog.matches;
+  $("reading-list").size = narrowCatalog.matches ? 1 : 8;
 }
 narrowCatalog.addEventListener("change", updateCatalogArrangement);
 updateCatalogArrangement();
@@ -416,6 +419,7 @@ function clearReader() {
   revealedPage = null;
   personalBookmarks = [];
   bookmarkEditorPage = null;
+  bookmarkDirty = false;
   $("personal-bookmarks").replaceChildren();
   $("embedded-bookmarks").replaceChildren();
   $("embedded-bookmarks-section").hidden = true;
@@ -502,6 +506,7 @@ function showLogin() {
   groupKey = sectionKey = null;
   closedSections.clear();
   catalogReturn = null;
+  discoveryReturn = null;
   advancedFilter = null;
   groupLabel = "";
   maintenanceGeneration++;
@@ -742,7 +747,7 @@ function rememberCatalogView() {
   catalogReturn = {
     version: 2, username: session.username, hash: location.hash, location: catalogLocation,
     page: libraryPage, query: libraryQuery, groupKey, sectionKey, groupLabel, groupOrigin, focus: libraryReturnFocus,
-    closedSections: [...closedSections], advancedFilter,
+    closedSections: [...closedSections], advancedFilter, discoveryReturn: seriesView() ? discoveryReturn : null,
     filters: Object.fromEntries(catalogControls.map(id => [id, $(id).value]))
   };
   history.replaceState({ catalog: catalogReturn }, "", location.href);
@@ -777,6 +782,7 @@ function updateReadingStatusControls() {
   $("sort-direction").disabled = seriesRoot || $("book-sort").value === "list";
   for (const id of ["book-sort", "sort-direction"]) $(id).closest("label").hidden = seriesRoot;
   $("reading-status-hint").hidden = !series;
+  $("return-to-browse").hidden = !series || !discoveryReturn;
   $("edit-advanced-filters").disabled = series;
   const countRules = rules => rules.reduce((count, rule) => count + (rule.rules ? countRules(rule.rules) : 1), 0);
   const advancedCount = advancedFilter ? countRules(advancedFilter.rules) : 0;
@@ -906,6 +912,13 @@ async function loadLibrary(focusResults = false) {
       coverFrame.append(cover, selection);
       card.append(textElement("p", [book.series, book.number && `#${book.number}`].filter(Boolean).join(" · "), "muted"));
       card.append(textElement("p", book.completed ? "Completed" : book.started ? `Page ${Math.min(book.currentPage + 1, book.pageCount)} of ${book.pageCount}` : "Unread", "book-status"));
+      const details = textElement("button", "Details", "quiet book-details");
+      details.type = "button";
+      details.dataset.libraryFocus = `details:${book.id}`;
+      details.setAttribute("aria-label", `Details: ${title}`);
+      details.setAttribute("aria-haspopup", "dialog");
+      details.addEventListener("click", () => openDetails(book.id));
+      card.append(details);
       if (activeList()?.kind === "manual" && $("book-sort").value === "list") {
         const moves = textElement("div", "", "book-order");
         for (const [direction, label] of [[-1, "Move up"], [1, "Move down"]]) {
@@ -1743,6 +1756,8 @@ async function loadServerSettings() {
   if (serverSettingsBusy || session?.role !== "admin") return;
   const generation = ++serverSettingsGeneration;
   const epoch = authEpoch;
+  const focus = document.activeElement;
+  let failed = false;
   serverSettingsBusy = true;
   updateServerSettingsControls();
   $("server-settings-status").textContent = "Loading saved settings and actual service status…";
@@ -1755,11 +1770,14 @@ async function loadServerSettings() {
     if (epoch !== authEpoch || generation !== serverSettingsGeneration) return;
     if (error.status === 403) { resetServerSettings(); showError(error); return; }
     serverSettingsStale = true;
-    $("server-settings-status").textContent = error.message;
+    failed = true;
+    $("server-settings-status").textContent = `Could not load server settings: ${error.message} Reload settings to try again.`;
   } finally {
     if (epoch === authEpoch && generation === serverSettingsGeneration) {
       serverSettingsBusy = false;
       updateServerSettingsControls();
+      if (!$("settings-view").hidden && (failed || $("settings-view").contains(focus)))
+        (failed || !focus.isConnected || focus.matches(":disabled") ? $("server-settings-status") : focus).focus();
     }
   }
 }
@@ -1773,6 +1791,8 @@ async function mutateServerSettings(action, payload = {}) {
   const generation = serverSettingsGeneration;
   const epoch = authEpoch;
   const status = $(relocating ? "data-relocation-status" : "server-settings-status");
+  const focus = document.activeElement;
+  let failed = false;
   const body = { expectedRevision: serverSettings.revision, currentPassword: password.value, ...payload };
   serverSettingsBusy = true;
   updateServerSettingsControls();
@@ -1799,13 +1819,20 @@ async function mutateServerSettings(action, payload = {}) {
     if (epoch !== authEpoch || generation !== serverSettingsGeneration) return;
     if (error.status === 403) { resetServerSettings(); showError(error); return; }
     if (error.status === 409 || !error.status || error.status >= 500) serverSettingsStale = true;
-    status.textContent = `${error.message}${error.status === 409 ? " Settings changed elsewhere. Reload and review before submitting again."
-      : !error.status || error.status >= 500 ? " The outcome may be unknown. Nothing will be retried automatically; reload status before another action." : ""}`;
+    failed = true;
+    const context = relocating ? "Data relocation" : action === "restart" ? "Server restart" : action === "service" ? "Startup change" : "Server settings";
+    status.textContent = `${context}: ${error.message}${error.status === 409 ? " Settings changed elsewhere. Your draft is retained; copy it before reloading and reviewing."
+      : !error.status || error.status >= 500 ? " The outcome may be unknown. Nothing will be retried automatically; copy your draft before reloading status."
+      : " Review the message and your entries before submitting again. Your draft is retained; re-enter your current password."}`;
   } finally {
     if (epoch === authEpoch && generation === serverSettingsGeneration) {
       password.value = "";
       serverSettingsBusy = false;
       updateServerSettingsControls();
+      if (!$("settings-view").hidden) {
+        const summary = relocating && $("data-relocation-dialog").open ? status : $("server-settings-status");
+        (failed || !focus.isConnected || focus.matches(":disabled") || !focus.checkVisibility() ? summary : focus).focus();
+      }
     }
   }
 }
@@ -1916,7 +1943,6 @@ function canCloseDialog(id) {
   if (id === "page-metadata-dialog") return !pageOrderBusy && !pageMetadataBusy
     && (!(pageOrderDirty() || pageMetadataDirty) || confirm("Discard unsaved page changes?"));
   if (id === "list-dialog") return !listBusy && !listPreviewBusy && (!listDirty || confirm(listEditorMode === "list" ? "Discard unsaved reading list changes?" : "Discard unapplied advanced filter changes?"));
-  if (id === "duplicate-dialog") return !duplicateBusy;
   if (id === "archive-dialog") return !archiveBusy;
   if (id === "file-operation-dialog") return !fileOperationBusy && (!fileOperationDirty() || confirm("Discard this move draft? Nothing is applied by closing."));
   if (id === "organization-dialog") return !organizationBusy && (!organizationDirty() || confirm("Discard this batch organization draft? Nothing is applied by closing."));
@@ -2230,6 +2256,24 @@ function filterMetadataFields() {
   $("metadata-change-summary").textContent = selected.length ? `${selected.length} checked: ${selected.join(", ")}` : "No fields checked. Unchecked values remain unchanged.";
 }
 
+function renderMetadataPreview(books, target) {
+  for (const book of books) {
+    const row = textElement("article", "", "maintenance-row");
+    row.dataset.previewBook = book.id;
+    row.append(textElement("h4", bookTitle(book)));
+    if (!book.changes.length) row.append(textElement("p", "Unchanged — no actual changes.", "muted"));
+    for (const change of book.changes) {
+      row.append(textElement("h5", `${change.custom ? "Custom: " : ""}${change.field}`));
+      const values = document.createElement("dl");
+      values.append(
+        textElement("dt", "Before"), textElement("dd", change.before == null ? "(absent)" : change.before === "" ? "(empty string)" : JSON.stringify(change.before)),
+        textElement("dt", "After"), textElement("dd", change.after == null ? "(removed / absent)" : change.after === "" ? "(empty string)" : JSON.stringify(change.after)));
+      row.append(values);
+    }
+    target.append(row);
+  }
+}
+
 function invalidateMetadataPreview() {
   metadataPreview = null;
   $("metadata-preview-books").replaceChildren();
@@ -2471,6 +2515,7 @@ function cancelIntakeRequest() {
   if (!intake) return;
   intake.controller = null;
   intake.busy = false;
+  invalidateIntakePreview();
   updateIntakeControls();
 }
 
@@ -2483,8 +2528,37 @@ function resetIntake() {
   $("intake-candidates").replaceChildren();
   $("intake-current-cover").replaceChildren();
   $("intake-form").reset();
+  invalidateIntakePreview();
   for (const id of ["intake-source", "intake-outcome", "intake-status", "intake-scope"]) $(id).textContent = "";
   updateIntakeControls();
+}
+
+function invalidateIntakePreview() {
+  if (intake) intake.preview = null;
+  $("intake-preview").hidden = true;
+  $("intake-preview-details").replaceChildren();
+  $("intake-confirm").disabled = true;
+}
+
+function showIntakePreview(preview, payload) {
+  intake.preview = { ...preview, payload };
+  const metadataOnly = intake.metadataOnly;
+  $("intake-preview-title").textContent = metadataOnly ? "Review exact metadata changes" : "Review source and destination";
+  $("intake-preview-summary").textContent = metadataOnly
+    ? "Only actual changes are listed. Quoted values preserve whitespace. Acceptance updates the catalog only; the source comicbook stays unchanged."
+    : `${preview.converted ? "Converts to CBZ" : "Preserves the comicbook format"} and removes the source after verification. This cannot be undone.`;
+  const details = $("intake-preview-details");
+  if (metadataOnly) renderMetadataPreview(preview.books, details);
+  else {
+    const paths = document.createElement("dl");
+    paths.append(textElement("dt", "Source"), textElement("dd", preview.source),
+      textElement("dt", "Destination"), textElement("dd", preview.destination));
+    details.append(paths);
+    for (const warning of preview.warnings) details.append(textElement("p", warning, "notice"));
+  }
+  $("intake-confirm").textContent = metadataOnly ? "Accept reviewed metadata" : intake.replacement ? "Convert to CBZ" : "Accept and process";
+  $("intake-preview").hidden = false;
+  $("intake-status").textContent = "Nothing has been saved. Review the proposed changes, then confirm or cancel.";
 }
 
 function updateIntakeControls() {
@@ -2506,6 +2580,8 @@ function updateIntakeControls() {
   $("intake-dialog").querySelector("[data-close]").disabled = !!intake?.saving;
   $("intake-refresh").disabled = busy;
   $("apply-cbz-replacement").disabled = busy || !processing || processing.state === "pending" || processing.canRecover || !!intake?.replacementAttempt;
+  $("intake-confirm").disabled = busy || !intake?.preview;
+  $("intake-discard").disabled = !!intake?.saving;
   $("intake-recover").hidden = !processing?.canRecover;
   $("intake-recover").disabled = busy;
   $("intake-outcome").textContent = row?.outcome || "Processing status has not been checked. Refresh status before proceeding.";
@@ -2536,6 +2612,7 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
   const state = intake;
   const row = state?.row;
   if (!intakeCurrent(state, row) || state.busy) return;
+  invalidateIntakePreview();
   const controller = state.controller = new AbortController();
   state.busy = true;
   state.saving = saving;
@@ -2626,15 +2703,14 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
           $("intake-dialog").close();
           $("library-status").focus({ preventScroll: true });
         }
-      } else if (focusStatus) $("intake-status").focus({ preventScroll: true });
+      } else if (state.preview) $("intake-preview").focus();
+      else if (focusStatus) $("intake-status").focus({ preventScroll: true });
     }
   }
 }
 
-async function acceptMatchedMetadata(candidate) {
-  const state = intake, row = state?.row;
-  let accepted = false;
-  await intakeRequest("Loading candidate metadata…", async (options, current) => {
+async function previewMatchedMetadata(candidate) {
+  await intakeRequest("Loading candidate metadata…", async (options, current, state, row) => {
     const proposal = await api(`/api/comic-vine/issues/${candidate.issueId}/metadata?volumeId=${candidate.volumeId}&intake=true`, options);
     if (!current()) return;
     const fields = Object.fromEntries(Object.entries(proposal.fields).filter(([, value]) => typeof value === "string" && value.trim()));
@@ -2643,17 +2719,22 @@ async function acceptMatchedMetadata(candidate) {
     const preview = await api("/api/books/metadata/preview", { ...options, method: "POST", body: JSON.stringify(payload) });
     if (!current()) return;
     if (!preview.revision) throw new Error("The server did not return a metadata revision");
-    state.saving = true;
-    $("intake-status").textContent = "Saving catalog metadata…";
-    updateIntakeControls();
-    await api("/api/books/metadata", { method: "POST", body: JSON.stringify({ ...payload, expectedRevision: preview.revision }) });
+    showIntakePreview(preview, payload);
+  });
+}
+
+async function acceptMatchedMetadata(preview) {
+  const state = intake, row = state?.row;
+  let accepted = false;
+  await intakeRequest("Saving catalog metadata…", async (options, current) => {
+    await api("/api/books/metadata", { method: "POST", body: JSON.stringify({ ...preview.payload, expectedRevision: preview.revision }) });
     if (!current()) return;
     accepted = true;
     invalidateReaderNextIssue(row.id);
     loadLibrary();
     loadPublishers();
     loadLists();
-  });
+  }, true);
   if (!accepted || !intakeCurrent(state, row)) return;
   $("intake-dialog").close();
   await openDetails(row.id);
@@ -2683,32 +2764,19 @@ function renderIntakeCandidates() {
     details.append(textElement("h3", `${candidate.series} #${candidate.number} — ${candidate.title || "Untitled"}`),
       textElement("p", `${candidate.publisher || "Unknown publisher"} · Run ${candidate.startYear || "unknown"} · Cover ${candidate.coverDate || "unknown"}`),
       textElement("p", `Rank score ${candidate.score}/100`));
-    const accept = textElement("button", intake.metadataOnly ? "Accept metadata" : "Accept and process", "primary");
+    const accept = textElement("button", intake.metadataOnly ? "Review metadata…" : "Review processing…", "primary");
     accept.type = "button";
     accept.setAttribute("aria-label", `${accept.textContent}: ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`);
     accept.addEventListener("click", () => {
       if (accept.disabled) return;
-      if (intake.metadataOnly) { acceptMatchedMetadata(candidate); return; }
+      if (intake.metadataOnly) { previewMatchedMetadata(candidate); return; }
       intakeRequest("Preparing metadata and destination. Nothing has changed yet…", async (options, current, state, row) => {
         const payload = { issueId: candidate.issueId, volumeId: candidate.volumeId, rootIndex: Number($("intake-root").value) };
         const prepared = await api(`/api/books/${encodeURIComponent(row.id)}/intake/prepare`, { ...options, method: "POST", body: JSON.stringify(payload) });
         if (!current()) return;
-        if (!prepared?.revision) throw new Error("The server did not return a processing revision");
-        state.saving = true;
-        state.processingStage = "Processing comicbook…";
-        $("intake-status").textContent = ["Processing metadata and comicbook. Do not close this page; processing cannot be cancelled.", ...(prepared.warnings || [])].join("\n");
-        updateIntakeControls();
-        const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake/process`, {
-          method: "POST", body: JSON.stringify({ ...payload, expectedRevision: prepared.revision, confirmed: true })
-        });
-        if (!current()) return;
-        if (result?.state !== "completed") throw new Error("Processing did not finish");
-        setIntakeProcessing(row, result);
-        $("intake-status").textContent = row.outcome;
-        loadLibrary();
-        loadPublishers();
-        loadLists();
-        $("intake-status").focus({ preventScroll: true });
+        if (!prepared?.revision || !prepared.source || !prepared.destination || !Array.isArray(prepared.warnings))
+          throw new Error("The server did not return a complete processing preview");
+        showIntakePreview(prepared, payload);
       }, false, true);
     });
     const actions = textElement("div", "", "actions");
@@ -2794,7 +2862,7 @@ function openIntake(rows, scope, mode = "process") {
   $("intake-root").hidden = document.querySelector('label[for="intake-root"]').hidden = historyOnly || metadataOnly;
   $("intake-outcome").hidden = metadataOnly;
   $("intake-refresh").textContent = metadataOnly ? "Refresh hints" : "Refresh processing status";
-  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Accept and process removes the source after verified success. This cannot be undone.");
+  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Review the source, destination and warnings before confirming. Processing removes the source after verified success and cannot be undone.");
   $("intake-queue").replaceChildren(...rows.map((row) => new Option(row.title, row.id)));
   $("intake-dialog").showModal();
   showIntakeRow();
@@ -2819,17 +2887,38 @@ $("cbz-replacement-form").addEventListener("submit", (event) => {
     if (!current()) return;
     if (!preview?.revision || !preview.source || !preview.destination || preview.converted !== true || !Array.isArray(preview.warnings))
       throw new Error("The server did not return a complete conversion preview");
-    state.replacementAttempt = preview;
-    $("intake-status").textContent = "Converting to CBZ. Do not close this page; replacement cannot be cancelled or undone…";
-    const result = await api(`/api/books/${encodeURIComponent(row.id)}/cbz-replacement`, {
-      method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true })
+    showIntakePreview(preview);
+  });
+});
+
+$("intake-confirm").addEventListener("click", () => {
+  const preview = intake?.preview;
+  if (!preview || $("intake-confirm").disabled) return;
+  if (intake.metadataOnly) { acceptMatchedMetadata(preview); return; }
+  intakeRequest("Processing comicbook. Do not close this page; this cannot be cancelled or undone…", async (options, current, state, row) => {
+    if (state.replacement) state.replacementAttempt = preview;
+    state.processingStage = "Processing comicbook…";
+    updateIntakeControls();
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/${state.replacement ? "cbz-replacement" : "intake/process"}`, {
+      method: "POST", body: JSON.stringify({ ...preview.payload, expectedRevision: preview.revision, confirmed: true })
     });
     if (!current()) return;
-    if (result?.state !== "completed" || !result.converted || result.source !== preview.source || result.destination !== preview.destination)
-      throw new Error("Conversion completion was not confirmed");
+    if (result?.state !== "completed" || state.replacement && (!result.converted || result.source !== preview.source || result.destination !== preview.destination))
+      throw new Error("Processing completion was not confirmed");
     setIntakeProcessing(row, result);
     $("intake-status").textContent = row.outcome;
-  }, true);
+    if (!state.replacement) {
+      loadLibrary();
+      loadPublishers();
+      loadLists();
+    }
+  }, true, !intake.replacement);
+});
+$("intake-discard").addEventListener("click", () => {
+  if (intake?.saving) return;
+  cancelIntakeRequest();
+  $("intake-status").textContent = "Review cancelled. Nothing was saved.";
+  ($("intake-form").hidden ? $("apply-cbz-replacement") : $("intake-match")).focus();
 });
 
 for (const trigger of ["process-unsorted", "process-selected"]) $(trigger).addEventListener("click", () => {
@@ -2850,7 +2939,10 @@ $("intake-refresh").addEventListener("click", () => {
   if (intake?.metadataOnly) { intake.row.hints = null; intake.row.candidates = []; }
   showIntakeRow();
 });
-$("intake-root").addEventListener("change", updateIntakeControls);
+$("intake-root").addEventListener("change", () => {
+  cancelIntakeRequest();
+  $("intake-status").textContent = "Destination changed. Review the candidate again before processing.";
+});
 $("intake-recover").addEventListener("click", () => {
   if (!intake?.row?.processing?.canRecover) return;
   intakeRequest("Recovering interrupted processing. Do not close this page…", async (options, current, state, row) => {
@@ -2873,6 +2965,7 @@ $("intake-cancel").addEventListener("click", () => {
 $("intake-hints").addEventListener("input", () => {
   const row = intake?.row;
   if (!row) return;
+  invalidateIntakePreview();
   row.hints = Object.fromEntries(["series", "number", "year", "volume", "publisher"].map((name) => {
     const value = $(`intake-${name}`).value.trim();
     return [name, name === "year" || name === "volume" ? value ? Number(value) : null : value];
@@ -4271,6 +4364,9 @@ $("metadata-form").addEventListener("submit", async (event) => {
   const detailsGeneration = detailGeneration;
   const epoch = authEpoch;
   const ids = [...metadataBookIds];
+  let focus = event.submitter || document.activeElement;
+  let submitted = false;
+  let saved = false;
   try {
     const changes = collectMetadataChanges();
     if (!Object.keys(changes.fields).length && !Object.keys(changes.custom).length) throw new Error("Check at least one field or custom value to apply.");
@@ -4289,30 +4385,18 @@ $("metadata-form").addEventListener("submit", async (event) => {
       const preview = await api("/api/books/metadata/preview", { method: "POST", body: JSON.stringify(payload) });
       if (epoch !== authEpoch || generation !== metadataGeneration) return;
       metadataPreview = { payload, revision: preview.revision, hasChanges: preview.books.some((book) => book.changes.length > 0) };
-      for (const book of preview.books) {
-        const row = textElement("article", "", "maintenance-row");
-        row.dataset.previewBook = book.id;
-        row.append(textElement("h4", bookTitle(book)));
-        if (!book.changes.length) row.append(textElement("p", "Unchanged — no actual changes.", "muted"));
-        for (const change of book.changes) {
-          row.append(textElement("h5", `${change.custom ? "Custom: " : ""}${change.field}`));
-          const values = document.createElement("dl");
-          values.append(
-            textElement("dt", "Before"), textElement("dd", change.before == null ? "(absent)" : change.before === "" ? "(empty string)" : JSON.stringify(change.before)),
-            textElement("dt", "After"), textElement("dd", change.after == null ? "(removed / absent)" : change.after === "" ? "(empty string)" : JSON.stringify(change.after)));
-          row.append(values);
-        }
-        $("metadata-preview-books").append(row);
-      }
+      renderMetadataPreview(preview.books, $("metadata-preview-books"));
       $("metadata-preview").hidden = false;
-      $("metadata-preview").focus();
+      focus = $("metadata-preview");
       $("metadata-status").textContent = metadataPreview.hasChanges ? "Review every book below, then choose Apply reviewed changes. Nothing has been saved yet." : "No actual changes. Every selected book is unchanged.";
       return;
     }
     $("metadata-status").textContent = `Saving metadata for ${ids.length} ${ids.length === 1 ? "book" : "books"}…`;
+    submitted = true;
     await api(metadataBulk ? "/api/books/metadata" : `/api/books/${encodeURIComponent(ids[0])}/metadata`, {
       method: metadataBulk ? "POST" : "PUT", body: JSON.stringify(metadataBulk ? { ...metadataPreview.payload, expectedRevision: metadataPreview.revision } : changes)
     });
+    saved = true;
     if (epoch !== authEpoch) return;
     if (Object.hasOwn(changes.fields, "Series") || Object.hasOwn(changes.fields, "Number"))
       for (const id of ids) invalidateReaderNextIssue(id);
@@ -4344,15 +4428,21 @@ $("metadata-form").addEventListener("submit", async (event) => {
       } catch (error) { if (detailsGeneration === detailGeneration) $("details-status").textContent = `Metadata was saved, but details could not refresh: ${error.message}`; }
     }
   } catch (error) {
-    if (generation === metadataGeneration) {
-      if (error.status === 409) invalidateMetadataPreview();
-      $("metadata-status").textContent = error.status === 409 ? `${error.message} Your draft is retained. Preview again before applying.` : error.message;
+    if (epoch === authEpoch && generation === metadataGeneration) {
+      const uncertain = submitted && !saved && (!error.status || error.status >= 500);
+      if (error.status === 409 || uncertain) invalidateMetadataPreview();
+      focus = $("metadata-status");
+      focus.textContent = saved ? `Metadata was saved, but the view could not refresh: ${error.message} Reopen metadata to inspect the saved values.`
+        : uncertain ? `Metadata save outcome unknown: ${error.message} Changes may have been saved. No automatic retry was made. Your draft is retained; copy it, then reopen metadata to inspect the saved values before submitting again.`
+        : `Metadata ${submitted ? "save rejected" : "not saved"}: ${error.message} Your draft is retained.${error.status === 409 && metadataBulk ? " Preview again before applying." : " Review the message and your entries before submitting again."}`;
     }
   } finally {
-    if (generation === metadataGeneration) {
+    if (epoch === authEpoch && generation === metadataGeneration) {
       metadataBusy = false;
       $("metadata-controls").disabled = $("save-metadata").disabled = false;
       $("apply-metadata").disabled = !metadataPreview?.hasChanges;
+      if (!$("metadata-view").hidden)
+        (focus.isConnected && !focus.matches(":disabled") && focus.checkVisibility() ? focus : $("metadata-status")).focus();
     }
   }
 });
@@ -4535,6 +4625,7 @@ function queueProgress(record) {
   const epoch = authEpoch;
   unsavedProgress = record;
   $("save-status").textContent = "Saving progress…";
+  if (document.activeElement === $("retry-save")) $("page-stage").focus({ preventScroll: true });
   $("retry-save").hidden = true;
   // ponytail: one promise queue preserves write order; no background sync or storage layer.
   progressQueue = progressQueue.then(async () => {
@@ -4583,6 +4674,7 @@ function queuePreferences() {
   const record = { ...readerPreferences };
   unsavedPreferences = record;
   $("preferences-status").textContent = "Saving preferences…";
+  if (document.activeElement === $("retry-preferences")) $("page-stage").focus({ preventScroll: true });
   $("retry-preferences").hidden = true;
   preferenceQueue = preferenceQueue.then(async () => {
     if (epoch !== authEpoch) return;
@@ -4621,6 +4713,8 @@ function pageLabel(page) {
   return `Position ${readingPositions[page] + 1} · Physical page ${page + 1} · ${pageTypeLabel(pages[page]?.type)}`;
 }
 
+let bookmarkDirty = false;
+
 function renderBookmarks() {
   for (const [id, bookmarks, personal] of [
     ["personal-bookmarks", personalBookmarks, true],
@@ -4657,6 +4751,7 @@ function queueBookmark(record) {
   unsavedBookmark = record;
   bookmarkBusy = true;
   $("bookmark-status").textContent = record.name === null ? "Deleting bookmark…" : "Saving bookmark…";
+  if (document.activeElement === $("retry-bookmark")) $("page-stage").focus({ preventScroll: true });
   $("retry-bookmark").hidden = true;
   updatePageControls();
   bookmarkQueue = bookmarkQueue.then(async () => {
@@ -4670,7 +4765,8 @@ function queueBookmark(record) {
       personalBookmarks = personalBookmarks.filter((bookmark) => bookmark.page !== record.page);
       if (record.name !== null) personalBookmarks.push(record);
       unsavedBookmark = null;
-      bookmarkEditorPage = null;
+      if (record.name !== null) bookmarkDirty = false;
+      if (!bookmarkDirty) bookmarkEditorPage = null;
       $("bookmark-status").textContent = record.name === null ? "Bookmark deleted" : "Bookmark saved";
       renderBookmarks();
     } catch (error) {
@@ -4737,15 +4833,18 @@ function updatePageControls() {
   $("bookmark-name").disabled = unavailable || empty || bookmarkBusy || Boolean(unsavedBookmark);
   $("save-bookmark").disabled = $("bookmark-name").disabled;
   $("retry-bookmark").disabled = unavailable || bookmarkBusy;
+  $("discard-bookmark").hidden = !bookmarkDirty;
+  $("discard-bookmark").disabled = unavailable || bookmarkBusy || Boolean(unsavedBookmark);
+  $("bookmark-draft").hidden = !bookmarkDirty;
   for (const button of $("personal-bookmarks").querySelectorAll("[data-delete-bookmark]")) button.disabled = unavailable || bookmarkBusy || Boolean(unsavedBookmark);
   if (!unavailable) {
     $("current-page-type").textContent = empty ? "No visible pages" : (readerPreferences.mode === "continuous" ? [currentPage] : displayedPages.length ? displayedPages : [currentPage]).map(pageLabel).join(" · ");
-    $("bookmark-page").textContent = `physical page ${currentPage + 1}`;
-    if (bookmarkEditorPage !== currentPage) {
+    if (!bookmarkDirty && !unsavedBookmark && bookmarkEditorPage !== currentPage) {
       bookmarkEditorPage = currentPage;
       $("bookmark-name").value = personalBookmarks.find((bookmark) => bookmark.page === currentPage)?.name || "";
       $("bookmark-name").setCustomValidity("");
     }
+    $("bookmark-page").textContent = `physical page ${bookmarkEditorPage + 1}`;
   }
   $("cover-alone").disabled = unavailable || readerPreferences?.mode !== "spread";
   updateFullscreen();
@@ -4764,6 +4863,7 @@ function createReaderPage(page, info) {
 }
 
 function pageMessage(entry, error = null) {
+  if (entry.message.contains(document.activeElement)) $("page-stage").focus({ preventScroll: true });
   entry.node.classList.toggle("failed", Boolean(error));
   entry.message.hidden = entry.state === "ready";
   if (error) entry.message.setAttribute("role", "alert");
@@ -5136,6 +5236,8 @@ async function leaveReader() {
     if (epoch !== authEpoch) return;
     if (unsavedPreferences) throw new Error("Your reader preferences could not be saved. Retry preference save before leaving the reader.");
     if (unsavedBookmark) throw new Error("Your bookmark change could not be saved. Retry bookmark save before leaving the reader.");
+    if (bookmarkDirty && !confirm("Discard the unsubmitted bookmark name?"))
+      throw new Error("Bookmark name kept. Save or discard it before leaving the reader.");
     if (document.fullscreenElement === $("reader-view")) await document.exitFullscreen();
     if (epoch === authEpoch) clearReader();
   } finally {
@@ -5201,6 +5303,7 @@ async function route(hash, generation) {
           if ($(id).selectedIndex < 0) $(id).selectedIndex = 0;
         }
         $("search").value = libraryQuery = catalog.query;
+        discoveryReturn = catalog.discoveryReturn ?? null;
         advancedFilter = catalog.advancedFilter ?? null;
         libraryPage = catalog.page;
         groupKey = catalog.groupKey;
@@ -5277,6 +5380,10 @@ function scheduleRoute() {
     history.replaceState(null, "", "#library");
     return;
   }
+  if (!leavePassword()) {
+    history.replaceState(null, "", "#library");
+    return;
+  }
   if (kavitaImport?.applying) {
     history.replaceState(history.state, "", kavitaImport.hash);
     return;
@@ -5347,7 +5454,7 @@ $("login-form").addEventListener("submit", async (event) => {
 $("logout").addEventListener("click", async () => {
   if (passwordBusy || kavitaImport?.applying || deletionBusy) return;
   resetKavitaImport();
-  if (!leaveServerSettings() || !leaveMetadata()) return;
+  if (!leavePassword() || !leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;
   $("logout").disabled = true;
   try {
@@ -5401,6 +5508,7 @@ $("library-location").addEventListener("change", () => {
 });
 for (const id of ["book-sort", "sort-direction", "book-rating", "publisher", "page-size", "book-availability"]) $(id).addEventListener("change", () => changeLibrary(false));
 $("book-status").addEventListener("change", () => {
+  if (seriesView() && $("reading-status-hint").hidden) discoveryReturn = catalogReturn;
   const resetGroup = Boolean(seriesView()) || !$("reading-status-hint").hidden || $("book-status").value === "in-progress";
   if (seriesView()) {
     advancedFilter = null;
@@ -5415,6 +5523,13 @@ $("book-status").addEventListener("change", () => {
   changeLibrary(resetGroup);
 });
 for (const id of ["group-by", "stack-by"]) $(id).addEventListener("change", () => changeLibrary());
+$("return-to-browse").addEventListener("click", () => {
+  if (!discoveryReturn || discoveryReturn.username !== session?.username) return;
+  const previous = discoveryReturn;
+  rememberCatalogView();
+  history.pushState({ catalog: previous }, "", previous.hash);
+  scheduleRoute();
+});
 $("back-to-groups").addEventListener("click", async () => {
   const origin = groupOrigin;
   if (!origin) { changeLibrary(true, true); return; }
@@ -5508,6 +5623,16 @@ $("read-book").addEventListener("click", () => {
   location.hash = `reader/${encodeURIComponent(detailBook.id)}?location=${catalogLocation}`;
 });
 
+function passwordDirty() {
+  return !$("password-view").hidden && [...$("password-form").querySelectorAll('input[type="password"]')].some(input => input.value);
+}
+
+function leavePassword() {
+  if (passwordBusy || (passwordDirty() && !confirm("Discard the entered passwords?"))) return false;
+  $("password-form").reset();
+  return true;
+}
+
 
 $("change-password").addEventListener("click", async () => {
   if (deletionBusy || !leaveServerSettings() || !leaveMetadata()) return;
@@ -5520,7 +5645,10 @@ $("change-password").addEventListener("click", async () => {
   } catch (error) { if (epoch === authEpoch) showError(error); }
 });
 $("cancel-password").addEventListener("click", () => {
-  if (!session?.mustChangePassword) scheduleRoute();
+  if (!session?.mustChangePassword && !passwordBusy) {
+    $("password-form").reset();
+    scheduleRoute();
+  }
 });
 for (const event of ["input", "reset"]) $("password-form").addEventListener(event, () => {
   clearFieldError($("password-form").elements.confirmation, $("password-status"));
@@ -5551,11 +5679,15 @@ $("password-form").addEventListener("submit", async (event) => {
     if (epoch !== authEpoch) return;
     showLogin();
     $("login-message").textContent = "Password changed. All your sessions have ended. Sign in with your new password.";
-  } catch (error) { if (epoch === authEpoch) $("password-status").textContent = error.message; }
+  } catch (error) {
+    if (epoch === authEpoch) $("password-status").textContent = `Password change: ${error.message}${error.status && error.status < 500
+      ? " Review your entries before submitting again."
+      : " The outcome may be unknown. No automatic retry was made; sign out and check which password works before trying another change."}`;
+  }
   finally {
     if (epoch === authEpoch) {
       setPasswordBusy(false);
-      form.querySelector('[type="submit"]').focus();
+      if (!$("password-view").hidden) $("password-status").focus();
     }
   }
 });
@@ -5599,7 +5731,7 @@ async function loadUsers() {
       const role = roleForm.elements.role.value;
       const endSession = user.id === session.id && role !== roleForm.elements.role.dataset.savedValue;
       if (!confirm(`Change “${user.username}” to ${role}? Changed roles end all sessions for this account.${endSession ? " You will be signed out." : ""}`)) return;
-      mutateAccount(`/api/users/${encodeURIComponent(user.id)}/role`, "PUT", { role }, "Role saved.", endSession);
+      mutateAccount(`/api/users/${encodeURIComponent(user.id)}/role`, "PUT", { role }, "Role saved.", endSession, null, `Role change for “${user.username}”`);
     });
     row.append(roleForm);
     if (user.id === session.id) {
@@ -5634,7 +5766,7 @@ async function loadUsers() {
           return;
         }
         if (!confirm(`Reset the password for “${user.username}”? All their sessions will end and they must change this password at next sign-in.`)) return;
-        mutateAccount(`/api/users/${encodeURIComponent(user.id)}/password`, "PUT", { password: form.elements.password.value }, "Password reset. The account must change it at next sign-in.", false, form);
+        mutateAccount(`/api/users/${encodeURIComponent(user.id)}/password`, "PUT", { password: form.elements.password.value }, "Password reset. The account must change it at next sign-in.", false, form, `Password reset for “${user.username}”`);
       });
       reset.append(form);
       row.append(reset);
@@ -5644,17 +5776,17 @@ async function loadUsers() {
     remove.setAttribute("aria-label", `Delete account: ${user.username}`);
     remove.addEventListener("click", () => {
       if (!confirm(`Permanently delete “${user.username}”? Their private reading history, ratings, bookmarks, lists, list folders, and reader preferences will be lost. Shared books and files are kept. This cannot be undone. The last administrator is protected.${user.id === session.id ? " You will be signed out." : ""}`)) return;
-      mutateAccount(`/api/users/${encodeURIComponent(user.id)}`, "DELETE", null, "Account deleted.", user.id === session.id);
+      mutateAccount(`/api/users/${encodeURIComponent(user.id)}`, "DELETE", null, "Account deleted.", user.id === session.id, null, `Account deletion for “${user.username}”`);
     });
     row.append(remove);
     $("user-list").append(row);
   }
 }
 
-async function mutateAccount(path, method, body, message, endSession = false, form = null) {
+async function mutateAccount(path, method, body, message, endSession = false, form = null, context) {
   if (accountBusy) return;
   accountBusy = true;
-  const focus = document.activeElement;
+  let focus = document.activeElement;
   const nextFocus = focus.closest(".user-row")?.nextElementSibling?.querySelector("button") || $("user-form").elements.username;
   const epoch = authEpoch;
   let submitted = false;
@@ -5675,13 +5807,19 @@ async function mutateAccount(path, method, body, message, endSession = false, fo
     }
     $("user-status").textContent = message;
     try { await loadUsers(); }
-    catch (error) { if (epoch === authEpoch) $("user-status").textContent = `${message} Accounts could not refresh: ${error.message}. Other drafts are kept.`; }
+    catch (error) {
+      if (epoch === authEpoch) {
+        focus = $("user-status");
+        focus.textContent = `${context}: ${message} Accounts could not refresh: ${error.message}. Other drafts are kept; reopen Accounts to check the saved state.`;
+      }
+    }
   } catch (error) {
     if (epoch !== authEpoch) return;
+    focus = $("user-status");
     if (!submitted || error.name === "AbortError" || (error.status && error.status < 500)) {
-      $("user-status").textContent = error.message;
+      $("user-status").textContent = `${context}: ${error.message} Review the message and your entries before submitting again. Your draft is retained.`;
     } else {
-      const warning = "The outcome of this account change is unknown. It may have been saved. No automatic retry was made.";
+      const warning = `${context}: the outcome of this account change is unknown. It may have been saved. No automatic retry was made.`;
       $("user-status").textContent = `${warning} Refreshing accounts…`;
       try {
         await loadUsers();
@@ -5711,7 +5849,12 @@ $("manage-users").addEventListener("click", async () => {
   $("user-dialog").showModal();
   const epoch = authEpoch;
   try { await loadUsers(); if (epoch === authEpoch) $("user-status").textContent = ""; }
-  catch (error) { if (epoch === authEpoch) $("user-status").textContent = error.message; }
+  catch (error) {
+    if (epoch === authEpoch && $("user-dialog").open) {
+      $("user-status").textContent = `Could not load accounts: ${error.message} Close and reopen Accounts to try again.`;
+      $("user-status").focus();
+    }
+  }
   finally { if (epoch === authEpoch) $("user-controls").disabled = false; }
 });
 $("user-dialog").addEventListener("close", () => {
@@ -5722,7 +5865,7 @@ $("user-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const values = Object.fromEntries(new FormData(form));
-  mutateAccount("/api/users", "POST", values, `Account “${values.username}” created.`, false, form);
+  mutateAccount("/api/users", "POST", values, `Account “${values.username}” created.`, false, form, `Create account “${values.username}”`);
 });
 
 $("close-reader").addEventListener("click", () => { location.hash = catalogLocation === "unsorted" ? "unsorted" : "library"; });
@@ -5739,9 +5882,20 @@ $("bookmark-form").addEventListener("submit", (event) => {
     $("bookmark-name").reportValidity();
     return;
   }
-  queueBookmark({ page: currentPage, name });
+  queueBookmark({ page: bookmarkEditorPage, name });
 });
-$("bookmark-name").addEventListener("input", () => $("bookmark-name").setCustomValidity(""));
+$("bookmark-name").addEventListener("input", () => {
+  $("bookmark-name").setCustomValidity("");
+  bookmarkDirty = $("bookmark-name").value !== (personalBookmarks.find((bookmark) => bookmark.page === bookmarkEditorPage)?.name || "");
+  updatePageControls();
+});
+$("discard-bookmark").addEventListener("click", () => {
+  if (leavingReader || bookmarkBusy || unsavedBookmark) return;
+  bookmarkDirty = false;
+  bookmarkEditorPage = null;
+  updatePageControls();
+  $("bookmark-name").focus({ preventScroll: true });
+});
 $("retry-bookmark").addEventListener("click", () => {
   if (!unsavedBookmark) return;
   clearError();
@@ -5884,7 +6038,7 @@ window.addEventListener("hashchange", resetComicExport);
 window.addEventListener("pagehide", cancelIntakeRequest);
 window.addEventListener("pagehide", resetComicExport);
 window.addEventListener("beforeunload", (event) => {
-  if (unsavedProgress || unsavedPreferences || unsavedBookmark || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy
+  if (unsavedProgress || unsavedPreferences || unsavedBookmark || bookmarkDirty || passwordDirty() || serverSettingsDirty() || serverSettingsBusy || dataRelocationDirty() || pageOrderDirty() || pageOrderBusy || ratingDirty || ratingBusy || folderDirty || folderBusy || metadataDirty || metadataBusy || pageMetadataDirty || pageMetadataBusy || listDirty || listBusy || archiveBusy
     || intake?.saving || kavitaImport?.applying || fileOperationBusy || organizationBusy || accountBusy || passwordBusy || deletionBusy
     || ($("file-operation-dialog").open && fileOperationDirty())
     || ($("organization-dialog").open && organizationDirty())

@@ -1,5 +1,5 @@
 // Run in the browser console on an idle library page, signed in as an administrator.
-// Requires at least one book and one other account. Does not submit or save any form.
+// Requires at least one book and one other account. Metadata submissions are intercepted; no saved data changes.
 (async () => {
   const $ = id => document.getElementById(id);
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -12,6 +12,7 @@
   };
   const change = control => control.dispatchEvent(new Event("change", { bubbles: true }));
   const originalConfirm = window.confirm;
+  const originalFetch = window.fetch;
   assert(!$('library-view').hidden && !document.querySelector('dialog[open]'), "Start on the idle library page.");
   try {
     $("group-by").value = "none";
@@ -89,6 +90,75 @@
     await waitFor(() => !$("metadata-view").hidden && !$("metadata-controls").disabled);
     assert(!$("metadata-controls").querySelector(".apply-change:checked"),
       "Browser history resurrected a discarded metadata draft.");
+    const draftTitle = $("metadata-fields").querySelector('[data-field="Title"]');
+    draftTitle.querySelector(".apply-change").checked = true;
+    change(draftTitle.querySelector(".apply-change"));
+    const titleValue = draftTitle.querySelector(".metadata-value");
+    titleValue.value = "Check-only retained title";
+    change(titleValue);
+    let outcome = "rejected", writes = 0, previews = 0;
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+      if (options.method && options.method !== "GET") {
+        if (path === "/api/books/metadata/preview") {
+          previews++;
+          if (outcome === "preview-failed") throw new TypeError("Check-only preview failure");
+          const payload = JSON.parse(options.body);
+          return new Response(JSON.stringify({ revision: "check-only", books: payload.bookIds.map(id => ({
+            id, title: "Check-only comicbook", changes: [{ field: "Title", before: "Before", after: titleValue.value }]
+          })) }), { headers: { "Content-Type": "application/json" } });
+        }
+        if (/^\/api\/books\/(?:metadata|[^/]+\/metadata)$/.test(path)) {
+          writes++;
+          if (outcome === "network") throw new TypeError("Check-only response lost");
+          if (outcome === "saved") return new Response(null, { status: 204 });
+          return new Response(JSON.stringify({ error: "Check-only metadata error" }), {
+            status: outcome === "server" ? 503 : 400, headers: { "Content-Type": "application/json" }
+          });
+        }
+        throw new Error("Check-only blocked write");
+      }
+      return originalFetch(input, options);
+    };
+    const bulk = !$("apply-metadata").hidden;
+    if (bulk) {
+      outcome = "preview-failed";
+      $("metadata-form").requestSubmit($("save-metadata"));
+      await waitFor(() => previews === 1 && !$("metadata-controls").disabled);
+      assert(writes === 0 && document.activeElement === $("metadata-status")
+        && $("metadata-status").textContent.includes("Metadata not saved") && !$("metadata-status").textContent.includes("outcome unknown")
+        && titleValue.value === "Check-only retained title", "A failed preview must not imply an uncertain write or discard its draft.");
+    }
+    for (const result of ["rejected", "network", "server", "saved"]) {
+      outcome = result;
+      if (bulk && $("apply-metadata").disabled) {
+        const count = previews;
+        $("save-metadata").focus();
+        $("metadata-form").requestSubmit($("save-metadata"));
+        await waitFor(() => previews > count && !$("metadata-controls").disabled);
+        assert(document.activeElement === $("metadata-preview"), "Completed metadata preview must receive focus after controls unlock.");
+      }
+      const count = writes;
+      const submit = $(bulk ? "apply-metadata" : "save-metadata");
+      submit.focus();
+      $("metadata-form").requestSubmit(submit);
+      await waitFor(() => writes > count && !$("metadata-controls").disabled);
+      const status = $("metadata-status");
+      if (result === "saved") {
+        assert(status.textContent.includes("Metadata saved") && !draftTitle.querySelector(".apply-change").checked,
+          "Successful metadata save did not clear the applied draft.");
+        assert(document.activeElement === (bulk ? status : submit), "Metadata completion lost focus to a disabled control.");
+      } else {
+        assert(document.activeElement === status && titleValue.value === "Check-only retained title" && draftTitle.querySelector(".apply-change").checked,
+          "Metadata failure must focus its summary and preserve the draft.");
+        assert(status.textContent.includes(result === "rejected" ? "save rejected" : "outcome unknown"),
+          "Metadata response loss/server failure was confused with definite rejection.");
+        if (result !== "rejected") assert(status.textContent.includes("inspect the saved values") && (!bulk || $("apply-metadata").disabled),
+          "Uncertain metadata saves must direct saved-state review and invalidate bulk approval.");
+      }
+      assert(writes === count + 1, "Metadata save was retried automatically.");
+    }
+    window.fetch = originalFetch;
     const forward = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
     history.forward();
     await forward;
@@ -158,6 +228,6 @@
     assert($("user-dialog").open && prompts === 1, "Account close discarded a genuine draft.");
     window.confirm = () => true;
     document.querySelector('[data-close="user-dialog"]').click();
-    console.log("PASS: metadata grouping, live custom labels, removal focus recovery, contextual accounts, draft-safe filtering, manual-list readiness and draft guards.");
-  } finally { window.confirm = originalConfirm; }
+    console.log("PASS: metadata grouping, preview/save focus, rejection and unknown-outcome recovery, live custom labels, contextual accounts, draft-safe filtering, manual-list readiness and draft guards.");
+  } finally { window.confirm = originalConfirm; window.fetch = originalFetch; }
 })();

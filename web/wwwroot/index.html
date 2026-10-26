@@ -65,13 +65,13 @@
         <label>Current password (required)<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label>
         <label>New password (required)<input name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-explanation"></label>
         <label>Confirm new password (required)<input name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-explanation"></label>
-        <p id="password-status" role="alert"></p>
+        <p id="password-status" role="alert" tabindex="-1"></p>
         <button type="submit" class="primary">Change password and sign out</button>
         <button id="cancel-password" type="button" class="quiet">Cancel</button>
       </form>
     </section>
     <section id="library-view" aria-labelledby="library-title" hidden>
-      <h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1>
+      <h1 id="library-title" class="catalog-title" tabindex="-1">Your library</h1>
       <div class="library-layout">
         <aside class="reading-list-sidebar" aria-labelledby="reading-lists-title">
           <h2 id="reading-lists-title">Reading lists</h2>
@@ -91,15 +91,15 @@
       <div class="catalog-browse">
       <div class="library-filters" role="group" aria-label="Browse comicbooks">
         <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option><option value="unsorted">Unsorted</option></select></label>
-        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery (clears filters)"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
+        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
       </div>
       <details id="catalog-arrangement" class="compact-disclosure" open><summary>Arrange</summary><div class="library-filters">
-        <label>Group by<select id="group-by"><option value="none">None</option><option value="series">Series</option><option value="publisher" selected>Publisher</option><option value="folder">Folder</option></select></label>
-        <label>Stack by<select id="stack-by"><option value="none">None</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
-        <label>Arrange by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
-      </div></details>
+        <label>Group by<select id="group-by" title="Divide results into labeled sections"><option value="none">None</option><option value="series">Series</option><option value="publisher" selected>Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Stack by<select id="stack-by" title="Combine matching comicbooks into cover stacks"><option value="none">None</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
+        <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
+      </div><p class="muted catalog-help">Group by creates sections. Stack by combines covers. Sort by orders results.</p></details>
       </div>
-      <p id="reading-status-hint" class="muted" hidden>Series discovery views have fixed criteria and order. Selecting one clears search, reading list, basic and advanced filters. Choose a book status to filter again.</p>
+      <p id="reading-status-hint" class="muted" hidden>Series discovery uses fixed criteria and order instead of your browsing filters. <button id="return-to-browse" type="button" class="quiet" hidden>Return to previous browse view</button></p>
       <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">· No active filters</span></summary><div class="library-filters">
         <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
         <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
@@ -109,6 +109,7 @@
       </div><div class="actions filter-actions"><button id="edit-advanced-filters" type="button" aria-haspopup="dialog">Advanced filters…</button><button id="clear-filters" type="button" class="quiet">Clear filters</button></div><p id="advanced-filter-summary" class="muted" role="status">No advanced rules applied.</p></details>
       <button id="process-unsorted" type="button" class="primary" hidden>Process Unsorted…</button>
       <div class="selection-toolbar" role="group" aria-label="Selected books" hidden>
+        <p class="selection-hint">Selection mode: covers select or deselect comicbooks. Clear selection to read; Details remains available.</p>
         <div class="selection-primary">
           <button id="select-page" type="button">Select page</button>
           <span id="selection-count" role="status">0 of 100 selected</span><button id="clear-selection" type="button" disabled>Clear selection</button>
@@ -130,7 +131,7 @@
       </div>
       <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
-      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button" class="success">Home</button><span id="group-label"></span></div>
+      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
       <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
           </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
@@ -152,7 +153,8 @@
           <label for="contrast">Contrast % <input id="contrast" type="number" min="50" max="200" step="1" value="100" inputmode="numeric"></label><button id="reset-visuals" type="button">Reset visuals</button>
         </div>
         <section aria-labelledby="personal-bookmarks-title"><h2 id="personal-bookmarks-title">My bookmarks</h2>
-          <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200"><button id="save-bookmark" type="submit" class="success">Add / update bookmark</button></form>
+          <form id="bookmark-form"><label for="bookmark-name">Name for <span id="bookmark-page">current page</span></label><input id="bookmark-name" required maxlength="200" aria-describedby="bookmark-draft"><button id="save-bookmark" type="submit" class="success">Add / update bookmark</button><button id="discard-bookmark" type="button" class="quiet" hidden>Discard name</button></form>
+          <p id="bookmark-draft" class="muted" role="status" hidden>Unsaved name stays with the labeled physical page as you read. Save it or discard it before naming another page.</p>
           <p id="bookmark-status" role="status"></p><button id="retry-bookmark" type="button" hidden>Retry bookmark save</button>
           <ul id="personal-bookmarks" aria-label="Personal bookmarks"></ul>
         </section>
@@ -224,7 +226,7 @@
       <div id="settings-save" class="form-stack" tabindex="-1">
       <label>Current administrator password — required for every save or service action<input id="settings-current-password" type="password" autocomplete="current-password" required maxlength="256"></label>
       <button id="save-server-settings" type="submit" class="success" disabled>Save server settings</button>
-    <p id="server-settings-status" role="status"></p>
+    <p id="server-settings-status" role="status" tabindex="-1"></p>
       </div>
     </form>
     <section id="settings-section-service" class="settings-section" aria-labelledby="settings-service-title" tabindex="-1">
@@ -252,13 +254,13 @@
         <button id="save-metadata" type="submit" class="success">Save checked changes</button>
         <button id="apply-metadata" type="submit" class="success" hidden disabled>Apply reviewed changes</button>
       </div>
-    <p id="metadata-status" role="status"></p>
+    <p id="metadata-status" role="status" tabindex="-1"></p>
       <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
       <fieldset id="metadata-controls"><legend class="sr-only">Metadata changes</legend><div id="metadata-fields"></div><section class="custom-values-group" aria-labelledby="custom-values-title"><h2 id="custom-values-title">Custom values</h2><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></section></fieldset>
     </form>
   </section>
   </main>
-  <dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-warning">
+  <dialog id="delete-dialog" class="dialog-compact" aria-labelledby="delete-title" aria-describedby="delete-warning">
     <h2 id="delete-title">Review permanent deletion</h2>
     <p id="delete-warning">This permanently deletes the selected comicbook files and their catalog records for all users, including reading progress, ratings, bookmarks, and list memberships. There is no trash or undo.</p>
     <p id="delete-count"></p>
@@ -292,7 +294,7 @@
     </div>
     <p id="details-status" role="status"></p>
   </dialog>
-  <dialog id="comic-export-dialog" aria-labelledby="comic-export-title">
+  <dialog id="comic-export-dialog" class="dialog-compact" aria-labelledby="comic-export-title">
     <div class="dialog-heading"><h2 id="comic-export-title">Export comics</h2><button id="close-comic-export" type="button" class="quiet">Close</button></div>
     <p id="comic-export-selection"></p>
     <p class="muted">One book downloads as a CBZ; multiple books download as a ZIP containing CBZs. Up to 100 books and 1 GiB per download. Closing this dialog or pressing Escape cancels an active download.</p>
@@ -364,6 +366,7 @@
       <p id="page-metadata-status" role="status"></p>
       <p class="muted">Blank clears the bookmark or restores the default Story type.</p>
       <ol id="page-order-pages" aria-label="Pages in reading order"></ol>
+      <button id="save-page-changes-bottom" type="submit" class="success" disabled>Save changes</button>
     </form>
   </dialog>
   <dialog id="intake-dialog" aria-labelledby="intake-title" aria-describedby="intake-scope">
@@ -377,7 +380,7 @@
     <section id="cbz-replacement" hidden>
       <p class="notice">Replaces the original after verification. This cannot be undone.</p>
       <form id="cbz-replacement-form" class="form-stack">
-        <button id="apply-cbz-replacement" type="submit" class="primary" disabled>Convert to CBZ</button>
+        <button id="apply-cbz-replacement" type="submit" class="primary" disabled>Review conversion…</button>
       </form>
     </section>
     <form id="intake-form" class="form-stack">
@@ -404,6 +407,12 @@
       <p id="intake-status" role="status" tabindex="-1"></p>
     </div>
     <div id="intake-candidates" aria-label="Ranked candidate issues"></div>
+    <section id="intake-preview" aria-labelledby="intake-preview-title" tabindex="-1" hidden>
+      <h3 id="intake-preview-title">Review before saving</h3>
+      <p id="intake-preview-summary"></p>
+      <div id="intake-preview-details"></div>
+      <div class="actions"><button id="intake-confirm" type="button" class="primary" disabled>Confirm</button><button id="intake-discard" type="button">Cancel</button></div>
+    </section>
   </dialog>
   <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-safety">
     <div class="dialog-heading"><h2 id="archive-title">Write metadata</h2><button type="button" data-close="archive-dialog" class="quiet" aria-label="Close metadata write">Close</button></div>
@@ -491,7 +500,7 @@
       <div class="actions filter-actions"><button id="save-list" type="submit">Save list</button><button id="save-filter-list" type="button" hidden>Save as smart list…</button><button id="back-to-filter" type="button" class="quiet" hidden>Back to filters</button></div>
     </form><p id="list-status" role="status"></p>
   </dialog>
-  <dialog id="folder-dialog" aria-labelledby="folder-title">
+  <dialog id="folder-dialog" class="dialog-compact" aria-labelledby="folder-title">
     <div class="dialog-heading"><h2 id="folder-title">Private list folders</h2><button type="button" data-close="folder-dialog" class="quiet">Close</button></div>
     <p class="muted">Organize private lists in nested folders. Deleting a folder unfiles only its direct lists and moves its immediate child folders to the top level, keeping their contents. No lists, books, or private reading data are deleted.</p>
     <form id="folder-form" class="form-stack">
@@ -516,12 +525,12 @@
       </fieldset>
       <button id="queue-data-relocation" type="submit" class="primary">Validate and queue relocation</button>
     </form>
-    <p id="data-relocation-status" role="status"></p>
+    <p id="data-relocation-status" role="status" tabindex="-1"></p>
   </dialog>
   <dialog id="user-dialog" aria-labelledby="user-title">
     <div class="dialog-heading"><h2 id="user-title">Manage accounts</h2><button type="button" data-close="user-dialog" class="quiet">Close</button></div>
     <p>Role changes and password resets end that account's sessions. The last administrator cannot be demoted or deleted.</p>
-    <p id="user-status" role="status"></p>
+    <p id="user-status" role="status" tabindex="-1"></p>
     <fieldset id="user-controls"><legend>Library accounts</legend><div id="user-list"></div>
       <h3>Create account</h3>
       <form id="user-form" class="form-stack">

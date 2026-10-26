@@ -1,5 +1,5 @@
 // Run in the browser console on an idle library page, signed in as an administrator.
-// Exercises the real UI without saving settings or calling mutation endpoints.
+// Exercises the real UI with intercepted settings writes; no saved settings or service changes.
 (async () => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const waitFor = async (condition) => {
@@ -11,6 +11,7 @@
   };
   assert(!document.getElementById("library-view").hidden && !document.querySelector("dialog[open]"), "Start on the idle library page.");
   const originalConfirm = window.confirm;
+  const originalFetch = window.fetch;
   try {
     const menu = document.getElementById("account-menu");
     const trigger = menu.querySelector("summary");
@@ -31,6 +32,40 @@
     await new Promise(resolve => setTimeout(resolve, 50));
     assert(location.hash === "#settings" && !page.hidden && document.activeElement.id === "main", "Skip to content changed the route or failed to focus content.");
     const key = document.getElementById("settings-comic-vine-key");
+    const snapshot = await originalFetch("/api/server-settings").then(response => response.json());
+    let rejectSave = true, writes = 0;
+    window.fetch = async (input, options = {}) => {
+      const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+      if (options.method && options.method !== "GET") {
+        if (path !== "/api/server-settings" || options.method !== "PUT") throw new Error("Check-only blocked write");
+        writes++;
+        return new Response(JSON.stringify(rejectSave ? { error: "Check-only settings rejection" }
+          : { ...snapshot, settings: JSON.parse(options.body).settings }), {
+          status: rejectSave ? 400 : 200, headers: { "Content-Type": "application/json" }
+        });
+      }
+      return originalFetch(input, options);
+    };
+    key.value = "check-only-settings-key";
+    key.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const rejected of [true, false]) {
+      rejectSave = rejected;
+      document.getElementById("settings-current-password").value = "check-only-password";
+      const count = writes;
+      document.getElementById("save-server-settings").focus();
+      document.getElementById("server-settings-form").requestSubmit(document.getElementById("save-server-settings"));
+      await waitFor(() => writes > count && page.getAttribute("aria-busy") === "false");
+      const status = document.getElementById("server-settings-status");
+      assert(document.activeElement === status && status.textContent.includes(rejected ? "Server settings:" : "Settings saved."),
+        "Settings completion must focus the contextual error or fall back from a disabled Save button.");
+      assert(key.value === (rejected ? "check-only-settings-key" : "") && !document.getElementById("settings-current-password").value,
+        "Settings failure must retain the draft; every result must clear the current password.");
+    }
+    window.fetch = originalFetch;
+    document.getElementById("reload-server-settings").focus();
+    document.getElementById("reload-server-settings").click();
+    await waitFor(() => page.getAttribute("aria-busy") === "false");
+    assert(document.activeElement.id === "reload-server-settings", "Settings reload lost its initiating focus.");
     const archived = document.getElementById("settings-archive-path");
     const unsorted = document.getElementById("settings-unsorted-path");
     assert(archived && unsorted && !archived.required && !unsorted.required, "Optional area path inputs are missing.");
@@ -54,6 +89,6 @@
     assert(location.hash === "#settings" && key.value === "", "Browser Back failed to reopen clean settings.");
     document.getElementById("settings-catalog-back").click();
     await waitFor(() => !document.getElementById("library-view").hidden);
-    console.log("PASS: settings page routing, skip navigation, cancelled/confirmed drafts, secret cleanup, focus return and browser Back.");
-  } finally { window.confirm = originalConfirm; }
+    console.log("PASS: settings page routing, async save/reload focus, contextual rejection, cancelled/confirmed drafts, secret cleanup, focus return and browser Back.");
+  } finally { window.confirm = originalConfirm; window.fetch = originalFetch; }
 })();

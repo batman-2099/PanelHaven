@@ -87,6 +87,18 @@
     doc.close();
     await waitFor(() => $("startup")?.hidden && !$("library-view").hidden && $("books").getAttribute("aria-busy") !== "true");
     await openPassword();
+    $("password-form").elements.currentPassword.value = "check-draft-password";
+    assert(!clean(), "An unsubmitted password draft must protect unload.");
+    win.confirm = () => false;
+    win.location.hash = "#settings";
+    await waitFor(() => win.location.hash === "#library");
+    assert(!$("password-view").hidden && $("password-form").elements.currentPassword.value === "check-draft-password",
+      "Accidental navigation discarded an unsubmitted password draft.");
+    $("cancel-password").click();
+    await waitFor(() => !$("library-view").hidden);
+    assert(clean() && !$("password-form").elements.currentPassword.value, "Deliberate Cancel must clear credentials without prompting.");
+    win.confirm = () => true;
+    await openPassword();
     fillPassword();
     await waitFor(() => Boolean(releasePassword));
     assert([...$("password-form").elements].every(control => control.disabled) && $("logout").disabled && $("catalog-home").inert,
@@ -105,8 +117,8 @@
     assert(!$("password-view").hidden, "Simulated history navigation departed during a password save.");
     releasePassword(json({ error: "Check-only rejected password" }, 400)); releasePassword = null;
     await waitFor(() => !$("cancel-password").disabled);
-    assert(clean() && !$("logout").disabled && !$("catalog-home").inert && doc.activeElement === $("password-form").querySelector('[type="submit"]'),
-      "Password failure must restore controls, focus, and unload state.");
+    assert(!clean() && !$("logout").disabled && !$("catalog-home").inert && doc.activeElement === $("password-status")
+      && $("password-status").textContent.includes("Password change"), "Password failure must focus its contextual summary and retain draft unload protection.");
     assert($("password-form").elements.newPassword.value === "check-new-password", "Password failure discarded entered values.");
 
     fillPassword();
@@ -153,6 +165,8 @@
     await waitFor(() => !$("user-controls").disabled);
     assert(accountWrites === 1 && accountReads === reads + 1 && row("created"), "Creation was retried or observable creation was not reconciled.");
     assert(create.elements.username.value === "check-created" && draftRole.value === "admin" && draftPassword.value === "check-preserved-draft", "Reconciliation discarded account drafts.");
+    assert(doc.activeElement === $("user-status") && $("user-status").textContent.includes("check-created"),
+      "Uncertain account creation must focus an account-specific summary.");
 
     outcome = "server";
     const reset = row("other").querySelector("details");
@@ -177,7 +191,9 @@
     const validationReads = accountReads;
     roleForm.requestSubmit();
     await waitFor(() => !$("user-controls").disabled);
-    assert(accountReads === validationReads && $("user-status").textContent === "Check-only rejected account change", "Definite validation rejection was mislabeled or reconciled unnecessarily.");
+    assert(accountReads === validationReads && $("user-status").textContent.includes("Check-only rejected account change")
+      && $("user-status").textContent.includes("check-other") && !$("user-status").textContent.includes("unknown")
+      && doc.activeElement === $("user-status"), "Definite account rejection must focus its contextual summary without reconciliation.");
     outcome = "network";
     failAccounts = true;
     roleForm.requestSubmit();
@@ -193,7 +209,7 @@
     await waitFor(() => !$("login-view").hidden);
     assert($("login-message").textContent.startsWith("Password changed.") && clean() && !$("catalog-home").inert,
       "Successful password change failed to sign out and restore clean controls.");
-    console.log("PASS: password busy/navigation/unload guards, auth-epoch isolation, account uncertainty, reconciliation, draft preservation, and no mutation retries.");
+    console.log("PASS: password draft/busy/navigation/unload guards, contextual error focus, auth-epoch isolation, account uncertainty, reconciliation, draft preservation, and no mutation retries.");
   } finally {
     releasePassword?.(json({ error: "Check cleanup" }, 400));
     releaseAccounts?.();

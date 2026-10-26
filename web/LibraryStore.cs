@@ -86,6 +86,7 @@ public sealed partial class LibraryStore
                 PRIMARY KEY(user_id,book_id)
             );
             CREATE INDEX IF NOT EXISTS books_series ON books(series COLLATE NOCASE,id);
+            CREATE INDEX IF NOT EXISTS books_series_exact ON books(series,id);
             CREATE INDEX IF NOT EXISTS books_title ON books(title COLLATE NOCASE,id);
             CREATE INDEX IF NOT EXISTS books_number ON books(number COLLATE NATURAL_NUMBER,id);
             CREATE INDEX IF NOT EXISTS books_publisher ON books(publisher,id);
@@ -414,17 +415,7 @@ public sealed partial class LibraryStore
         var title = Field("Title");
         if (string.IsNullOrWhiteSpace(title)) title = Path.GetFileNameWithoutExtension(path);
         stage = "hashing";
-        file.Position = 0;
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[16 * 1024];
-        int readBytes;
-        while ((readBytes = file.Read(buffer)) != 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            hasher.AppendData(buffer[..readBytes]);
-        }
-        hasher.GetHashAndReset(buffer[..32]);
-        var hash = Convert.ToHexString(buffer[..32]);
+        var hash = ArchiveHash(file, cancellationToken);
         var (location, folder) = SourceLocation(path);
         cancellationToken.ThrowIfCancellationRequested();
         stage = "catalog-write";
@@ -463,13 +454,14 @@ public sealed partial class LibraryStore
         return existing is null ? ImportOutcome.Added : ImportOutcome.Updated;
     }
 
-    private (string Root, string Path, long Size, long Ticks) GetSource(string id, int? page = null)
+    private (string Root, string Path, long Size, long Ticks, string? Hash) GetSource(string id, int? page = null)
     {
         string path;
+        string? hash;
         long size, ticks;
         bool available;
         using (var db = Open())
-        using (var command = Command(db, "SELECT path,page_count,file_size,modified_ticks,availability FROM books WHERE id=$id", ("$id", id)))
+        using (var command = Command(db, "SELECT path,page_count,file_size,modified_ticks,availability,content_hash FROM books WHERE id=$id", ("$id", id)))
         using (var reader = command.ExecuteReader())
         {
             if (!reader.Read()) throw new KeyNotFoundException();
@@ -478,18 +470,19 @@ public sealed partial class LibraryStore
             path = reader.GetString(0);
             size = reader.GetInt64(2);
             ticks = reader.GetInt64(3);
+            hash = reader.IsDBNull(5) ? null : reader.GetString(5);
         }
         var root = roots.FirstOrDefault(r => IsContained(r, path)) ?? throw new UnauthorizedAccessException();
         if (ReadSourceVersion(root, path) != (size, ticks))
             throw new InvalidOperationException("Comicbook changed; an administrator must rescan the library.");
         if (!available) throw new InvalidOperationException("Comicbook is unavailable; rescan or recover its pending operation before reading.");
-        return (root, path, size, ticks);
+        return (root, path, size, ticks, hash);
     }
 
     public string GetCoverVersion(string id)
     {
         var source = GetSource(id);
-        return $"{source.Size:x}-{source.Ticks:x}";
+        return $"{source.Size:x}-{source.Ticks:x}-{source.Hash}";
     }
 
     public PageData GetPage(string id, int page) => GetPage(id, page, default);

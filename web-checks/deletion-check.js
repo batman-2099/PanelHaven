@@ -37,9 +37,13 @@
   assert(config.bookIds?.length === 3 && new Set(config.bookIds).size === 3 && !$("delete-selected").hidden, "Three distinct disposable fixtures and an admin session are required.");
   const [first, second, keep] = config.bookIds;
   for (const id of config.bookIds) assert(await exists(id) === 200, "All fixtures must exist before this check.");
-  let requests = 0, release = null, loseResponse = false;
+  let requests = 0, logoutRequests = 0, release = null, loseResponse = false;
   window.fetch = async (...args) => {
     const path = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href).pathname;
+    if (path === "/api/logout") {
+      logoutRequests++;
+      return new Response(null, { status: 204 });
+    }
     if (path !== "/api/books/delete") return originalFetch(...args);
     requests++;
     const response = await originalFetch(...args);
@@ -71,6 +75,11 @@
     $("clear-selection").click();
     $("delete-selected").click();
     assert(!document.querySelector("dialog[open]") && document.querySelector(".selection-toolbar").inert && $("clear-selection").disabled && requests === 1, "Deletion must stay inline while blocking selection and duplicate submission.");
+    $("change-password").click();
+    $("logout").click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(logoutRequests === 0 && $("password-view").hidden && $("login-view").hidden && !$("library-view").hidden,
+      "Account actions must not hide the outcome of pending permanent deletion.");
     release();
     await waitFor(() => !document.querySelector(".selection-toolbar").inert && $("books").getAttribute("aria-busy") !== "true");
     assert(await exists(first) === 404 && await exists(keep) === 200, "Deleted catalog entry must disappear; unrelated fixture must survive.");

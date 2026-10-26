@@ -405,7 +405,9 @@ public sealed partial class LibraryStore
                 cancellationToken.ThrowIfCancellationRequested();
                 hash.AppendData(buffer, 0, read);
             }
-            return Convert.ToHexString(hash.GetHashAndReset());
+            Span<byte> digest = stackalloc byte[32];
+            hash.GetHashAndReset(digest);
+            return Convert.ToHexString(digest);
         }
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }

@@ -183,6 +183,35 @@ public static class ThumbnailChecks
             }
             File.Delete(archivePath);
             Reject<FileNotFoundException>(() => Get(id));
+
+            var boundPath = Path.Combine(root, "same-version.cbz");
+            void BoundArchive(SKColor color)
+            {
+                var pixels = (byte[])animated.Clone();
+                pixels[13] = color.Red; pixels[14] = color.Green; pixels[15] = color.Blue;
+                Archive("same-version", pixels, "gif");
+                using (var archive = ZipFile.Open(boundPath, ZipArchiveMode.Update))
+                using (var entry = archive.CreateEntry("page2.gif", CompressionLevel.NoCompression).Open())
+                    entry.Write(pixels);
+                File.SetLastWriteTimeUtc(boundPath, stamp);
+            }
+            BoundArchive(SKColors.Red);
+            Check(library.ScanAsync(default).GetAwaiter().GetResult().ErrorCount == 0,
+                "Same-version thumbnail fixture failed to import.");
+            var boundId = library.ListBooks("reader", null).Items.Single(book => book.Title == "same-version").Id;
+            CheckImage(Get(boundId), 1, 1, SKColors.Red);
+            var order = library.GetPageOrder(boundId);
+            library.SavePageOrder(boundId, new(order.Revision, [1, 0]));
+            var originalSize = new FileInfo(boundPath).Length;
+            var originalTime = File.GetLastWriteTimeUtc(boundPath);
+            BoundArchive(SKColors.Blue);
+            Check(new FileInfo(boundPath).Length == originalSize && File.GetLastWriteTimeUtc(boundPath) == originalTime,
+                "Replacement fixture changed size or timestamp.");
+            Reject<InvalidOperationException>(() => library.GetPageOrder(boundId));
+            Reject<InvalidOperationException>(() => Get(boundId));
+            Check(library.ScanAsync(default).GetAwaiter().GetResult().Updated == 1,
+                "Same-version replacement did not rescan after source validation.");
+            CheckImage(Get(boundId), 1, 1, SKColors.Blue);
         }
         finally
         {

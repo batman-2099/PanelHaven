@@ -57,13 +57,15 @@
     assert(retry.disabled && image.src === initialSource, "Thumbnail retry bypassed the loading guard.");
     release(); release = null;
     await waitFor(() => !$("reset-page-changes").disabled);
-    const mutations = new MutationObserver(() => {});
-    mutations.observe($("page-order-pages"), { attributes: true, childList: true, subtree: true });
-    change(0, "bookmark", bookmark);
-    const inputMutations = mutations.takeRecords();
-    mutations.disconnect();
-    assert(inputMutations.length === 0 && !$("save-page-changes").disabled && $("page-order-draft-state").textContent === "Unsaved changes.",
-      "Typing a bookmark rewrote card controls or failed to update draft state.");
+    const bookmarkInput = field(0, "bookmark"), initialOrder = orderInView();
+    bookmarkInput.focus();
+    bookmarkInput.value = bookmark;
+    bookmarkInput.setSelectionRange(3, 3);
+    bookmarkInput.dispatchEvent(new Event("input", { bubbles: true }));
+    assert(field(0, "bookmark") === bookmarkInput && document.activeElement === bookmarkInput
+      && bookmarkInput.selectionStart === 3 && bookmarkInput.selectionEnd === 3 && bookmarkInput.value === bookmark
+      && same(orderInView(), initialOrder) && !$("save-page-changes").disabled,
+      "Typing a bookmark replaced its control, moved the caret, changed order or lost the saveable draft.");
     change(1, "type", secondType);
     $("page-order-pages").firstElementChild.querySelector('[data-move="1"]').click();
     image.loading = "eager";

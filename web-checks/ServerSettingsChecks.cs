@@ -137,6 +137,32 @@ internal static class ServerSettingsChecks
             Check(legacyStore.Document.Settings.ArchivePath is null && legacyStore.Document.Settings.UnsortedPath is null
                 && legacyConfiguration["ArchivePath"] is null && legacyConfiguration["UnsortedPath"] is null && !legacyStore.RestartRequired,
                 "Legacy settings without special-root fields did not load as unconfigured.");
+            var savedBytes = File.ReadAllBytes(legacyStore.Path);
+            var recoveryBytes = File.ReadAllBytes(legacyStore.RecoveryPath);
+            var savedDocument = legacyStore.Document;
+            var escapedRoots = Enumerable.Range(0, 200)
+                .Select(index => Path.Combine(directory, $"library-{index}-" + new string('\'', 150))).ToArray();
+            Reject<ArgumentException>(() => legacyStore.Update(savedDocument.Revision,
+                savedDocument.Settings with { Libraries = escapedRoots }, null, false, null, false));
+            Check(legacyStore.Document == savedDocument && File.ReadAllBytes(legacyStore.Path).SequenceEqual(savedBytes)
+                && File.ReadAllBytes(legacyStore.RecoveryPath).SequenceEqual(recoveryBytes),
+                "Oversized serialized settings changed the revision, saved file, or recovery file.");
+            var boundary = savedDocument with { Revision = savedDocument.Revision + 1, RelocationError = "" };
+            var persistedJson = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+            var padding = 128 * 1024 - JsonSerializer.SerializeToUtf8Bytes(boundary, persistedJson).Length;
+            boundary = boundary with { RelocationError = new string('x', padding) };
+            legacyStore.Save(boundary);
+            Check(new FileInfo(legacyStore.Path).Length == 128 * 1024, "Settings boundary fixture did not reach the file limit.");
+            using var boundaryConfiguration = Configuration();
+            var boundaryStore = ServerSettings.Load(boundaryConfiguration, directory);
+            Check(boundaryStore.Document.Revision == boundary.Revision && boundaryStore.Document.RelocationError == boundary.RelocationError,
+                "Accepted boundary-sized settings did not reload.");
+            savedBytes = File.ReadAllBytes(legacyStore.Path);
+            recoveryBytes = File.ReadAllBytes(legacyStore.RecoveryPath);
+            Reject<ArgumentException>(() => legacyStore.Save(boundary with { RelocationError = boundary.RelocationError + "x" }));
+            Check(legacyStore.Document == boundary && File.ReadAllBytes(legacyStore.Path).SequenceEqual(savedBytes)
+                && File.ReadAllBytes(legacyStore.RecoveryPath).SequenceEqual(recoveryBytes),
+                "One-byte oversized settings changed persisted state.");
             File.WriteAllText(store.Path, "not-json");
             using var brokenConfiguration = Configuration();
             Reject<InvalidDataException>(() => ServerSettings.Load(brokenConfiguration, directory));

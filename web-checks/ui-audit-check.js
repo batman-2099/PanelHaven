@@ -42,6 +42,18 @@
     $("group-by").value = "none";
     change("stack-by", "series");
     await waitFor(idle);
+    const obsoleteCover = $("books").querySelector(".cover-button img[src]");
+    assert(obsoleteCover, "A catalog thumbnail is required.");
+    const coverSource = obsoleteCover.src;
+    $("refresh-library").click();
+    await waitFor(idle);
+    assert(!obsoleteCover.isConnected, "Refresh must replace the old catalog result.");
+    obsoleteCover.dispatchEvent(new Event("error"));
+    change("book-sort", "title");
+    await waitFor(idle);
+    const healthyCover = [...$("books").querySelectorAll("img")].find(image => image.src === coverSource);
+    assert(healthyCover, "An obsolete thumbnail error poisoned the current catalog.");
+    await waitFor(() => healthyCover.naturalWidth > 0);
     const group = $("books").querySelector(".group-card .cover-button");
     assert(group, "A series group is required.");
     group.click();
@@ -143,6 +155,9 @@
     const failedPages = new Set();
     let frame, win, doc, holdPath, releaseRequest, heldPage, releaseImage, allowMove = false, confirmCalls = 0;
     let sourceOrder = null, sourceWrites = 0, sourceLocation = book.location, nextLookups = 0, failProgress = false;
+    let expireDetails = false;
+    const privateFailures = { bookmark: false, preferences: false };
+    const privateWrites = { bookmark: [], preferences: [] };
     const element = id => doc.getElementById(id);
     const close = id => element(id).querySelector("[data-close]").click();
     const clean = () => {
@@ -186,6 +201,17 @@
         }
         if (path === "/api/session") return json({ ...identity, role });
         if (path === "/api/scan") return json(scanResult);
+        if (path === "/api/login" && method === "POST") return json({ ...identity, role });
+        if (path === bookPath && expireDetails) {
+          expireDetails = false;
+          return new win.Response(null, { status: 401 });
+        }
+        const privateKind = path === "/api/reader-preferences" && method === "PUT" ? "preferences"
+          : path.startsWith(`${bookPath}/bookmarks/`) && method !== "GET" ? "bookmark" : null;
+        if (privateKind) {
+          privateWrites[privateKind].push({ path, body: options.body });
+          return new win.Response(null, { status: privateFailures[privateKind] ? 503 : 204 });
+        }
         if (path === "/api/reader-preferences" && method === "GET") {
           const preferences = await originalFetch(input, options).then(response => response.json());
           return json({ ...preferences, mode: "spread", coverAlone: false, rotation: 0, skipPageTypes: 0 });
@@ -227,7 +253,7 @@
           source: "audit/source.cbz", destination: "audit/destination.cbz", sourceHash: "audit-only"
         });
         if (method !== "GET") {
-          if (path.endsWith("/progress") || path === "/api/reader-preferences") return new win.Response(null, { status: 204 });
+          if (path.endsWith("/progress")) return new win.Response(null, { status: 204 });
           // Never forward writes, even if a later assertion or selector is wrong.
           return new win.Response(JSON.stringify({ error: "Audit-only rejected write" }), { status: 400, headers: { "Content-Type": "application/json" } });
         }
@@ -306,6 +332,64 @@
       close("details-dialog");
       await waitFor(clean);
       await closeReader();
+
+      for (const kind of ["bookmark", "preferences"]) {
+        await openReader();
+        await waitFor(() => !element("save-bookmark").disabled && clean());
+        const retry = element(kind === "bookmark" ? "retry-bookmark" : "retry-preferences");
+        const savePrivate = name => {
+          if (kind === "bookmark") {
+            element("bookmark-name").value = name;
+            element("bookmark-form").requestSubmit();
+          } else {
+            element("zoom").value = element("zoom").value === "125" ? "150" : "125";
+            element("zoom").dispatchEvent(new win.Event("change", { bubbles: true }));
+          }
+        };
+        privateFailures[kind] = true;
+        savePrivate("Retained private bookmark");
+        await waitFor(() => !retry.hidden && !retry.disabled);
+        const failedWrite = privateWrites[kind].at(-1);
+        assert(!clean(), `${kind}: a failed write must protect unload.`);
+        element("close-reader").click();
+        await waitFor(() => win.location.hash.startsWith("#reader/") && !element("reader-error").hidden && !element("reader-details").disabled);
+        assert(!element("reader-view").hidden && !retry.hidden, `${kind}: failed saving must block departure and retain retry.`);
+        privateFailures[kind] = false;
+        retry.click();
+        await waitFor(() => retry.hidden && clean());
+        assert(JSON.stringify(privateWrites[kind].at(-1)) === JSON.stringify(failedWrite),
+          `${kind}: retry must save the retained edit, not a changed page or default preference.`);
+        if (kind === "bookmark") assert(element("personal-bookmarks").textContent.includes("Retained private bookmark"),
+          "A successful private bookmark retry must update the bookmark list.");
+        await closeReader();
+
+        await openReader();
+        await waitFor(() => !element("save-bookmark").disabled && clean());
+        holdPath = kind === "bookmark" ? `${bookPath}/bookmarks/${order.pages[0]}` : "/api/reader-preferences";
+        savePrivate("Obsolete private bookmark");
+        await waitFor(() => Boolean(releaseRequest));
+        expireDetails = true;
+        element("reader-details").click();
+        await waitFor(() => !element("login-view").hidden);
+        const login = element("login-form");
+        login.elements.username.value = identity.username;
+        login.elements.password.value = "audit-only-password";
+        login.requestSubmit(login.querySelector('button[type="submit"]'));
+        await waitFor(() => !element("library-view").hidden && element("books").getAttribute("aria-busy") !== "true");
+        await openReader();
+        await waitFor(() => !element("save-bookmark").disabled && clean());
+        const bookmarkStatus = element("bookmark-status").textContent;
+        const preferenceStatus = element("preferences-status").textContent;
+        privateFailures[kind] = kind === "preferences";
+        releaseRequest(); releaseRequest = null;
+        await new Promise(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)));
+        assert(clean() && element("retry-bookmark").hidden && element("retry-preferences").hidden
+          && element("bookmark-status").textContent === bookmarkStatus && element("preferences-status").textContent === preferenceStatus
+          && !element("personal-bookmarks").textContent.includes("Obsolete private bookmark") && element("reader-error").hidden,
+          `${kind}: an old session's completion must not mutate the new session's reader.`);
+        privateFailures[kind] = false;
+        await closeReader();
+      }
 
       for (const [state, errorCount] of [["completed", 0], ["cancelled", 0], ["running", 0], ["failed", 0], ["completed", 1]]) {
         element("account-menu").open = false;

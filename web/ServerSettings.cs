@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -24,6 +25,7 @@ public sealed record ServerSettingsDocument(
 
 public sealed class ServerSettings
 {
+    private const int MaxSettingsBytes = 128 * 1024;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] ManagedKeys = ["DataPath", "Libraries", "ArchivePath", "UnsortedPath", "urls", "Deployment:RequireHttps",
         "Deployment:AllowedHosts", "Deployment:KnownProxies", "ComicVine:ApiKey", "Kestrel:Certificates:Default", "Backup"];
@@ -72,7 +74,7 @@ public sealed class ServerSettings
             MakePrivate(path);
             try
             {
-                if (new FileInfo(path).Length > 128 * 1024) throw new InvalidDataException("Server settings file is too large.");
+                if (new FileInfo(path).Length > MaxSettingsBytes) throw new InvalidDataException("Server settings file is too large.");
                 document = JsonSerializer.Deserialize<ServerSettingsDocument>(File.ReadAllText(path), Json)
                     ?? throw new JsonException("Empty settings document.");
             }
@@ -227,13 +229,17 @@ public sealed class ServerSettings
     public void Save(ServerSettingsDocument document)
     {
         Validate(document);
+        var saved = JsonSerializer.Serialize(document, Json);
+        var recovery = JsonSerializer.Serialize(Active with { PendingDataPath = null }, Json);
+        if (Encoding.UTF8.GetByteCount(saved) > MaxSettingsBytes || Encoding.UTF8.GetByteCount(recovery) > MaxSettingsBytes)
+            throw new ArgumentException("Server settings exceed the 128 KiB saved-file limit. Use fewer or shorter values.");
         DataRelocation.SafePath(Path);
         DataRelocation.SafePath(RecoveryPath);
         var parent = System.IO.Path.GetDirectoryName(Path)!;
         if (!Directory.Exists(parent)) throw new IOException("The server settings parent directory does not exist.");
         // Preserve the running configuration across any number of unverified, pre-restart saves.
-        AtomicWrite(RecoveryPath, JsonSerializer.Serialize(Active with { PendingDataPath = null }, Json));
-        AtomicWrite(Path, JsonSerializer.Serialize(document, Json));
+        AtomicWrite(RecoveryPath, recovery);
+        AtomicWrite(Path, saved);
         Document = document;
     }
 

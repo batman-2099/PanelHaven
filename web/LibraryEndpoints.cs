@@ -378,9 +378,15 @@ public static class LibraryEndpoints
         api.MapGet("/list-rule-fields", () => Results.Ok(LibraryStore.ListRuleFields));
         api.MapGet("/list-folders", (LibraryStore store, ClaimsPrincipal user) => Results.Ok(store.GetListFolders(UserId(user))));
         api.MapPost("/list-folders", (LibraryStore store, ClaimsPrincipal user, ListFolderEdit edit) =>
-            Results.Json(store.CreateListFolder(UserId(user), edit), statusCode: 201));
+        {
+            try { return Results.Json(store.CreateListFolder(UserId(user), edit), statusCode: 201); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        });
         api.MapPut("/list-folders/{id}", (LibraryStore store, ClaimsPrincipal user, string id, ListFolderEdit edit) =>
-            Results.Ok(store.UpdateListFolder(UserId(user), id, edit)));
+        {
+            try { return Results.Ok(store.UpdateListFolder(UserId(user), id, edit)); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        });
         api.MapDelete("/list-folders/{id}", (LibraryStore store, ClaimsPrincipal user, string id) =>
         {
             store.DeleteListFolder(UserId(user), id);
@@ -388,12 +394,21 @@ public static class LibraryEndpoints
         });
         api.MapGet("/lists", (LibraryStore store, ClaimsPrincipal user) => Results.Ok(store.GetLists(UserId(user))));
         api.MapPost("/lists/preview", (LibraryStore store, ClaimsPrincipal user, SmartListPreview edit, int? page, int? pageSize) =>
-            Results.Ok(store.PreviewSmartList(UserId(user), edit, page ?? 1, pageSize ?? 48)));
+        {
+            try { return Results.Ok(store.PreviewSmartList(UserId(user), edit, page ?? 1, pageSize ?? 48)); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        });
         api.MapGet("/lists/{id}", (LibraryStore store, ClaimsPrincipal user, string id) => Results.Ok(store.GetList(UserId(user), id)));
         api.MapPost("/lists", (LibraryStore store, ClaimsPrincipal user, ListEdit edit) =>
-            Results.Json(store.CreateList(UserId(user), edit), statusCode: 201));
+        {
+            try { return Results.Json(store.CreateList(UserId(user), edit), statusCode: 201); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        });
         api.MapPut("/lists/{id}", (LibraryStore store, ClaimsPrincipal user, string id, ListEdit edit) =>
-            Results.Ok(store.UpdateList(UserId(user), id, edit)));
+        {
+            try { return Results.Ok(store.UpdateList(UserId(user), id, edit)); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
+        });
         api.MapDelete("/lists/{id}", (LibraryStore store, ClaimsPrincipal user, string id) =>
         {
             store.DeleteList(UserId(user), id);

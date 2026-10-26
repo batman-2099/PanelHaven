@@ -855,9 +855,10 @@ async function loadLibrary(focusResults = false) {
       image.loading = "lazy";
       if (coverId && !failedCovers.has(coverId)) image.src = `/api/books/${encodeURIComponent(coverId)}/thumbnail`;
       image.addEventListener("error", () => {
+        if (generation !== searchGeneration) return;
         failedCovers.add(coverId);
         cover.replaceChildren(textElement("span", "Cover unavailable", "cover-fallback"));
-        if (!checkedCoverSession && generation === searchGeneration) {
+        if (!checkedCoverSession) {
           checkedCoverSession = true;
           api("/api/session").then((data) => {
             if (generation === searchGeneration && !data.authenticated) showLogin();
@@ -5344,7 +5345,7 @@ $("login-form").addEventListener("submit", async (event) => {
 });
 
 $("logout").addEventListener("click", async () => {
-  if (passwordBusy || kavitaImport?.applying) return;
+  if (passwordBusy || kavitaImport?.applying || deletionBusy) return;
   resetKavitaImport();
   if (!leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;
@@ -5509,7 +5510,7 @@ $("read-book").addEventListener("click", () => {
 
 
 $("change-password").addEventListener("click", async () => {
-  if (!leaveServerSettings() || !leaveMetadata()) return;
+  if (deletionBusy || !leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;
   try {
     await leaveReader();

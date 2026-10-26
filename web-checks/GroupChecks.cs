@@ -57,6 +57,25 @@ public static class GroupChecks
                 && groups.Items.Single(group => group.Key == "one").Count == 1
                 && groups.Items.Single(group => group.Key == "").Count == 1,
                 "Series groups lost exact keys, counts, or the empty group.");
+            Check(groups.Items.Single(group => group.Key == "One").CoverId == ids["Alpha"]
+                && store.ListGroups("alice", null, "series", sort: "number", direction: "desc")
+                    .Items.Single(group => group.Key == "One").CoverId == ids["Alpha"],
+                "Series covers must use natural issue order, independently of stack arrangement.");
+            store.SaveProgress("cover-reader", ids["Alpha"], new(0, true));
+            Check(store.ListGroups("cover-reader", null, "series").Items.Single(group => group.Key == "One").CoverId == ids["Beta"]
+                && store.ListGroups("bob", null, "series").Items.Single(group => group.Key == "One").CoverId == ids["Alpha"]
+                && store.ListGroups("cover-reader", "Alpha", "series").Items.Single().CoverId == ids["Alpha"],
+                "Series covers ignored private completion or escaped the current filter.");
+            store.SaveProgress("cover-reader", ids["Beta"], new(0, false));
+            Check(store.ListGroups("cover-reader", null, "series", sectionBy: "publisher")
+                    .Items.Single(group => group.Key == "One").CoverId == ids["Beta"],
+                "An in-progress issue must remain the first unfinished series cover.");
+            store.SaveProgress("cover-reader", ids["Beta"], new(0, true));
+            Check(store.ListGroups("cover-reader", null, "series").Items.Single(group => group.Key == "One").CoverId == ids["Alpha"],
+                "A completed series must fall back to its first available issue.");
+            store.SaveProgress("cover-reader", ids["Alpha"], new(0, false));
+            Check(store.ListGroups("cover-reader", null, "series").Items.Single(group => group.Key == "One").CoverId == ids["Alpha"],
+                "Marking an issue unfinished did not refresh the series cover.");
             var pages = Enumerable.Range(1, 2).Select(page => store.ListGroups("alice", null, "series", page, 2)).ToArray();
             Check(pages.All(page => page.Total == 4 && page.Items.Count == 2 && page.PageSize == 2)
                 && pages.SelectMany(page => page.Items).SequenceEqual(groups.Items)
@@ -225,8 +244,8 @@ public static class GroupChecks
             Directory.Move(secondRoot, secondRoot + "-offline");
             store.ScanAsync(default).GetAwaiter().GetResult();
             groups = store.ListGroups("alice", null, "series");
-            Check(groups.Items.Single(group => group.Key == "One").CoverId is { } cover
-                && cover != ids["Alpha"] && groups.Items.Single(group => group.Key == "").CoverId is null
+            Check(groups.Items.Single(group => group.Key == "One").CoverId == ids["Beta"]
+                && groups.Items.Single(group => group.Key == "").CoverId is null
                 && groups.Items.Single(group => group.Key == "one").CoverId is null,
                 "Groups selected missing/unavailable covers or hid catalog members.");
             foreach (var availability in new[] { "available", "missing", "unavailable" })

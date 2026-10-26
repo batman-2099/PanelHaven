@@ -207,9 +207,12 @@ public sealed partial class LibraryStore
         command.CommandText = "SELECT COUNT(*) FROM (SELECT " + column + grouped + ")";
         var total = Convert.ToInt32(command.ExecuteScalar());
         page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
-        command.CommandText = "SELECT " + column + ",CASE WHEN " + column
+        var cover = groupBy == "series" ? SeriesCoverColumn : "MIN(CASE WHEN b.availability='available' THEN b.id END)";
+        command.CommandText = (groupBy == "series"
+            ? SeriesCoverRanks(filter, sectionColumn is null ? column : sectionColumn + "," + column) : "")
+            + "SELECT " + column + ",CASE WHEN " + column
             + "='' THEN $unknown ELSE " + column + " END AS label,COUNT(*),"
-            + "MIN(CASE WHEN b.availability='available' THEN b.id END),"
+            + cover + ","
             + "SUM(p.book_id IS NULL),SUM(p.book_id IS NOT NULL AND p.completed=0),SUM(COALESCE(p.completed,0))"
             + (sectionColumn is null ? "" : "," + sectionColumn) + grouped
             + " ORDER BY " + order + " LIMIT $limit OFFSET $offset";
@@ -257,18 +260,19 @@ public sealed partial class LibraryStore
         using var transaction = db.BeginTransaction(deferred: true);
         using var command = Command(db, "", ("$user", user), ("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         command.Transaction = transaction;
-        var grouped = """
-            WITH series AS (
+        var filter = " FROM books b LEFT JOIN progress p ON p.book_id=b.id AND p.user_id=$user"
+            + " WHERE trim(b.series)<>'' AND " + LocationFilter(command, "library");
+        var grouped = SeriesCoverRanks(filter, "b.series") + """
+            ,series AS (
                 SELECT b.series AS key,MIN(b.publisher COLLATE NOCASE) AS publisher,COUNT(*) AS count,
-                    MIN(CASE WHEN b.availability='available' THEN b.id END) AS cover,
+            """ + SeriesCoverColumn + """
+                    AS cover,
                     SUM(p.book_id IS NULL) AS unread,
                     SUM(p.book_id IS NOT NULL AND p.completed=0) AS in_progress,
                     SUM(COALESCE(p.completed,0)) AS completed,
                     MAX(p.updated_at) AS last_activity,MAX(b.added_at) AS last_added,
                     CASE WHEN COUNT(b.added_at)=COUNT(*) THEN MIN(b.added_at) END AS first_added
-                FROM books b LEFT JOIN progress p ON p.book_id=b.id AND p.user_id=$user
-                WHERE trim(b.series)<>'' AND
-            """ + LocationFilter(command, "library") + " GROUP BY b.series) ";
+            """ + filter + " GROUP BY b.series) ";
         command.CommandText = grouped + "SELECT COUNT(*) FROM series WHERE " + eligibility;
         var total = Convert.ToInt32(command.ExecuteScalar());
         page = Math.Min(page, Math.Max(1, (int)((total + (long)pageSize - 1) / pageSize)));
@@ -286,6 +290,13 @@ public sealed partial class LibraryStore
         transaction.Commit();
         return new BookGroupPage(result, total, page, pageSize);
     }
+
+    private const string SeriesCoverColumn = "MIN(CASE WHEN b.id IN (SELECT id FROM series_covers WHERE position=1) THEN b.id END)";
+
+    private static string SeriesCoverRanks(string filter, string partition) =>
+        "WITH series_covers AS (SELECT b.id,ROW_NUMBER() OVER (PARTITION BY " + partition
+        + " ORDER BY COALESCE(p.completed,0),b.number COLLATE NATURAL_NUMBER,b.id) AS position"
+        + filter + " AND b.availability='available') ";
 
     private static (string Expression, string Collation) ArrangeColumn(string sort, NativeList? list) => sort switch
     {

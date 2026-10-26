@@ -333,6 +333,60 @@
       await waitFor(clean);
       await closeReader();
 
+      await openReader();
+      element("reader-mode").value = "single";
+      element("reader-mode").dispatchEvent(new win.Event("change", { bubbles: true }));
+      element("page-number").value = "1";
+      element("page-form").requestSubmit();
+      await waitFor(() => !element("save-bookmark").disabled && clean());
+      const draftPage = order.pages[0];
+      const draftName = "Unsaved page-bound name";
+      const writeCount = privateWrites.bookmark.length;
+      const typeBookmark = name => {
+        doc.querySelector(".reader-display").open = true;
+        element("bookmark-name").focus();
+        element("bookmark-name").value = name;
+        element("bookmark-name").dispatchEvent(new win.Event("input", { bubbles: true }));
+      };
+      typeBookmark(draftName);
+      element("page-number").value = "3";
+      element("page-form").requestSubmit();
+      element("reader-mode").value = "continuous";
+      element("reader-mode").dispatchEvent(new win.Event("change", { bubbles: true }));
+      await waitFor(() => element("page-number").value === "3" && element("reader-pages").querySelector(`[data-page="${order.pages[2]}"] img`));
+      element("page-stage").dispatchEvent(new win.WheelEvent("wheel", { bubbles: true }));
+      element("page-stage").scrollTop = element("page-stage").scrollHeight;
+      element("page-stage").dispatchEvent(new win.Event("scroll"));
+      await waitFor(() => element("page-number").value === String(book.pageCount));
+      assert(element("bookmark-name").value === draftName && element("bookmark-page").textContent === `physical page ${draftPage + 1}`
+        && !element("bookmark-draft").hidden && !clean() && privateWrites.bookmark.length === writeCount,
+        "Direct jumps and continuous scrolling must retain the named physical-page draft without autosaving.");
+      const cancelledLeave = confirmCalls;
+      win.confirm = () => { confirmCalls++; return false; };
+      element("close-reader").click();
+      await waitFor(() => confirmCalls > cancelledLeave && win.location.hash.startsWith("#reader/"));
+      assert(element("bookmark-name").value === draftName, "Cancelling reader departure must retain the unsubmitted name.");
+      win.confirm = () => { confirmCalls++; return true; };
+      element("bookmark-form").requestSubmit();
+      await waitFor(() => element("bookmark-draft").hidden && clean());
+      assert(privateWrites.bookmark.at(-1).path === `${bookPath}/bookmarks/${draftPage}`
+        && JSON.parse(privateWrites.bookmark.at(-1).body).name === draftName,
+        "Submitting after navigation must save to the draft's physical page, not the current page.");
+      typeBookmark("Discard this name");
+      element("discard-bookmark").click();
+      assert(element("bookmark-draft").hidden && element("bookmark-name").value !== "Discard this name"
+        && doc.activeElement === element("bookmark-name"), "Explicit discard must restore the current-page editor and its focus.");
+      typeBookmark("Discard on departure");
+      await closeReader();
+      await openReader();
+      await waitFor(() => !element("save-bookmark").disabled && clean());
+      assert(element("bookmark-draft").hidden && element("bookmark-name").value !== "Discard on departure",
+        "A confirmed departure must clear the draft before another reader session.");
+      element("reader-mode").value = "spread";
+      element("reader-mode").dispatchEvent(new win.Event("change", { bubbles: true }));
+      await waitFor(clean);
+      await closeReader();
+
       for (const kind of ["bookmark", "preferences"]) {
         await openReader();
         await waitFor(() => !element("save-bookmark").disabled && clean());
@@ -340,6 +394,7 @@
         const savePrivate = name => {
           if (kind === "bookmark") {
             element("bookmark-name").value = name;
+            element("bookmark-name").dispatchEvent(new win.Event("input", { bubbles: true }));
             element("bookmark-form").requestSubmit();
           } else {
             element("zoom").value = element("zoom").value === "125" ? "150" : "125";
@@ -355,8 +410,11 @@
         await waitFor(() => win.location.hash.startsWith("#reader/") && !element("reader-error").hidden && !element("reader-details").disabled);
         assert(!element("reader-view").hidden && !retry.hidden, `${kind}: failed saving must block departure and retain retry.`);
         privateFailures[kind] = false;
+        doc.querySelector(".reader-display").open = true;
+        retry.focus();
         retry.click();
         await waitFor(() => retry.hidden && clean());
+        assert(doc.activeElement === element("page-stage"), `${kind}: hiding a focused retry must restore focus to the page stage.`);
         assert(JSON.stringify(privateWrites[kind].at(-1)) === JSON.stringify(failedWrite),
           `${kind}: retry must save the retained edit, not a changed page or default preference.`);
         if (kind === "bookmark") assert(element("personal-bookmarks").textContent.includes("Retained private bookmark"),
@@ -385,7 +443,8 @@
         await new Promise(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)));
         assert(clean() && element("retry-bookmark").hidden && element("retry-preferences").hidden
           && element("bookmark-status").textContent === bookmarkStatus && element("preferences-status").textContent === preferenceStatus
-          && !element("personal-bookmarks").textContent.includes("Obsolete private bookmark") && element("reader-error").hidden,
+          && !element("personal-bookmarks").textContent.includes("Obsolete private bookmark") && element("reader-error").hidden
+          && element("bookmark-draft").hidden && element("bookmark-name").value !== "Obsolete private bookmark",
           `${kind}: an old session's completion must not mutate the new session's reader.`);
         privateFailures[kind] = false;
         await closeReader();
@@ -446,8 +505,10 @@
       releaseImage(); releaseImage = null;
       await waitFor(() => !element("next-page").disabled);
       heldPage = order.pages[1];
+      element("reader-pages").querySelector(".failed button").focus();
       element("reader-pages").querySelector(".failed button").click();
       await waitFor(() => Boolean(releaseImage));
+      assert(doc.activeElement === element("page-stage"), "Replacing a focused page retry must restore stage focus without waiting for its request.");
       assert(element("next-page").disabled, "Explicit retry must wait for its result.");
       releaseImage(); releaseImage = null;
       await waitFor(() => !element("next-page").disabled);
@@ -497,8 +558,10 @@
       await waitFor(() => win.location.hash.startsWith("#reader/") && !element("reader-error").hidden && !element("reader-details").disabled);
       assert(!element("reader-view").hidden && !element("retry-save").hidden, "Source refresh must retain the unsaved-progress route guard.");
       failProgress = false;
+      element("retry-save").focus();
       element("retry-save").click();
       await waitFor(() => element("retry-save").hidden);
+      assert(doc.activeElement === element("page-stage"), "Hiding a focused progress retry must restore stage focus.");
       element("page-number").value = String(book.pageCount);
       element("page-form").requestSubmit();
       await waitFor(() => element("next-page").getAttribute("aria-label") === "Next issue" && !element("next-page").disabled);

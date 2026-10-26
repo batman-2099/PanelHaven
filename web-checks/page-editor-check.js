@@ -84,9 +84,9 @@
       "Thumbnail retry lost focus, reordered pages or discarded unsaved details.");
     close.click();
     assert($("page-metadata-dialog").open && !$("save-page-changes").disabled, "Unsaved combined draft bypassed the close guard.");
-    $("save-page-changes").click();
+    $("save-page-changes-bottom").click();
     await waitFor(() => !!release);
-    assert(close.disabled && $("reset-page-changes").disabled && field(0, "bookmark").matches(":disabled"), "Editor unlocked during combined save.");
+    assert(close.disabled && $("reset-page-changes").disabled && $("save-page-changes-bottom").disabled && field(0, "bookmark").matches(":disabled"), "Editor unlocked during combined save.");
     image.dispatchEvent(new Event("error"));
     const savingSource = image.src;
     retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -95,7 +95,7 @@
     await waitFor(() => !$("reset-page-changes").disabled);
     const order = await read("/page-order"), metadata = await read("/page-metadata");
     const expected = [...before.pages]; [expected[0], expected[1]] = [expected[1], expected[0]];
-    assert($("save-page-changes").disabled && same(order.pages, expected) && metadata.pages[0].bookmark === bookmark && metadata.pages[1].type === secondType,
+    assert($("save-page-changes").disabled && $("save-page-changes-bottom").disabled && same(order.pages, expected) && metadata.pages[0].bookmark === bookmark && metadata.pages[1].type === secondType,
       "One save did not persist order, type and bookmark against their physical pages.");
     change(0, "bookmark", "Discard this draft");
     $("page-order-pages").firstElementChild.querySelector('[data-move="1"]').click();

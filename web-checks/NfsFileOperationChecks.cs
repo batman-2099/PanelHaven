@@ -41,12 +41,13 @@ public static class NfsFileOperationChecks
         var root = Path.Combine(directory, "books");
         var cross = Directory.Exists("/dev/shm") ? Path.Combine("/dev/shm", "panelhaven-nfs-moves-" + Guid.NewGuid().ToString("N")) : null;
         Directory.CreateDirectory(root);
-        if (cross is not null) Directory.CreateDirectory(cross);
+        Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher"));
+        if (cross is not null) Directory.CreateDirectory(Path.Combine(cross, "Unknown Publisher"));
         var database = Path.Combine(directory, "state", "library.sqlite");
         try
         {
             var source = Path.Combine(root, "original.cbz");
-            var destination = Path.Combine(root, "destination.cbz");
+            var destination = Path.Combine(root, "Unknown Publisher", "destination.cbz");
             var foreign = Path.Combine(root, "external-link");
             using (var archive = ZipFile.Open(source, ZipArchiveMode.Create))
             using (var page = archive.CreateEntry("1.png").Open())
@@ -115,13 +116,13 @@ public static class NfsFileOperationChecks
             if (cross is not null)
             {
                 Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(1, "", "cross.cbz")));
-                Check(!File.Exists(Path.Combine(cross, "cross.cbz")), "Unsupported ACL transfer touched its destination.");
+                Check(!File.Exists(Path.Combine(cross, "Unknown Publisher", "cross.cbz")), "Unsupported ACL transfer touched its destination.");
             }
 
             var operation = Journal();
             Original(source);
             var hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
-            var stage = Path.Combine(root, $".panelhaven-move-{operation}.stage");
+            var stage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{operation}.stage");
             void Pending(bool committed = false, string? stageIdentity = null)
             {
                 Sql("UPDATE file_operations SET state='pending',committed=0,stage_identity=COALESCE($stage,source_identity) WHERE id=$operation; "
@@ -185,17 +186,17 @@ public static class NfsFileOperationChecks
                 "Cannot remove fixture attributes.");
             if (cross is not null)
             {
-                Attribute(cross, "system.posix_acl_default", acl);
+                Attribute(Path.Combine(cross, "Unknown Publisher"), "system.posix_acl_default", acl);
                 Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(1, "", "cross.cbz")));
-                Check(RemoveAttribute(cross, "system.posix_acl_default") == 0, "Cannot remove fixture directory ACL.");
+                Check(RemoveAttribute(Path.Combine(cross, "Unknown Publisher"), "system.posix_acl_default") == 0, "Cannot remove fixture directory ACL.");
                 var crossPreview = store.PreviewFileMove(id, new(1, "", "cross.cbz"));
                 var crossMove = store.ApplyFileMove(id, new(1, "", "cross.cbz", crossPreview.Revision, true));
-                Check(File.ReadAllBytes(Path.Combine(cross, "cross.cbz")).SequenceEqual(bytes), "Plain cross-mount move changed bytes.");
+                Check(File.ReadAllBytes(Path.Combine(cross, "Unknown Publisher", "cross.cbz")).SequenceEqual(bytes), "Plain cross-mount move changed bytes.");
                 Undo(crossMove.OperationId);
             }
             operation = Journal();
             hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
-            stage = Path.Combine(root, $".panelhaven-move-{operation}.stage");
+            stage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{operation}.stage");
             Sql("UPDATE file_operations SET security=json_remove(security,'$.ExtendedAttributesHash') WHERE id=$operation;", operation);
             Pending();
             Alias(source, hold);
@@ -217,7 +218,7 @@ public static class NfsFileOperationChecks
                 else Check(!File.Exists(destination), "Canceled copied publication retained its destination.");
             }
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Recovery split catalog identity.");
-            Check(!Directory.EnumerateFiles(root, ".panelhaven-move-*").Any(), "Completed recovery left journal aliases.");
+            Check(!Directory.EnumerateFiles(root, ".panelhaven-move-*", SearchOption.AllDirectories).Any(), "Completed recovery left journal aliases.");
         }
         finally
         {

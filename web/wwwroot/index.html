@@ -432,7 +432,7 @@
         <label for="file-operation-root">Destination area / root</label><select id="file-operation-root" required></select>
         <label for="file-operation-folder">Destination folder relative to this root</label><input id="file-operation-folder" autocomplete="off" aria-describedby="file-operation-folder-help">
         <button id="create-file-operation-folder" type="button" disabled>Create folder</button>
-        <p id="file-operation-folder-help" class="muted">Use an existing folder, or enter a new path and choose Create folder. This creates the folder and any missing parent folders immediately, without moving the comicbook. Leave blank for the selected root. Use / between folders; no absolute paths, parent traversal, or symbolic links.</p>
+        <p id="file-operation-folder-help" class="muted">Destinations start with the publisher (Unknown Publisher if missing), without repeating an existing publisher prefix. Leave blank to use that folder. Create folder creates missing folders immediately without moving the comicbook. Use / between folders; no absolute paths, parent traversal, or symbolic links.</p>
         <label for="file-operation-name">Filename, including unchanged extension</label><input id="file-operation-name" required autocomplete="off" aria-describedby="file-operation-extension">
         <p id="file-operation-extension" class="muted"></p>
       </fieldset>
@@ -464,7 +464,7 @@
         <label>Destination area / root<select id="organization-root" required></select></label>
         <label>Existing folder template, relative to this root<input id="organization-folder" autocomplete="off" aria-describedby="organization-template-help"></label>
         <label>Filename template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
-        <p id="organization-template-help" class="muted">Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} is the original filename without its extension. The server appends the unchanged source extension. For a simple bulk move, keep {FileName} and choose a folder; blank folder means the root. Use / between folders. Missing metadata, unknown or malformed tokens, unsafe values, and invalid paths are conflicts, never silently sanitized.</p>
+        <p id="organization-template-help" class="muted">Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Destinations start with the publisher folder (Unknown Publisher if missing), without repeating an existing prefix. Blank uses that folder. Destination folders must exist. Explicit tokens reject missing metadata and unsafe values. Use / between folders.</p>
       </fieldset>
       <button id="generate-organization" type="submit" disabled>Generate template preview</button>
     </form>

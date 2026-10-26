@@ -117,6 +117,7 @@ public static class LibraryLocationChecks
                 var originalBytes = File.ReadAllBytes(Path.Combine(regular, "Regular.cbz"));
                 store.SaveProgress("alice", regularBook.Id, new(0, true));
                 store.SaveRating("alice", regularBook.Id, new(4));
+                Directory.CreateDirectory(Path.Combine(archived, "Regular publisher"));
                 var preview = store.PreviewFileMove(regularBook.Id, new(archiveIndex, "", "Moved.cbz"));
                 Check(preview.CanApply, "Moving into Archived was blocked.");
                 var moved = store.ApplyFileMove(regularBook.Id, new(archiveIndex, "", "Moved.cbz", preview.Revision, true));
@@ -125,12 +126,14 @@ public static class LibraryLocationChecks
                 var book = store.GetBook("alice", regularBook.Id);
                 Check(book.Completed && book.PersonalRating == 4 && !store.GetBook("bob", regularBook.Id).Started
                     && store.GetList("alice", list.Id).BookIds!.Contains(regularBook.Id)
-                    && File.ReadAllBytes(Path.Combine(archived, "Moved.cbz")).SequenceEqual(originalBytes),
+                    && File.ReadAllBytes(Path.Combine(archived, "Regular publisher", "Moved.cbz")).SequenceEqual(originalBytes),
                     "Archiving changed comicbook identity, contents, or private data.");
                 var undo = store.PreviewFileUndo(regularBook.Id, moved.OperationId);
                 store.UndoFileOperation(regularBook.Id, moved.OperationId, new(undo.Revision, true));
-                Check(store.ListBooks("alice", null).Total == 2 && store.ListBooks("alice", null, location: "archived").Total == 1,
-                    "Undo did not restore the original area.");
+                Check(store.ListBooks("alice", null).Total == 2 && store.ListBooks("alice", null, location: "archived").Total == 1
+                    && File.ReadAllBytes(Path.Combine(regular, "Regular.cbz")).SequenceEqual(originalBytes),
+                    "Undo did not restore the original area and unprefixed path.");
+                Directory.CreateDirectory(Path.Combine(regular, "Intake publisher"));
                 preview = store.PreviewFileMove(intake.Id, new(0, "", "Organized.cbz"));
                 store.ApplyFileMove(intake.Id, new(0, "", "Organized.cbz", preview.Revision, true));
                 Check(store.ListBooks("alice", null, location: "unsorted").Total == 0

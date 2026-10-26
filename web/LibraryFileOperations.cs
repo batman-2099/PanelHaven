@@ -2,13 +2,17 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 
 namespace PanelHaven.Web;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record FileOperationFolderRequest([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int RootIndex,
-    [property: JsonRequired] string Folder);
+    [property: JsonRequired] string Folder)
+{
+    public string? BookId { get; init; }
+}
 public sealed record FileOperationFolderResult(string Folder);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record FileMoveRequest([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int RootIndex,
@@ -94,6 +98,13 @@ public sealed partial class LibraryStore
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateFileOperationFolder(request.RootIndex, request.Folder);
+        if (request.BookId is not null)
+        {
+            using var db = Open();
+            var metadata = ParseXml(ReadArchiveCatalog(db, null, request.BookId).Xml, "ComicInfo").Root!;
+            request = request with { Folder = PublisherFolder(metadata, request.Folder) };
+            ValidateFileOperationFolder(request.RootIndex, request.Folder);
+        }
         if (!OperatingSystem.IsLinux()) throw new ArgumentException("Safe file organization currently requires Linux file-security support.");
         var root = roots[request.RootIndex];
         var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(root, request.Folder)));
@@ -208,6 +219,13 @@ public sealed partial class LibraryStore
         return Path.GetFullPath(Path.Combine(roots[request.RootIndex], request.Folder, request.FileName));
     }
 
+    private static string PublisherFolder(XElement metadata, string folder)
+    {
+        var publisher = IntakeComponent(metadata.Element(metadata.Name.Namespace + "Publisher")?.Value ?? "", "Unknown Publisher");
+        return folder.Equals(publisher, PathComparison) || folder.StartsWith(publisher + "/", PathComparison)
+            ? folder : folder.Length == 0 ? publisher : publisher + "/" + folder;
+    }
+
     private string FileOperationRootFor(string path)
     {
         if (!OperatingSystem.IsLinux()) throw new ArgumentException("Safe file organization currently requires Linux file-security support.");
@@ -259,6 +277,14 @@ public sealed partial class LibraryStore
         var catalog = ReadArchiveCatalog(db, null, id);
         RefusePendingFileOperation(db, id);
         var sourceRoot = FileOperationRootFor(catalog.Path);
+        if (undo is null)
+        {
+            var rootIndex = Array.FindIndex(roots, root => IsContained(root, destination));
+            if (rootIndex < 0) throw new UnauthorizedAccessException("Path is outside the configured libraries.");
+            var folder = Path.GetRelativePath(roots[rootIndex], Path.GetDirectoryName(destination)!);
+            var catalogMetadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
+            destination = FileDestination(new(rootIndex, PublisherFolder(catalogMetadata, folder == "." ? "" : folder), Path.GetFileName(destination)));
+        }
         var destinationRoot = FileOperationRootFor(destination);
         if (!IsArchive(catalog.Path) || !Path.GetExtension(destination).Equals(Path.GetExtension(catalog.Path), StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Keep the same supported comicbook extension.");

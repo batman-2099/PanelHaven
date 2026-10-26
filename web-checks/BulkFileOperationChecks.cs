@@ -23,6 +23,7 @@ public static class BulkFileOperationChecks
         var root = Path.Combine(directory, "books");
         var target = Path.Combine(directory, "target");
         Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.Combine(root, "Publisher"));
         Directory.CreateDirectory(Path.Combine(target, "Publisher", "Series"));
         var database = Path.Combine(directory, "state", "library.sqlite");
         try
@@ -61,7 +62,7 @@ public static class BulkFileOperationChecks
             }
             var drafts = ids.Select((id, index) => new BulkFileMoveItem(id, 1, "", $"moved{index + 1}.cbz")).ToArray();
             var templates = store.PreviewFileTemplates(new(ids, 1, "{Publisher}/{Series}", "{Series} ({Year}) v{Volume} #{Number} - {Title} - {FileName}"));
-            Check(templates.CanApply && templates.Items.Count == 3 && templates.Items[0].Folder == "Publisher/Series"
+            Check(templates.CanApply && templates.Items.Count == 3 && templates.Items.All(row => row.Folder == "Publisher/Series")
                 && templates.Items[0].FileName == "Series (2025) v2 #1 - Title 1 - book1.cbz"
                 && templates.Items[0].Destination == "Library 2/Publisher/Series/Series (2025) v2 #1 - Title 1 - book1.cbz"
                 && templates.Revision == Preview(Items(templates)).Revision,
@@ -75,6 +76,16 @@ public static class BulkFileOperationChecks
             }
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = null }));
             Check(!store.PreviewFileTemplates(new(ids, 1, "{Publisher}", "{FileName}")).Items[1].CanApply, "Missing metadata was silently replaced.");
+            var fallback = store.PreviewFileTemplates(new([ids[1]], 1, "", "{FileName}"));
+            Check(!fallback.CanApply && fallback.Items.Single().Folder == "Unknown Publisher"
+                && !Directory.Exists(Path.Combine(target, "Unknown Publisher")), "Missing publisher preview created its destination folder.");
+            Directory.CreateDirectory(Path.Combine(target, "Unknown Publisher"));
+            fallback = store.PreviewFileTemplates(new([ids[1]], 1, "", "{FileName}"));
+            Check(fallback.CanApply && fallback.Items.Single().Folder == "Unknown Publisher"
+                && fallback.Items.Single().Destination == "Library 2/Unknown Publisher/book2.cbz"
+                && fallback.Revision == Preview(Items(fallback)).Revision, "Implicit missing publisher did not use the normalized fallback.");
+            Check(!store.PreviewFileTemplates(new([ids[1]], 1, "{Publisher}", "{FileName}")).CanApply,
+                "Explicit missing publisher token bypassed template validation.");
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = "../escape" }));
             Check(!store.PreviewFileTemplates(new(ids, 1, "{Publisher}", "{FileName}")).Items[1].CanApply, "Token injected a directory separator.");
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = "Publisher", ["Year"] = "-1" }));
@@ -97,14 +108,10 @@ public static class BulkFileOperationChecks
                 var row = Preview([invalid]).Items.Single();
                 Check(!row.CanApply && row.Conflicts.All(message => !message.Contains(directory)), "Invalid destination leaked an absolute path or was accepted.");
             }
-            var collision = Preview([drafts[0], drafts[1] with { FileName = drafts[0].FileName }]);
-            Check(!collision.CanApply && collision.Items.All(row => !row.CanApply), "Within-batch collision was not marked on every row.");
+            var collision = Preview([drafts[0], drafts[1] with { Folder = "Publisher", FileName = drafts[0].FileName }]);
+            Check(!collision.CanApply && collision.Items.All(row => !row.CanApply && row.Folder == "Publisher")
+                && collision.Items[0].Destination == collision.Items[1].Destination, "Normalized within-batch collision was not marked on every row.");
             Reject<FileOperationConflictException>(() => Apply(collision));
-            var swap = Preview([new(ids[0], 0, "", "book2.cbz"), new(ids[1], 0, "", "book1.cbz")]);
-            Check(!swap.CanApply && swap.Items.All(row => !row.CanApply), "Selected-book path swap was accepted.");
-            var noOps = Preview(ids.Select((id, index) => new BulkFileMoveItem(id, 0, "", $"book{index + 1}.cbz")).ToArray());
-            Check(!noOps.CanApply && noOps.Items.All(row => row.CanApply && row.NoOp && row.Conflicts.Count == 0), "No-op batch should be valid but not applicable.");
-            Reject<FileOperationConflictException>(() => Apply(noOps));
             var preview = Preview(drafts);
             Reject<ArgumentException>(() => store.ApplyFileMoves(new(drafts, preview.Revision, false)));
             store.EditMetadata(ids[2], new(new() { ["Title"] = "Catalog title" }));
@@ -134,7 +141,12 @@ public static class BulkFileOperationChecks
             var list = store.CreateList("owner", new("Bulk retained", "manual", "all", []));
             store.AddListBooks("owner", list.Id, ids);
             var rawXml = (string)Sql($"SELECT info_xml FROM books WHERE id='{ids[0]}'")!;
+            var prepare = store.PreviewFileMove(ids[1], new(0, "", "book2.cbz"));
+            Check(prepare.CanApply && prepare.Destination == "Library 1/Publisher/book2.cbz", "An unprefixed source was treated as a no-op.");
+            var prepared = store.ApplyFileMove(ids[1], new(0, "", "book2.cbz", prepare.Revision, true));
             var mixed = Preview([drafts[0], new(ids[1], 0, "", "book2.cbz"), drafts[2]]);
+            Check(mixed.Items.All(row => row.Folder == "Publisher") && mixed.Revision == Preview(Items(mixed)).Revision,
+                "Normalized bulk folders did not round-trip.");
             var moved = Apply(mixed);
             Check(moved.Completed.Count == 2 && moved.Skipped.SequenceEqual([ids[1]]) && moved.FailedBookId is null && moved.Error is null && moved.NotAttempted.Count == 0,
                 "Mixed no-op batch reported an incorrect result.");
@@ -143,10 +155,16 @@ public static class BulkFileOperationChecks
                 && store.GetList("owner", list.Id).BookIds!.Length == 3 && store.GetPage(ids[0], 0).Bytes.SequenceEqual(png)
                 && (string)Sql($"SELECT info_xml FROM books WHERE id='{ids[0]}'")! == rawXml,
                 "Bulk move changed identity, private state, XML, membership, or reader data.");
-            Check(File.ReadAllBytes(Path.Combine(target, "moved1.cbz")).SequenceEqual(original[0])
-                && File.ReadAllBytes(Path.Combine(target, "moved3.cbz")).SequenceEqual(original[2]) && store.GetFileOperations(ids[1]).Count == 0,
+            Check(File.ReadAllBytes(Path.Combine(target, "Publisher", "moved1.cbz")).SequenceEqual(original[0])
+                && File.ReadAllBytes(Path.Combine(target, "Publisher", "moved3.cbz")).SequenceEqual(original[2]) && store.GetFileOperations(ids[1]).Count == 1,
                 "Bulk move rewrote bytes or journaled a no-op.");
+            var swap = Preview([new(ids[0], 1, "", "moved3.cbz"), new(ids[2], 1, "", "moved1.cbz")]);
+            Check(!swap.CanApply && swap.Items.All(row => !row.CanApply), "Selected-book path swap was accepted.");
+            var noOps = Preview(Items(mixed));
+            Check(!noOps.CanApply && noOps.Items.All(row => row.CanApply && row.NoOp && row.Conflicts.Count == 0), "No-op batch should be valid but not applicable.");
+            Reject<FileOperationConflictException>(() => Apply(noOps));
             foreach (var operation in moved.Completed) Undo(operation);
+            Undo(prepared);
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Bulk undo split catalog identities.");
 
             // Fail row two after row one commits, and retain its pending journal by refusing finalization.
@@ -156,9 +174,9 @@ public static class BulkFileOperationChecks
             Check(partial.Completed.Count == 1 && partial.Completed[0].BookId == ids[0] && partial.FailedBookId == ids[1]
                 && partial.Error is not null && !partial.Error.Contains(directory) && partial.NotAttempted.SequenceEqual([ids[2]]),
                 "Partial failure discarded completion or attempted later rows.");
-            Check(File.ReadAllBytes(Path.Combine(target, "moved1.cbz")).SequenceEqual(original[0])
+            Check(File.ReadAllBytes(Path.Combine(target, "Publisher", "moved1.cbz")).SequenceEqual(original[0])
                 && File.ReadAllBytes(Path.Combine(root, "book2.cbz")).SequenceEqual(original[1])
-                && File.ReadAllBytes(Path.Combine(root, "book3.cbz")).SequenceEqual(original[2]) && !File.Exists(Path.Combine(target, "moved3.cbz")),
+                && File.ReadAllBytes(Path.Combine(root, "book3.cbz")).SequenceEqual(original[2]) && !File.Exists(Path.Combine(target, "Publisher", "moved3.cbz")),
                 "Partial failure lost data or moved an unattempted row.");
             var pending = store.GetFileOperations(ids[1]).Single(row => row.State == "pending");
             Sql("DROP TRIGGER fail_bulk_move; DROP TRIGGER fail_bulk_finish;");
@@ -181,6 +199,19 @@ public static class BulkFileOperationChecks
             Check(recovery.CanApply && recovery.Message!.StartsWith("Finish"), "Committed bulk move did not retain finish recovery.");
             store.RecoverFileOperation(ids[0], committedOperation.OperationId, new(recovery.Revision, true));
             Undo(committedOperation);
+            store.EditMetadata(ids[1], new(new() { ["Publisher"] = "Other Publisher" }));
+            Directory.CreateDirectory(Path.Combine(target, "Other Publisher"));
+            var publishers = Preview([drafts[0] with { FileName = "shared.cbz" }, drafts[1] with { FileName = "shared.cbz" }]);
+            Check(publishers.CanApply && publishers.Items[0].Folder == "Publisher" && publishers.Items[1].Folder == "Other Publisher"
+                && publishers.Items[0].Destination == "Library 2/Publisher/shared.cbz"
+                && publishers.Items[1].Destination == "Library 2/Other Publisher/shared.cbz",
+                "Different publishers collided on the same requested filename.");
+            var separated = Apply(publishers);
+            Check(separated.Completed.Count == 2 && separated.FailedBookId is null
+                && File.ReadAllBytes(Path.Combine(target, "Publisher", "shared.cbz")).SequenceEqual(original[0])
+                && File.ReadAllBytes(Path.Combine(target, "Other Publisher", "shared.cbz")).SequenceEqual(original[1]),
+                "Applying normalized publisher folders doubled the prefix or changed the destination.");
+            foreach (var operation in separated.Completed) Undo(operation);
             for (var index = 0; index < ids.Length; index++)
                 Check(File.ReadAllBytes(Path.Combine(root, $"book{index + 1}.cbz")).SequenceEqual(original[index]), "Bulk failure/recovery/undo changed bytes.");
             Check(!Directory.EnumerateFiles(root, ".panelhaven-move-*", SearchOption.AllDirectories).Any()

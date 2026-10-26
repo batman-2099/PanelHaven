@@ -203,7 +203,7 @@ public sealed partial class LibraryStore
     {
         var value = new string(text.Select(character => char.IsControl(character) || "<>:\"/\\|?*".Contains(character) ? '_' : character).ToArray()).Trim().TrimEnd('.');
         if (value is "" or "." or "..") value = fallback;
-        if (Encoding.UTF8.GetByteCount(value) > 220) throw new ArgumentException("Provider metadata produces an overlong filename or folder; edit the metadata or choose a different match.");
+        if (Encoding.UTF8.GetByteCount(value) > 220) throw new ArgumentException("Metadata produces an overlong filename or folder; edit the metadata or choose a different match.");
         return value;
     }
 

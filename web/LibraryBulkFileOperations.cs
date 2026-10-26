@@ -77,9 +77,9 @@ public sealed partial class LibraryStore
             {
                 var catalog = ReadArchiveCatalog(db, null, item.BookId);
                 source = FileDisplayPath(catalog.Path);
+                var metadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
                 if (template is not null)
                 {
-                    var metadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
                     string Expand(string text) => ExpandFileTemplate(text, token => token == "FileName"
                         ? Path.GetFileNameWithoutExtension(catalog.Path)
                         : metadata.Elements().FirstOrDefault(element => element.Name.LocalName == token)?.Value);
@@ -89,6 +89,8 @@ public sealed partial class LibraryStore
                         throw new FormatException("Filename template must produce a nonempty safe filename stem.");
                     item = item with { Folder = folder, FileName = stem + Path.GetExtension(catalog.Path) };
                 }
+                ValidateFileOperationFolder(item.RootIndex, item.Folder);
+                item = item with { Folder = PublisherFolder(metadata, item.Folder) };
                 destinations[index] = FileDestination(new(item.RootIndex, item.Folder, item.FileName));
                 destination = FileDisplayPath(destinations[index]!);
                 var plan = PlanFileMove(db, item.BookId, destinations[index]!, null, cancellationToken, allowNoOp: true);

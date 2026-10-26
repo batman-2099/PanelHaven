@@ -21,6 +21,8 @@ public static class RootRelocationJournalChecks
         var outside = Path.Combine(directory, "outside");
         Directory.CreateDirectory(from);
         Directory.CreateDirectory(outside);
+        Directory.CreateDirectory(Path.Combine(from, "Unknown Publisher"));
+        Directory.CreateDirectory(Path.Combine(outside, "Unknown Publisher"));
         var database = Path.Combine(state, "panelhaven.sqlite");
         try
         {
@@ -99,7 +101,7 @@ public static class RootRelocationJournalChecks
                     source TEXT NOT NULL,destination TEXT NOT NULL,PRIMARY KEY(book_id,source,destination));
                 INSERT INTO archive_backup_owners VALUES($id,$id);
                 INSERT INTO book_path_provenance VALUES($id,$source,$destination);
-                """, ("$id", ids["inside"]), ("$source", Path.Combine(from, "inside.cbz")), ("$destination", Path.Combine(from, "renamed.cbz")));
+                """, ("$id", ids["inside"]), ("$source", Path.Combine(from, "inside.cbz")), ("$destination", Path.Combine(from, "Unknown Publisher", "renamed.cbz")));
             var beforeMigration = Snapshot();
             store = new LibraryStore(database, [from, outside]);
             Check((long)Sql("SELECT count(*) FROM sqlite_master WHERE name IN ('archive_backup_owners','book_path_provenance')")! == 0
@@ -148,6 +150,7 @@ public static class RootRelocationJournalChecks
             store.ScanAsync(default).GetAwaiter().GetResult();
             var oldId = Id(Path.Combine(mergeFrom, "merge.cbz"));
             Directory.Move(mergeFrom, mergeTo);
+            Directory.CreateDirectory(Path.Combine(mergeTo, "Unknown Publisher"));
             store.ScanAsync(default).GetAwaiter().GetResult();
             var duplicate = Id(Path.Combine(mergeTo, "merge.cbz"));
             store.EditMetadata(duplicate, new(new() { ["Title"] = "Destination catalog edit" }));

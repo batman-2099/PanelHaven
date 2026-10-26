@@ -86,9 +86,11 @@ public static class RecentlyAddedChecks
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(Equals(age, Sql("SELECT added_at FROM books WHERE id=$id", ("$id", ids["Old"]))), "Metadata edit or changed-file rescan reset the first addition time.");
             Check(Sql("SELECT added_at FROM books WHERE id='legacy'") is DBNull, "Repeated scans replaced an unknown addition date.");
+            Directory.CreateDirectory(Path.Combine(root, "Edited"));
             var move = store.PreviewFileMove(ids["Old"], new(0, "", "Moved.cbz"));
             store.ApplyFileMove(ids["Old"], new(0, "", "Moved.cbz", move.Revision, true));
-            Check(Equals(age, Sql("SELECT added_at FROM books WHERE id=$id", ("$id", ids["Old"]))), "Moving a book reset its addition date.");
+            Check(Equals(age, Sql("SELECT added_at FROM books WHERE id=$id", ("$id", ids["Old"])))
+                && File.Exists(Path.Combine(root, "Edited", "Moved.cbz")), "Moving a book reset its addition date or omitted its publisher folder.");
 
             store.UpdateList("alice", recent.Id, new("My recent books", "smart", "all", [new("DaysSinceAdded", "lessThan", "7")]));
             store.DeleteList("bob", bob.Id);

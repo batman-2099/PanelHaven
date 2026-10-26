@@ -847,7 +847,7 @@ async function loadLibrary(focusResults = false) {
       for (let index = section.start; index < section.start + section.count; index++) sectionKeys[index] = section.key;
     const cards = result.items.map((book, index) => {
       const card = textElement("article", "", grouping ? "book-card group-card" : "book-card");
-      const title = grouping ? book.label : bookTitle(book);
+      const title = grouping ? book.label : [book.series, book.number && `#${book.number}`].filter(Boolean).join(" · ") || "Unknown series";
       const coverId = grouping ? book.coverId : book.availability === "available" ? book.id : null;
       const cover = textElement("button", "", "cover-button");
       cover.type = "button";
@@ -896,7 +896,7 @@ async function loadLibrary(focusResults = false) {
       checkbox.type = "checkbox";
       checkbox.dataset.bookId = book.id;
       checkbox.checked = selectedBooks.has(book.id);
-      checkbox.setAttribute("aria-label", `Select ${bookTitle(book)}`);
+      checkbox.setAttribute("aria-label", `Select ${title}`);
       checkbox.addEventListener("change", () => {
         if (deletionBusy) { checkbox.checked = selectedBooks.has(book.id); return; }
         if (checkbox.checked && selectedBooks.size >= 100) {
@@ -910,7 +910,6 @@ async function loadLibrary(focusResults = false) {
       const coverFrame = textElement("div", "", "book-cover");
       cover.before(coverFrame);
       coverFrame.append(cover, selection);
-      card.append(textElement("p", [book.series, book.number && `#${book.number}`].filter(Boolean).join(" · "), "muted"));
       card.append(textElement("p", book.completed ? "Completed" : book.started ? `Page ${Math.min(book.currentPage + 1, book.pageCount)} of ${book.pageCount}` : "Unread", "book-status"));
       const details = textElement("button", "Details", "quiet book-details");
       details.type = "button";
@@ -926,7 +925,7 @@ async function loadLibrary(focusResults = false) {
           button.type = "button";
           button.disabled = managementBusy;
           button.dataset.move = direction;
-          button.setAttribute("aria-label", `${label}: ${bookTitle(book)}`);
+          button.setAttribute("aria-label", `${label}: ${title}`);
           button.addEventListener("click", () => moveListBook(book.id, direction));
           moves.append(button);
         }
@@ -3261,7 +3260,7 @@ $("archive-form").addEventListener("submit", async (event) => {
 function updateFileOperationControls() {
   const available = session?.role === "admin" && fileOperationBookId !== null;
   $("file-operation-controls").disabled = $("preview-file-operation").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length;
-  $("create-file-operation-folder").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length || !$("file-operation-folder").value.trim();
+  $("create-file-operation-folder").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length;
   $("refresh-file-operation-history").disabled = !available || fileOperationBusy;
   $("apply-file-operation").disabled = !available || fileOperationBusy || !fileOperationPreview?.canApply;
   for (const button of $("file-operation-history").querySelectorAll("button")) button.disabled = !available || fileOperationBusy;
@@ -3701,7 +3700,7 @@ $("create-file-operation-folder").addEventListener("click", async () => {
   invalidateFileOperationPreview();
   $("file-operation-status").textContent = "Creating destination folder… No comicbook is being moved.";
   try {
-    const result = await api("/api/file-operation-folders", { method: "POST", body: JSON.stringify({ rootIndex, folder }) });
+    const result = await api("/api/file-operation-folders", { method: "POST", body: JSON.stringify({ rootIndex, folder, bookId: fileOperationBookId }) });
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
     $("file-operation-folder").value = result.folder;
     $("file-operation-status").textContent = "Folder is ready. Preview the move, then confirm it to move the comic.";

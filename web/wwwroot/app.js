@@ -966,7 +966,7 @@ async function loadLibrary(focusResults = false) {
         const cover = textElement("div", "", "missing-issue-cover");
         cover.append(textElement("strong", label), textElement("span", range ? "Missing issues" : "Missing issue"));
         card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel} ${label}`),
-          textElement("p", "Not in this location", "muted"));
+          textElement("p", "Not in this location", "muted"), missingIssueLink(result.items[anchor].series, number));
         placeholders.push(card);
         if (range) break;
       }
@@ -1209,7 +1209,9 @@ async function loadMaintenance() {
             }
           } finally { view.disabled = false; }
         });
-        row.append(view);
+        const actions = textElement("div", "", "actions");
+        actions.append(view, missingIssueLink(book.series, book.first));
+        row.append(actions);
         rows.push(row);
         continue;
       }
@@ -2472,6 +2474,15 @@ function comicVineLink(url, label = "Comic Vine") {
     link.target = "_blank";
     link.rel = "noopener noreferrer";
   } catch { return textElement("span", label); }
+  return link;
+}
+
+function missingIssueLink(series, number) {
+  const link = textElement("a", "Find", "button-link");
+  link.href = `https://getcomics.org/?${new URLSearchParams({ s: `${series} ${number}` })}`;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.setAttribute("aria-label", `Find ${series} #${number} on GetComics (opens in a new tab)`);
   return link;
 }
 

@@ -56,6 +56,12 @@
     const row = [...$('maintenance-items').children].find(row => row.querySelector('h3')?.textContent === entry.series
       && row.querySelector('p.muted')?.textContent.toLowerCase() === entry.location);
     assert(row, "Expected report row is absent.");
+    const find = row.querySelector('a');
+    const search = new URL(find.href);
+    assert(search.origin === 'https://getcomics.org' && search.pathname === '/' &&
+      search.searchParams.get('s') === `${entry.series} ${entry.first}` &&
+      find.target === '_blank' && find.relList.contains('noopener') && find.relList.contains('noreferrer'),
+      "Report Find must search the exact series and first missing issue without exposing its opener.");
     $('search').value = 'must not constrain report navigation';
     $('book-status').value = 'completed';
     $('book-sort').value = 'title';
@@ -77,6 +83,12 @@
       "Report navigation retained the advanced rule in its request or saved catalog state.");
     assert($('books').querySelector('.book-selection') && document.activeElement === $('library-status'),
       "Series results or navigation focus are missing.");
+    for (const card of $('books').querySelectorAll('.missing-issue')) {
+      const issue = card.querySelector('.missing-issue-cover strong').textContent.match(/\d+/)[0];
+      const link = card.querySelector('a');
+      assert(new URL(link.href).searchParams.get('s') === `${entry.series} ${issue}`,
+        "A missing-issue card must search its own issue, not the neighboring existing issue.");
+    }
   }
   } finally { window.fetch = originalFetch; }
   console.log('PASS: report buttons open exact series/locations, clear conflicting filters, and focus results.');

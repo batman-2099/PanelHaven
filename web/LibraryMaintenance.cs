@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Text.Json.Serialization;
 
 namespace PanelHaven.Web;
 
@@ -6,6 +7,8 @@ public sealed record MaintenanceBook(string Id, string Title, string Location, s
 public sealed record MaintenancePage(List<MaintenanceBook> Items, int Total, int Page, int PageSize);
 public sealed record MissingIssueReport(string Series, string Location, int First, int Last);
 public sealed record MissingIssueReportPage(List<MissingIssueReport> Items, int Total, int Page, int PageSize);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record MissingIssueIgnoreRequest([property: JsonRequired] string Series, [property: JsonRequired] bool Ignored);
 public sealed record DuplicateComparisonBook(Book Book, BookMetadata Metadata);
 public sealed record DuplicateComparison(DuplicateComparisonBook Anchor, List<DuplicateComparisonBook> Items,
     int Total, int Page, int PageSize, string DuplicateKey);
@@ -41,6 +44,7 @@ public sealed partial class LibraryStore
             CREATE INDEX IF NOT EXISTS books_content_hash ON books(content_hash)
                 WHERE availability='available' AND content_hash IS NOT NULL;
             CREATE INDEX IF NOT EXISTS books_folder ON books(folder,id);
+            CREATE TABLE IF NOT EXISTS ignored_missing_issue_series (series TEXT PRIMARY KEY NOT NULL);
             """))
         {
             command.Transaction = transaction;
@@ -170,14 +174,14 @@ public sealed partial class LibraryStore
         return new(books, total, page, pageSize);
     }
 
-    public MissingIssueReportPage ListMissingIssues(int page = 1, int pageSize = 48)
+    public MissingIssueReportPage ListMissingIssues(int page = 1, int pageSize = 48, bool ignored = false)
     {
         if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentException("Invalid page or page size.");
         using var db = Open();
         using var transaction = db.BeginTransaction(deferred: true);
         var gaps = new List<MissingIssueReport>();
         foreach (var location in new[] { "library", "archived", "unsorted" })
-            foreach (var (series, gap) in ReadMissingIssues(db, transaction, location))
+            foreach (var (series, gap) in ReadMissingIssues(db, transaction, location, ignored: ignored))
                 gaps.Add(new(series, location, gap.First, gap.Last));
         page = Math.Min(page, Math.Max(1, (int)((gaps.Count + (long)pageSize - 1) / pageSize)));
         var offset = (page - 1) * pageSize;
@@ -185,6 +189,17 @@ public sealed partial class LibraryStore
             gaps.Count, page, pageSize);
         transaction.Commit();
         return result;
+    }
+
+    public void SetMissingIssueIgnored(string series, bool ignored)
+    {
+        if (string.IsNullOrWhiteSpace(series) || series.Length > 16384)
+            throw new ArgumentException("A series name of 1–16384 characters is required.");
+        using var db = Open();
+        using var command = Command(db, ignored
+            ? "INSERT INTO ignored_missing_issue_series(series) VALUES($series) ON CONFLICT(series) DO NOTHING"
+            : "DELETE FROM ignored_missing_issue_series WHERE series=$series", ("$series", series));
+        command.ExecuteNonQuery();
     }
 
     public DuplicateComparison CompareDuplicates(string user, string id, int page = 1, int pageSize = 3)

@@ -106,14 +106,16 @@ public sealed partial class LibraryStore
             System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : null;
 
     private IEnumerable<(string Series, MissingIssue Gap)> ReadMissingIssues(SqliteConnection db,
-        SqliteTransaction transaction, string location, string? series = null, bool descending = false)
+        SqliteTransaction transaction, string location, string? series = null, bool descending = false, bool? ignored = null)
     {
         using var command = Command(db, "");
         command.Transaction = transaction;
         command.CommandText = "SELECT b.series,b.id,b.number FROM books b WHERE "
             + LocationFilter(command, location) + (series is null ? "" : " AND b.series=$series")
+            + (ignored is null ? "" : " AND EXISTS(SELECT 1 FROM ignored_missing_issue_series i WHERE i.series=b.series)=$ignored")
             + " ORDER BY b.series,b.id";
         if (series is not null) command.Parameters.AddWithValue("$series", series);
+        if (ignored is not null) command.Parameters.AddWithValue("$ignored", ignored.Value);
         using var reader = command.ExecuteReader();
         var numbers = new SortedDictionary<int, string>();
         string? currentSeries = null;

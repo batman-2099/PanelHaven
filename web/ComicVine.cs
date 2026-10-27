@@ -26,7 +26,6 @@ public sealed class ComicVine : IDisposable
     private readonly HttpClient client;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, (JsonElement Value, DateTimeOffset Expires)> cache = new(StringComparer.Ordinal);
-    private readonly Queue<DateTimeOffset> requests = new();
     private DateTimeOffset nextRequest;
     private DateTimeOffset blockedUntil;
     public bool Configured => apiKey.Length != 0;
@@ -118,7 +117,33 @@ public sealed class ComicVine : IDisposable
         if (Id(issue) != issueId || Id(Property(issue, "volume")) != volumeId)
             throw new ComicVineException(409, "The selected issue does not belong to this volume. Select the volume and issue again.");
         var url = Url(issue);
-        var volume = Property(await GetAsync($"volume/4050-{volumeId}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
+        JsonElement volume = default;
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            // Reuse provider search fields; never trust client-supplied volume metadata.
+            foreach (var entry in cache)
+            {
+                if (entry.Value.Expires <= now || !entry.Key.StartsWith("search/?resources=volume&", StringComparison.Ordinal)) continue;
+                var results = Property(entry.Value.Value, "results");
+                if (results.ValueKind != JsonValueKind.Array || results.GetArrayLength() > 10) continue;
+                foreach (var item in results.EnumerateArray())
+                {
+                    var id = Property(item, "id");
+                    if (id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var candidateId) || candidateId != volumeId
+                        || Property(item, "name").ValueKind != JsonValueKind.String
+                        || Property(item, "publisher").ValueKind == JsonValueKind.Undefined
+                        || Property(item, "start_year").ValueKind == JsonValueKind.Undefined) continue;
+                    volume = item;
+                    break;
+                }
+                if (volume.ValueKind != JsonValueKind.Undefined) break;
+            }
+        }
+        finally { gate.Release(); }
+        if (volume.ValueKind == JsonValueKind.Undefined)
+            volume = Property(await GetAsync($"volume/4050-{volumeId}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
         if (Id(volume) != volumeId) throw InvalidResponse();
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         void Add(string field, string value) { if (!string.IsNullOrWhiteSpace(value) && value.Length <= 16384) fields[field] = value; }
@@ -184,12 +209,8 @@ public sealed class ComicVine : IDisposable
             var now = DateTimeOffset.UtcNow;
             if (cache.TryGetValue(path, out var cached) && cached.Expires > now) return cached.Value;
             if (blockedUntil > now) throw new ComicVineException(429, "Comic Vine is rate limited. Wait before trying again.");
-            while (requests.TryPeek(out var oldest) && oldest <= now.AddHours(-1)) requests.Dequeue();
-            if (requests.Count >= 180) throw new ComicVineException(429, "Comic Vine's hourly request budget is reached. Try again later.");
-            // ponytail: one global budget is deliberately stricter than provider per-resource limits.
             if (nextRequest > now) await Task.Delay(nextRequest - now, timeout.Token);
             now = DateTimeOffset.UtcNow;
-            requests.Enqueue(now);
             nextRequest = now.AddSeconds(1);
             using var response = await client.GetAsync(path + "&format=json&api_key=" + Uri.EscapeDataString(apiKey), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (response.StatusCode == HttpStatusCode.TooManyRequests)

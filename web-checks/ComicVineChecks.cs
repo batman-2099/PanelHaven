@@ -44,7 +44,7 @@ internal static class ComicVineChecks
                         story_arc_credits = new[] { new { name = "Story" } }
                     } });
                 case "/api/volume/4050-12/":
-                    return Json(new { status_code = 1, results = new { id = 12, name = "Example", start_year = "1999", publisher = new { name = "Publisher" } } });
+                    return Json(new { status_code = 1, results = new { id = 12, name = "Example &amp; Friends", start_year = "1999", publisher = new { name = "Publisher" } } });
                 default: throw new Exception("Unexpected provider resource.");
             }
         });
@@ -61,7 +61,7 @@ internal static class ComicVineChecks
                 && issues.Results[0].Number == "1/2", "Issue results lost optional fields or paging.");
             var metadata = await provider.MetadataAsync(34, 12);
             var fields = metadata.Fields;
-            Check(metadata.Url == issueUrl && fields["Web"] == issueUrl && fields["Series"] == "Example" && fields["Publisher"] == "Publisher"
+            Check(metadata.Url == issueUrl && fields["Web"] == issueUrl && fields["Series"] == "Example & Friends" && fields["Publisher"] == "Publisher"
                 && fields["Title"] == "A title" && fields["Number"] == "1/2" && fields["Year"] == "2001" && fields["Month"] == "2" && fields["Day"] == "3"
                 && fields["Writer"] == "Creator" && fields["Penciller"] == "Creator" && fields["CoverArtist"] == "Creator"
                 && fields["Colorist"] == "Color Person" && fields["Editor"] == "Color Person" && fields["Characters"] == "Hero" && fields["StoryArc"] == "Story",
@@ -70,14 +70,14 @@ internal static class ComicVineChecks
                 && fields.Values.All(value => !string.IsNullOrWhiteSpace(value)) && fields.Keys.All(name => LibraryStore.MetadataFields.Any(field => field.Name == name)),
                 "Metadata includes HTML, invalid XML, invented fields, or empty replacements.");
             await provider.MetadataAsync(34, 12);
-            Check(handler.Calls == 4, "Metadata cache did not reuse issue and volume responses.");
+            Check(handler.Calls == 3, "Metadata did not reuse searched volume details and the cached issue response.");
             var processing = await provider.MetadataAsync(34, 12, intake: true);
             Check(processing.Fields["Year"] == "2001" && processing.Fields["Month"] == "1"
-                && processing.Fields["Day"] == "17" && processing.Fields["Volume"] == "1999" && handler.Calls == 4,
+                && processing.Fields["Day"] == "17" && processing.Fields["Volume"] == "1999" && handler.Calls == 3,
                 "Intake processing lost release-date precedence, volume start year, or shared provider cache.");
             Check(handler.Times.Zip(handler.Times.Skip(1)).All(pair => pair.Second - pair.First >= TimeSpan.FromMilliseconds(900)), "Global velocity throttle was bypassed.");
             await Error(() => provider.MetadataAsync(34, 99), 409);
-            Check(handler.Calls == 4, "Volume mismatch fetched an unrelated volume.");
+            Check(handler.Calls == 3, "Volume mismatch fetched an unrelated volume.");
 
             foreach (var query in new[] { "", " ", new string('a', 201), "a\nb" }) await Error(() => provider.VolumesAsync(query, 0), 400);
             foreach (var offset in new[] { -1, 1, 10010 }) await Error(() => provider.VolumesAsync("Example", offset), 400);
@@ -86,7 +86,27 @@ internal static class ComicVineChecks
             await Error(() => provider.IssuesAsync(0, null, 0), 400);
             await Error(() => provider.IssuesAsync(12, null, 10), 400);
             await Error(() => provider.MetadataAsync(-1, 12), 400);
-            Check(handler.Calls == 4, "Invalid input reached Comic Vine.");
+            Check(handler.Calls == 3, "Invalid input reached Comic Vine.");
+        }
+
+        foreach (var searchFirst in new[] { false, true })
+        {
+            var fallback = new Handler(request => request.RequestUri!.AbsolutePath switch
+            {
+                "/api/search/" => Json(new { status_code = 1, number_of_total_results = 1,
+                    results = new[] { new { id = 12, name = "Incomplete", site_detail_url = volumeUrl } } }),
+                "/api/issue/4000-34/" => Json(new { status_code = 1,
+                    results = new { id = 34, volume = new { id = 12 }, site_detail_url = issueUrl } }),
+                "/api/volume/4050-12/" => Json(new { status_code = 1,
+                    results = new { id = 12, name = "Example", start_year = "1999", publisher = new { name = "Publisher" } } }),
+                _ => throw new Exception("Unexpected provider resource.")
+            });
+            using var provider = new ComicVine(key, fallback);
+            if (searchFirst) await provider.VolumesAsync("Example", 0);
+            var metadata = await provider.MetadataAsync(34, 12, intake: true);
+            Check(metadata.Fields["Series"] == "Example" && metadata.Fields["Publisher"] == "Publisher"
+                && metadata.Fields["Volume"] == "1999" && fallback.Calls == (searchFirst ? 3 : 2),
+                "Missing or incomplete search data must fetch full volume details.");
         }
 
         foreach (var url in new[] { "http://comicvine.gamespot.com/a/", "https://evil.example/a/", "https://comicvine.gamespot.com.evil.example/a/",
@@ -98,8 +118,14 @@ internal static class ComicVineChecks
         }
         foreach (var status in new[] { 100, 101, 104, 107 })
         {
-            using var provider = new ComicVine(key, new Handler(_ => Json(new { status_code = status, error = key })));
+            var failure = new Handler(_ => Json(new { status_code = status, error = key }));
+            using var provider = new ComicVine(key, failure);
             await Error(() => provider.VolumesAsync("Example", 0), status == 101 ? 404 : status == 107 ? 429 : 502);
+            if (status == 107)
+            {
+                await Error(() => provider.IssuesAsync(12, null, 0), 429);
+                Check(failure.Calls == 1, "Provider status 107 did not block further requests during cooldown.");
+            }
         }
         foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.NotFound, HttpStatusCode.Found, HttpStatusCode.ServiceUnavailable })
         {

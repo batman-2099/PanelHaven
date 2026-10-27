@@ -326,11 +326,11 @@
   <dialog id="maintenance-dialog" aria-labelledby="maintenance-title">
     <div class="dialog-heading"><h2 id="maintenance-title">Library maintenance</h2><button type="button" data-close="maintenance-dialog" class="quiet">Close</button></div>
     <p id="maintenance-file-note" class="muted">Scans and folder watching update availability. Missing means the file is absent from an accessible library; unavailable means its location cannot be safely accessed. Reconnect a library and scan again before removing anything. Source files are never deleted.</p>
-    <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="missing-issues">Missing issues</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><button id="refresh-maintenance" type="button">Refresh</button></div>
-    <p id="maintenance-status" role="status"></p>
+    <div class="actions list-actions"><label>Show <select id="maintenance-kind"><option value="missing">Missing files</option><option value="missing-issues">Missing issues</option><option value="unavailable">Unavailable locations</option><option value="duplicates">Exact duplicates</option></select></label><label id="maintenance-ignored-control" class="checkbox" hidden><input id="maintenance-ignored" type="checkbox">Ignored</label><button id="refresh-maintenance" type="button">Refresh</button></div>
+    <p id="maintenance-status" role="status" tabindex="-1"></p>
     <p id="maintenance-error" class="scan-error" role="alert" hidden></p>
     <p id="duplicate-note" class="muted" hidden>Exact duplicate groups share the SHA-256 recorded by the last scan, not just a title or cover. This is not a fresh file-identity check. Groups can continue across pages. Compare copies is read-only; present duplicates cannot be removed here.</p>
-    <p id="missing-issues-note" class="muted" hidden>Inferred numbering gaps, not missing files or confirmed publications. Covers Library, Archived, and Unsorted separately; consecutive missing issues share a range. This report is read-only.</p>
+    <p id="missing-issues-note" class="muted" hidden>Inferred numbering gaps, not confirmed publications. Locations are checked separately. Ignore hides a series from this report across all locations for all administrators; use Ignored to show it again. Comicbooks are unchanged.</p>
     <nav class="library-pagination" aria-label="Maintenance pages"><button id="previous-maintenance" type="button" disabled>Previous</button><span id="maintenance-page" role="status">Page 1 of 1</span><button id="next-maintenance" type="button" disabled>Next</button></nav>
     <div id="maintenance-items"></div>
   </dialog>

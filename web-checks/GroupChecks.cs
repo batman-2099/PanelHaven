@@ -292,6 +292,23 @@ public static class GroupChecks
                 "Missing issue report pagination skipped or duplicated a gap.");
             Reject<ArgumentException>(() => store.ListMissingIssues(0));
             Reject<ArgumentException>(() => store.ListMissingIssues(pageSize: 101));
+            store.SetMissingIssueIgnored("Gap checks", true);
+            store.SetMissingIssueIgnored("Gap checks", true);
+            Check(store.ListMissingIssues().Total == 0
+                && store.ListMissingIssues(int.MaxValue, 1, ignored: true).Items.Single() == report.Items[1]
+                && store.ListMissingIssues(int.MaxValue, 1, ignored: true).Page == 2,
+                "Ignoring a series failed to hide every gap or broke ignored-report pagination.");
+            var reopened = new LibraryStore(Path.Combine(directory, "groups.sqlite"), [firstRoot, secondRoot]);
+            Check(reopened.ListMissingIssues().Total == 0 && reopened.ListMissingIssues(ignored: true).Total == 2
+                && reopened.ListBooks("alice", null, groupBy: "series", groupKey: "Gap checks").MissingIssues.Count == 2,
+                "Ignored series did not persist or changed normal series browsing.");
+            store.SetMissingIssueIgnored("gap checks", false);
+            Check(store.ListMissingIssues().Total == 0, "Ignore matching must preserve exact series identity.");
+            store.SetMissingIssueIgnored("Gap checks", false);
+            Check(store.ListMissingIssues().Items.SequenceEqual(report.Items) && store.ListMissingIssues(ignored: true).Total == 0,
+                "Unignore did not restore every series gap.");
+            Reject<ArgumentException>(() => store.SetMissingIssueIgnored("", true));
+            Reject<ArgumentException>(() => store.SetMissingIssueIgnored(new string('x', 16385), true));
             foreach (var direction in new[] { "asc", "desc" })
             {
                 var gaps = Enumerable.Range(1, 6).SelectMany(page => store.ListBooks("alice", null,

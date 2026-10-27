@@ -119,12 +119,17 @@ public static class LibraryEndpoints
                 sectionBy ?? "none", sort, direction ?? "asc", sectionKey, LibraryStore.ParseCatalogFilter(filter))));
         api.MapGet("/series-shelf", (LibraryStore store, ClaimsPrincipal user, string kind, int? page, int? pageSize) =>
             Results.Ok(store.ListSeriesShelf(UserId(user), kind, page ?? 1, pageSize ?? 12)));
-        api.MapGet("/maintenance", (LibraryStore store, string kind, int? page, int? pageSize) =>
+        api.MapGet("/maintenance", (LibraryStore store, string kind, int? page, int? pageSize, bool? ignored) =>
         {
-            if (kind == "missing-issues") return Results.Ok((object)store.ListMissingIssues(page ?? 1, pageSize ?? 48));
+            if (kind == "missing-issues") return Results.Ok((object)store.ListMissingIssues(page ?? 1, pageSize ?? 48, ignored ?? false));
             return Results.Ok((object)store.ListMaintenance(kind, page ?? 1, pageSize ?? 48));
         })
             .RequireAuthorization(policy => policy.RequireRole("admin"));
+        api.MapPut("/maintenance/missing-issues/ignored-series", (LibraryStore store, MissingIssueIgnoreRequest request) =>
+        {
+            store.SetMissingIssueIgnored(request.Series, request.Ignored);
+            return Results.NoContent();
+        }).RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/duplicates/{id}", (LibraryStore store, ClaimsPrincipal user, string id, int? page, int? pageSize) =>
             Results.Ok(store.CompareDuplicates(UserId(user), id, page ?? 1, pageSize ?? 3)))
             .RequireAuthorization(policy => policy.RequireRole("admin"));

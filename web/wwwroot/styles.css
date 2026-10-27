@@ -129,6 +129,7 @@ main { max-width: 1600px; margin: auto; padding: 2.5rem clamp(1rem, 4vw, 3.5rem)
 #library-status { font-size: .875rem; margin-bottom: .5rem; scroll-margin-block: 1rem; }
 #library-status:focus, #file-operation-title:focus { outline: 3px solid var(--accent); outline-offset: 4px; }
 #management-status:empty, #library-status:empty, #current-page-type:empty, #page-status:empty { display: none; }
+#maintenance-ignored-control { min-height: 44px; }
 .maintenance-row { padding: 1rem 0; border-top: 1px solid var(--divider); }
 .maintenance-row h3 { font-size: 1rem; margin-bottom: .4rem; }
 .maintenance-row p { margin-bottom: .4rem; }

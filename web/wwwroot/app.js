@@ -512,6 +512,7 @@ function showLogin() {
   maintenanceBusy = false;
   maintenancePage = 1;
   $("maintenance-kind").value = "missing";
+  $("maintenance-ignored").checked = false;
   failedCovers.clear();
   $("page-size").value = "48";
   $("publisher").replaceChildren(new Option("All publishers", ""));
@@ -1150,14 +1151,16 @@ async function loadMaintenance() {
   if (session?.role !== "admin" || !$("maintenance-dialog").open) return;
   const generation = ++maintenanceGeneration;
   const kind = $("maintenance-kind").value;
+  const ignored = kind === "missing-issues" && $("maintenance-ignored").checked;
   $("maintenance-status").textContent = "Loading maintenance records…";
   $("previous-maintenance").disabled = true;
   $("next-maintenance").disabled = true;
   $("duplicate-note").hidden = kind !== "duplicates";
   $("missing-issues-note").hidden = kind !== "missing-issues";
+  $("maintenance-ignored-control").hidden = kind !== "missing-issues";
   $("maintenance-file-note").hidden = kind === "missing-issues";
   try {
-    const result = await api(`/api/maintenance?${new URLSearchParams({ kind, page: maintenancePage, pageSize: 48 })}`);
+    const result = await api(`/api/maintenance?${new URLSearchParams({ kind, page: maintenancePage, pageSize: 48, ignored })}`);
     if (generation !== maintenanceGeneration) return;
     maintenancePages = Math.max(1, Math.ceil(result.total / result.pageSize));
     maintenancePage = result.page;
@@ -1210,7 +1213,12 @@ async function loadMaintenance() {
           } finally { view.disabled = false; }
         });
         const actions = textElement("div", "", "actions");
-        actions.append(view, missingIssueLink(book.series, book.first));
+        const ignore = textElement("button", ignored ? "Unignore" : "Ignore", "quiet missing-series-ignore");
+        ignore.type = "button";
+        ignore.disabled = maintenanceBusy;
+        ignore.setAttribute("aria-label", `${ignore.textContent} series: ${book.series}`);
+        ignore.addEventListener("click", () => setMissingIssueIgnored(book.series, !ignored, generation));
+        actions.append(view, missingIssueLink(book.series, book.first), ignore);
         row.append(actions);
         rows.push(row);
         continue;
@@ -1248,8 +1256,8 @@ async function loadMaintenance() {
     }
     $("maintenance-items").replaceChildren(...rows);
     $("maintenance-status").textContent = result.total
-      ? `${result.total} ${kind === "missing-issues" ? "issue gaps" : "records"} · Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
-      : kind === "missing-issues" ? "No missing issue gaps found between known whole-number issues."
+      ? `${result.total} ${kind === "missing-issues" ? ignored ? "ignored issue gaps" : "issue gaps" : "records"} · Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
+      : kind === "missing-issues" ? ignored ? "No ignored series currently have missing issue gaps." : "No missing issue gaps found. Use Ignored to view hidden series."
       : "No matching records. Scan the libraries to update availability and duplicate detection.";
     $("maintenance-page").textContent = `Page ${maintenancePage} of ${maintenancePages}`;
     $("previous-maintenance").disabled = maintenancePage <= 1;
@@ -1259,6 +1267,35 @@ async function loadMaintenance() {
     $("maintenance-status").textContent = "Could not load maintenance records. Refresh to retry.";
     $("maintenance-error").textContent = error.message;
     $("maintenance-error").hidden = false;
+  }
+}
+
+async function setMissingIssueIgnored(series, ignored, generation) {
+  if (maintenanceBusy || generation !== maintenanceGeneration) return;
+  const epoch = authEpoch;
+  maintenanceBusy = true;
+  for (const button of $("maintenance-items").querySelectorAll(".missing-series-ignore")) button.disabled = true;
+  $("maintenance-error").hidden = true;
+  $("maintenance-status").textContent = ignored ? "Ignoring series…" : "Restoring series…";
+  try {
+    await api("/api/maintenance/missing-issues/ignored-series", {
+      method: "PUT", body: JSON.stringify({ series, ignored })
+    });
+  } catch (error) {
+    if (epoch === authEpoch && generation === maintenanceGeneration) {
+      $("maintenance-error").textContent = `Could not confirm the change: ${error.message}. Refresh to check the series status before trying again.`;
+      $("maintenance-error").hidden = false;
+    }
+  } finally {
+    if (epoch === authEpoch) {
+      maintenanceBusy = false;
+      for (const button of $("maintenance-items").querySelectorAll(".missing-series-ignore")) button.disabled = false;
+      if (generation === maintenanceGeneration && $("maintenance-dialog").open) {
+        await loadMaintenance();
+        if (epoch === authEpoch && generation + 1 === maintenanceGeneration && $("maintenance-dialog").open)
+          $("maintenance-status").focus();
+      }
+    }
   }
 }
 
@@ -5582,7 +5619,7 @@ $("maintenance").addEventListener("click", () => {
   loadMaintenance();
 });
 $("maintenance-dialog").addEventListener("close", () => { maintenanceGeneration++; });
-$("maintenance-kind").addEventListener("change", () => {
+for (const id of ["maintenance-kind", "maintenance-ignored"]) $(id).addEventListener("change", () => {
   maintenancePage = 1;
   $("maintenance-items").replaceChildren();
   $("maintenance-error").hidden = true;

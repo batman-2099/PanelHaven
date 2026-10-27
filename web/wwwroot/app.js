@@ -1446,7 +1446,7 @@ function updateSelection() {
   $("export-selected-comics").disabled = !session || session.mustChangePassword || !count || count > 100;
   $("mark-selected-read").disabled = $("mark-selected-unread").disabled = readingStatusBusy || !session || session.mustChangePassword || !count || count > 100;
   if (comicExport?.selection && !comicExportCurrent(comicExport)) resetComicExport();
-  $("organize-selected").disabled = $("archive-selected").disabled = session?.role !== "admin" || !count || count > 100;
+  $("organize-selected").disabled = $("archive-selected").disabled = organizationBusy || session?.role !== "admin" || !count || count > 100;
   $("delete-selected").disabled = deletionBusy || session?.role !== "admin" || !count || count > 100;
   if ($("organization-dialog").open && (organizationBookIds.length !== count || organizationBookIds.some((id) => !selectedBooks.has(id)))) {
     invalidateOrganizationPreview(true);
@@ -3454,7 +3454,7 @@ async function previewOrganization() {
   }
 }
 
-async function openOrganization(archive = false) {
+$("organize-selected").addEventListener("click", async () => {
   if (session?.role !== "admin" || organizationBusy) return;
   if (!selectedBooks.size || selectedBooks.size > 100) {
     $("management-status").textContent = "Select between 1 and 100 books across pages to organize.";
@@ -3483,13 +3483,7 @@ async function openOrganization(archive = false) {
   try {
     const roots = await api("/api/file-operation-roots");
     if (epoch !== authEpoch || generation !== organizationGeneration) return;
-    const archived = archive ? roots.find((root) => root.label === "Archived") : null;
-    if (archive && !archived) {
-      $("organization-status").textContent = "Configure an Archived folder in Server settings and restart before archiving.";
-      return;
-    }
     $("organization-root").replaceChildren(...roots.map((root) => new Option(root.label, root.index)));
-    if (archived) $("organization-root").value = String(archived.index);
     $("organization-status").textContent = roots.length ? "Choose a root and templates, then generate the preview. No files have changed."
       : "No configured destination roots are available. Pending recovery is still accessible below.";
   } catch (error) {
@@ -3503,14 +3497,64 @@ async function openOrganization(archive = false) {
       updateOrganizationControls();
     }
   }
-  if (archive) {
-    await previewOrganization();
-    if (epoch === authEpoch && generation === organizationGeneration && organizationPreview?.canApply)
-      $("organization-apply-form").requestSubmit();
+});
+$("archive-selected").addEventListener("click", async () => {
+  if (session?.role !== "admin" || session.mustChangePassword || organizationBusy || !selectedBooks.size || selectedBooks.size > 100) return;
+  const bookIds = [...selectedBooks];
+  const epoch = authEpoch;
+  let applying = false;
+  organizationBusy = true;
+  updateSelection();
+  $("management-status").textContent = `Preparing to archive ${bookIds.length} selected comicbooks…`;
+  try {
+    const roots = await api("/api/file-operation-roots");
+    if (epoch !== authEpoch) return;
+    const archived = roots.find((root) => root.label === "Archived");
+    if (!archived) throw new Error("Configure an Archived folder in Server settings and restart before archiving.");
+    const preview = await api("/api/file-operations/template-preview", { method: "POST", body: JSON.stringify({
+      bookIds, rootIndex: archived.index, folderTemplate: $("organization-folder").defaultValue,
+      fileNameTemplate: $("organization-name").defaultValue
+    }) });
+    if (epoch !== authEpoch) return;
+    if (!preview.revision || !Array.isArray(preview.items) || preview.items.length !== bookIds.length ||
+        new Set(preview.items.map((row) => row.bookId)).size !== bookIds.length ||
+        preview.items.some((row) => !bookIds.includes(row.bookId) || row.rootIndex !== archived.index || !Array.isArray(row.conflicts)))
+      throw new Error("The archive preview did not match the selected comicbooks and destination.");
+    if (preview.canApply !== true || preview.items.some((row) => row.conflicts.length || (!row.canApply && !row.noOp)) ||
+        preview.items.every((row) => row.noOp)) {
+      const conflicts = preview.items.flatMap((row) => row.conflicts.map((message) => `${row.source}: ${message}`));
+      $("management-status").textContent = conflicts.length
+        ? `Archive blocked. ${conflicts.join(" ")} No comicbooks were moved.`
+        : "No applicable archive moves. Unchanged comicbooks were skipped.";
+      return;
+    }
+    const items = preview.items.map(({ bookId, rootIndex, folder, fileName }) => ({ bookId, rootIndex, folder, fileName }));
+    applying = true;
+    $("management-status").textContent = `Archiving ${bookIds.length} selected comicbooks…`;
+    const result = await api("/api/file-operations", { method: "POST",
+      body: JSON.stringify({ items, expectedRevision: preview.revision, confirmed: true }) });
+    if (epoch !== authEpoch) return;
+    $("management-status").textContent = `${result.completed.length} archived; ${result.skipped.length} unchanged.` +
+      (result.failedBookId
+        ? ` Stopped at ${preview.items.find((row) => row.bookId === result.failedBookId)?.source || result.failedBookId}: ${result.error} ${result.notAttempted.length} not attempted. Completed moves were kept. Check pending recovery in Book details → Move / reorganize before trying again.`
+        : "");
+  } catch (error) {
+    if (epoch === authEpoch) $("management-status").textContent = !applying || error.status === 409
+      ? `Archive stopped: ${error.message} No comicbooks were moved.`
+      : `Archive outcome unconfirmed: ${error.message} Some moves may have completed. Check current locations and pending recovery in Book details → Move / reorganize. Nothing will be retried automatically.`;
+  } finally {
+    if (epoch === authEpoch) {
+      organizationBusy = false;
+      updateSelection();
+      if (applying) {
+        for (const id of bookIds) { failedCovers.delete(id); invalidateReaderNextIssue(id); }
+        loadLists();
+        loadPublishers();
+        loadLibrary();
+      }
+    }
   }
-}
-$("organize-selected").addEventListener("click", () => openOrganization());
-$("archive-selected").addEventListener("click", () => openOrganization(true));
+});
 $("organization-dialog").addEventListener("close", () => { if (!$("organization-dialog").open) resetOrganization(); });
 for (const name of ["input", "change"]) $("organization-controls").addEventListener(name, () => {
   invalidateOrganizationPreview(true);

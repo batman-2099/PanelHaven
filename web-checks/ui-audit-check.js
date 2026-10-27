@@ -547,12 +547,16 @@
       assert(clean(), "Closed organization/move drafts must not block unload.");
       archiveRoots = [{ index: 0, label: "Library 1" }];
       const beforeArchive = [organizationPreviews, organizationWrites];
+      holdPath = "/api/file-operation-roots";
       element("archive-selected").click();
-      await waitFor(() => element("organization-dialog").open && !element("organization-dialog").querySelector("[data-close]").disabled);
+      await waitFor(() => Boolean(releaseRequest));
+      assert(element("archive-selected").disabled && element("organize-selected").disabled && !clean()
+        && !doc.querySelector("dialog[open]"), "Archiving must lock repeated moves and protect unload without opening a dialog.");
+      releaseRequest(); releaseRequest = null;
+      await waitFor(() => !element("archive-selected").disabled);
       assert(organizationPreviews === beforeArchive[0] && organizationWrites === beforeArchive[1]
-        && element("apply-organization").disabled && element("generate-organization").disabled,
-        "Archive without a configured Archived root must stop, never preview or move into another root.");
-      close("organization-dialog");
+        && !doc.querySelector("dialog[open]") && clean() && element("management-status").textContent.includes("Archived"),
+        "Archive without a configured Archived root must report inline, never preview or move into another root.");
       archiveRoots = null;
 
       failedPages.add(order.pages[1]);

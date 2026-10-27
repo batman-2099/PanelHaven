@@ -44,7 +44,7 @@
     coverDate: "See provider", url: proposal.url, score: 80 };
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   const mutations = [], processStatuses = [];
-  let mode = "failure", release, prepared, matchRequests = 0, holdPrepare = false, conflictOnce = true, holdProcess = false, loseSuccess = true;
+  let mode = "failure", release, matchRequests = 0, holdPrepare = false, conflictOnce = true, holdProcess = false, loseSuccess = true;
   window.fetch = async (...args) => {
     const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
     const method = args[1]?.method || (args[0] instanceof Request ? args[0].method : "GET");
@@ -57,7 +57,6 @@
     if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) mutations.push({ path: url.pathname, body: args[1]?.body });
     if (url.pathname === `${base}/intake/prepare`) {
       const response = await originalFetch(...args);
-      if (response.ok) prepared = await response.clone().json();
       if (holdPrepare) { holdPrepare = false; await new Promise(resolve => { release = resolve; }); }
       return response;
     }
@@ -77,7 +76,7 @@
     return originalFetch(...args);
   };
   try {
-    window.confirm = () => { throw new Error("Processing review must use the inline source/destination preview, not a browser confirmation."); };
+    window.confirm = () => { throw new Error("Accept must process directly without a browser confirmation."); };
     $("clear-selection").click();
     $("search").value = "";
     $("reading-list").value = "";
@@ -137,26 +136,14 @@
     assert(!mutations.some(item => item.path.endsWith("/intake/process")), "Cancelled preparation started processing.");
     assert($("intake-progress").hidden, "Cancelled preparation left processing feedback active.");
     accept.click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    assert(!processStatuses.length && [prepared.source, prepared.destination, ...prepared.warnings]
-      .every(value => $("intake-preview-details").textContent.includes(value)), "Preparation did not show source, destination and all warnings before processing.");
-    $("intake-discard").click();
-    assert($("intake-preview").hidden && !processStatuses.length, "Cancelling review started processing.");
-    accept.click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    change("intake-root");
-    assert($("intake-preview").hidden && $("intake-confirm").disabled && !processStatuses.length, "Destination change retained an applicable preview.");
-    accept.click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-confirm").click();
     await waitFor(() => !accept.disabled && processStatuses.length === 1);
     assert(processStatuses[0] === 409 && (await readJson(`${base}/metadata`)).fields.Title === "Concurrent disposable edit", "Real stale-revision refusal did not protect the concurrent edit.");
     assert((await readJson(base)).location === originalBook.location, "Stale processing moved the source.");
     holdProcess = true;
     accept.click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-confirm").click();
     await waitFor(() => !!release);
+    assert($("intake-preview").hidden, "Acceptance still requires a separate review step.");
+    accept.click();
     assert($("intake-queue").disabled && $("intake-root").disabled && $("intake-cancel").hidden, "Mutation permits queue changes, destination changes or cancellation.");
     assert(!$("intake-progress").hidden && $("intake-progress").getBoundingClientRect().height > 0, "Active processing lost its visible progress feedback.");
     close("intake-dialog");
@@ -178,7 +165,7 @@
     assert($("metadata-view").hidden && !$("organization-dialog").open && document.activeElement === $("library-status"),
       "Successful acceptance did not close the window and return focus to the library.");
     assert(!mutations.some(item => item.path === "/api/books/metadata" || item.path === "/api/file-operations"), "Candidate acceptance used obsolete catalog-only/manual-move endpoints.");
-    assert(matchRequests === 4 && mutations.filter(item => item.path.endsWith("/intake/prepare")).length === 5, "Unexpected automatic matching or preparation retry.");
+    assert(matchRequests === 4 && mutations.filter(item => item.path.endsWith("/intake/prepare")).length === 3, "Unexpected automatic matching or preparation retry.");
     assert(!$("intake-dialog").open, "Completed acceptance reopened the queue.");
     location.hash = `reader/${encodeURIComponent(config.bookId)}?location=library`;
     await waitFor(() => !$("reader-view").hidden && !$("reader-details").disabled);
@@ -219,8 +206,6 @@
     change("intake-root");
     loseSuccess = true;
     $("intake-candidates").querySelector("button").click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-confirm").click();
     await waitFor(() => !$("intake-dialog").open && processStatuses.length === 3);
     assert((await readJson(`${base}/intake-processing`)).revision !== status.revision,
       "Reprocessing did not create a new completed operation.");

@@ -2523,8 +2523,8 @@ function invalidateIntakePreview() {
   $("intake-confirm").disabled = true;
 }
 
-function showIntakePreview(preview, payload) {
-  intake.preview = { ...preview, payload };
+function showIntakePreview(preview) {
+  intake.preview = preview;
   $("intake-preview-title").textContent = "Review source and destination";
   $("intake-preview-summary").textContent = `${preview.converted ? "Converts to CBZ" : "Preserves the comicbook format"} and removes the source after verification. This cannot be undone.`;
   const details = $("intake-preview-details");
@@ -2533,7 +2533,7 @@ function showIntakePreview(preview, payload) {
     textElement("dt", "Destination"), textElement("dd", preview.destination));
   details.append(paths);
   for (const warning of preview.warnings) details.append(textElement("p", warning, "notice"));
-  $("intake-confirm").textContent = intake.replacement ? "Convert to CBZ" : "Accept and process";
+  $("intake-confirm").textContent = "Convert to CBZ";
   $("intake-preview").hidden = false;
   $("intake-status").textContent = "Nothing has been saved. Review the proposed changes, then confirm or cancel.";
 }
@@ -2735,7 +2735,7 @@ function renderIntakeCandidates() {
     details.append(textElement("h3", `${candidate.series} #${candidate.number} — ${candidate.title || "Untitled"}`),
       textElement("p", `${candidate.publisher || "Unknown publisher"} · Run ${candidate.startYear || "unknown"} · Cover ${candidate.coverDate || "unknown"}`),
       textElement("p", `Rank score ${candidate.score}/100`));
-    const accept = textElement("button", intake.metadataOnly ? "Accept" : "Review processing…", intake.metadataOnly ? "success" : "primary");
+    const accept = textElement("button", "Accept", "success");
     accept.type = "button";
     accept.setAttribute("aria-label", `${accept.textContent}: ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`);
     accept.addEventListener("click", () => {
@@ -2747,7 +2747,20 @@ function renderIntakeCandidates() {
         if (!current()) return;
         if (!prepared?.revision || !prepared.source || !prepared.destination || !Array.isArray(prepared.warnings))
           throw new Error("The server did not return a complete processing preview");
-        showIntakePreview(prepared, payload);
+        state.saving = true;
+        state.processingStage = "Processing comicbook…";
+        $("intake-status").textContent = "Processing comicbook. Do not close this page; this cannot be cancelled or undone…";
+        updateIntakeControls();
+        const result = await api(`/api/books/${encodeURIComponent(row.id)}/intake/process`, {
+          method: "POST", body: JSON.stringify({ ...payload, expectedRevision: prepared.revision, confirmed: true })
+        });
+        if (!current()) return;
+        if (result?.state !== "completed") throw new Error("Processing completion was not confirmed");
+        setIntakeProcessing(row, result);
+        $("intake-status").textContent = row.outcome;
+        loadLibrary();
+        loadPublishers();
+        loadLists();
       }, false, true);
     });
     const actions = textElement("div", "", "actions");
@@ -2833,7 +2846,7 @@ function openIntake(rows, scope, mode = "process") {
   $("intake-root").hidden = document.querySelector('label[for="intake-root"]').hidden = historyOnly || metadataOnly;
   $("intake-outcome").hidden = metadataOnly;
   $("intake-refresh").textContent = metadataOnly ? "Refresh hints" : "Refresh processing status";
-  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Review the source, destination and warnings before confirming. Processing removes the source after verified success and cannot be undone.");
+  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Accept saves metadata and organizes the comicbook in the selected library. Processing removes the source after verified success and cannot be undone.");
   $("intake-queue").replaceChildren(...rows.map((row) => new Option(row.title, row.id)));
   $("intake-dialog").showModal();
   showIntakeRow();
@@ -2866,23 +2879,18 @@ $("intake-confirm").addEventListener("click", () => {
   const preview = intake?.preview;
   if (!preview || $("intake-confirm").disabled) return;
   intakeRequest("Processing comicbook. Do not close this page; this cannot be cancelled or undone…", async (options, current, state, row) => {
-    if (state.replacement) state.replacementAttempt = preview;
+    state.replacementAttempt = preview;
     state.processingStage = "Processing comicbook…";
     updateIntakeControls();
-    const result = await api(`/api/books/${encodeURIComponent(row.id)}/${state.replacement ? "cbz-replacement" : "intake/process"}`, {
-      method: "POST", body: JSON.stringify({ ...preview.payload, expectedRevision: preview.revision, confirmed: true })
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/cbz-replacement`, {
+      method: "POST", body: JSON.stringify({ expectedRevision: preview.revision, confirmed: true })
     });
     if (!current()) return;
-    if (result?.state !== "completed" || state.replacement && (!result.converted || result.source !== preview.source || result.destination !== preview.destination))
+    if (result?.state !== "completed" || !result.converted || result.source !== preview.source || result.destination !== preview.destination)
       throw new Error("Processing completion was not confirmed");
     setIntakeProcessing(row, result);
     $("intake-status").textContent = row.outcome;
-    if (!state.replacement) {
-      loadLibrary();
-      loadPublishers();
-      loadLists();
-    }
-  }, true, !intake.replacement);
+  }, true);
 });
 $("intake-discard").addEventListener("click", () => {
   if (intake?.saving) return;
@@ -2911,7 +2919,7 @@ $("intake-refresh").addEventListener("click", () => {
 });
 $("intake-root").addEventListener("change", () => {
   cancelIntakeRequest();
-  $("intake-status").textContent = "Destination changed. Review the candidate again before processing.";
+  $("intake-status").textContent = "Destination changed. Accept a candidate to process it in the selected library.";
 });
 $("intake-recover").addEventListener("click", () => {
   if (!intake?.row?.processing?.canRecover) return;

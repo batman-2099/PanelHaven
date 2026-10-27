@@ -46,10 +46,6 @@
       $("intake-match").click();
       await waitFor(() => $("intake-candidates").querySelector("button:not(:disabled)"));
       $("intake-candidates").querySelector("button").click();
-      await waitFor(() => !$("intake-confirm").disabled);
-      assert((await (await originalFetch(`/api/books/${config.bookIds[index]}/intake-processing`)).json()).state === "none",
-        "Reviewing a queued candidate started processing before confirmation.");
-      $("intake-confirm").click();
       await waitFor(() => index === 0 ? $("intake-queue").value === config.bookIds[1] && !$("intake-hints").disabled : !$("intake-dialog").open);
       const status = await (await originalFetch(`/api/books/${config.bookIds[index]}/intake-processing`)).json();
       assert(status.state === "completed", "Real queued processing did not complete.");

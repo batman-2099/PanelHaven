@@ -30,7 +30,6 @@ public static class FileOperationChecks
         Directory.CreateDirectory(root);
         Directory.CreateDirectory(second);
         Directory.CreateDirectory(cross);
-        Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "nested"));
         var database = Path.Combine(directory, "state", "library.sqlite");
         try
         {
@@ -80,27 +79,27 @@ public static class FileOperationChecks
             }
             var initialXml = (string)Sql("SELECT info_xml FROM books WHERE id=$id")!;
             Sql("UPDATE books SET info_xml=$value WHERE id=$id",
-                "<ComicInfo xmlns='urn:publisher-check'><Publisher> Catalog/Press. </Publisher></ComicInfo>");
+                "<ComicInfo xmlns='urn:publisher-check'><Publisher> Catalog/Press. </Publisher><Series> Series/Name. </Series></ComicInfo>");
             Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(0, "new", "publisher.cbz")));
             Check(!Directory.Exists(Path.Combine(root, "Catalog_Press")), "Publisher preview created its destination directories.");
-            Check(store.CreateFileOperationFolder(new(0, "new") { BookId = id }).Folder == "Catalog_Press/new",
-                "Book-aware folder creation ignored the namespace-aware catalog publisher or its sanitization.");
+            Check(store.CreateFileOperationFolder(new(0, "new") { BookId = id }).Folder == "Catalog_Press/Series_Name",
+                "Book-aware folder creation ignored namespace-aware publisher/series metadata or its sanitization.");
             var publisherPreview = store.PreviewFileMove(id, new(0, "new", "publisher.cbz"));
-            var prefixedPreview = store.PreviewFileMove(id, new(0, "Catalog_Press/new", "publisher.cbz"));
-            Check(publisherPreview.CanApply && publisherPreview.Destination == "Library 1/Catalog_Press/new/publisher.cbz"
+            var prefixedPreview = store.PreviewFileMove(id, new(0, "Catalog_Press/Series_Name", "publisher.cbz"));
+            Check(publisherPreview.CanApply && publisherPreview.Destination == "Library 1/Catalog_Press/Series_Name/publisher.cbz"
                 && prefixedPreview.Destination == publisherPreview.Destination && prefixedPreview.Revision == publisherPreview.Revision
-                && store.CreateFileOperationFolder(new(0, "Catalog_Press/new") { BookId = id }).Folder == "Catalog_Press/new",
-                "Publisher normalization omitted or doubled an existing publisher prefix.");
+                && store.CreateFileOperationFolder(new(0, "Catalog_Press/Series_Name/extra") { BookId = id }).Folder == "Catalog_Press/Series_Name",
+                "Exact organization retained a custom folder or repeated publisher/series components.");
             store.EditMetadata(id, new(new() { ["Publisher"] = "Changed Publisher" }));
             store.CreateFileOperationFolder(new(0, "new") { BookId = id });
             Reject<FileOperationConflictException>(() => store.ApplyFileMove(id, new(0, "new", "publisher.cbz", publisherPreview.Revision, true)));
-            Check(File.Exists(path) && !File.Exists(Path.Combine(root, "Catalog_Press", "new", "publisher.cbz"))
-                && !File.Exists(Path.Combine(root, "Changed Publisher", "new", "publisher.cbz")) && store.GetFileOperations(id).Count == 0,
+            Check(File.Exists(path) && !File.Exists(Path.Combine(root, "Catalog_Press", "Series_Name", "publisher.cbz"))
+                && !File.Exists(Path.Combine(root, "Changed Publisher", "Series_Name", "publisher.cbz")) && store.GetFileOperations(id).Count == 0,
                 "A stale publisher preview moved the source or wrote history.");
             Sql("UPDATE books SET info_xml=$value WHERE id=$id", initialXml);
-            foreach (var index in Enumerable.Range(0, roots.Length))
-                Check(store.CreateFileOperationFolder(new(index, "") { BookId = id }).Folder == "Unknown Publisher",
-                    "Missing publisher did not use the fallback folder.");
+            foreach (var index in Enumerable.Range(1, roots.Length - 1))
+                Check(store.CreateFileOperationFolder(new(index, "") { BookId = id }).Folder == "Unknown Publisher/Unknown Series",
+                    "Missing publisher and series did not use fallback folders.");
             store.SaveProgress("owner", id, new(0, true));
             store.SaveRating("owner", id, new(4));
             store.SaveBookmark("owner", id, 0, new("Private"));
@@ -125,19 +124,19 @@ public static class FileOperationChecks
                 Check(store.GetPage(id, 0).Bytes.SequenceEqual(png), "Reader source was not refreshed after file operation.");
             }
 
-            const string createdFolder = "created/nested";
-            var createdPath = Path.Combine(root, "Unknown Publisher", createdFolder);
+            const string createdFolder = "Unknown Publisher/Unknown Series";
+            var createdPath = Path.Combine(root, createdFolder);
             Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")));
-            Check(!Directory.Exists(Path.Combine(root, "Unknown Publisher", "created")) && File.ReadAllBytes(path).SequenceEqual(original)
+            Check(!Directory.Exists(createdPath) && File.ReadAllBytes(path).SequenceEqual(original)
                 && store.GetFileOperations(id).Count == 0, "Preview created a missing folder or changed archive/history.");
-            Check(store.CreateFileOperationFolder(new(0, "created//nested/") { BookId = id }).Folder == "Unknown Publisher/" + createdFolder && Directory.Exists(createdPath),
-                "Book-aware folder creation did not create nested folders or return their normalized relative path.");
+            Check(store.CreateFileOperationFolder(new(0, "created//nested/") { BookId = id }).Folder == createdFolder && Directory.Exists(createdPath)
+                && !Directory.Exists(Path.Combine(root, "created")), "Book-aware folder creation retained a custom subfolder.");
             File.SetUnixFileMode(createdPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            Check(store.CreateFileOperationFolder(new(0, createdFolder) { BookId = id }).Folder == "Unknown Publisher/" + createdFolder
+            Check(store.CreateFileOperationFolder(new(0, createdFolder) { BookId = id }).Folder == createdFolder
                 && File.GetUnixFileMode(createdPath) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)
                 && store.CreateFileOperationFolder(new(0, "")).Folder == ""
-                && store.CreateFileOperationFolder(new(0, createdFolder)).Folder == createdFolder
-                && Directory.Exists(Path.Combine(root, createdFolder)),
+                && store.CreateFileOperationFolder(new(0, "created//nested/")).Folder == "created/nested"
+                && Directory.Exists(Path.Combine(root, "created", "nested")),
                 "Existing-folder creation was not idempotent or broadened permissions.");
             foreach (var request in new[]
             {
@@ -162,7 +161,7 @@ public static class FileOperationChecks
             Check(!Directory.Exists(Path.Combine(directory, "missing")), "Folder creation created a missing library root or its ancestors.");
 
             var preview = store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz"));
-            Check(preview.Source == "Library 1/original.cbz" && preview.Destination == "Library 1/Unknown Publisher/created/nested/renamed.cbz"
+            Check(preview.Source == "Library 1/original.cbz" && preview.Destination == "Library 1/Unknown Publisher/Unknown Series/renamed.cbz"
                 && preview.SourceHash == Convert.ToHexString(SHA256.HashData(original))
                 && File.ReadAllBytes(path).SequenceEqual(original) && store.GetFileOperations(id).Count == 0
                 && !Directory.EnumerateFileSystemEntries(createdPath).Any(),
@@ -182,26 +181,28 @@ public static class FileOperationChecks
                 "{\"rootIndex\":0.5,\"folder\":\"new\"}", "{\"rootIndex\":0,\"folder\":\"new\",\"unknown\":true}"
             })
                 Reject<JsonException>(() => JsonSerializer.Deserialize<FileOperationFolderRequest>(json, jsonOptions));
-            Directory.CreateSymbolicLink(Path.Combine(root, "Unknown Publisher", "alias"), second);
+            Directory.Delete(createdPath);
+            Directory.CreateSymbolicLink(createdPath, second);
             Reject<UnauthorizedAccessException>(() => store.PreviewFileMove(id, new(0, "alias", "bad.cbz")));
             Reject<UnauthorizedAccessException>(() => store.CreateFileOperationFolder(new(0, "alias/escaped") { BookId = id }));
-            var linkedRootStore = new LibraryStore(folderDatabase, [Path.Combine(root, "Unknown Publisher", "alias")]);
+            var linkedRootStore = new LibraryStore(folderDatabase, [createdPath]);
             Reject<UnauthorizedAccessException>(() => linkedRootStore.CreateFileOperationFolder(new(0, "escaped")));
             Directory.CreateDirectory(Path.Combine(second, "inside"));
-            var linkedAncestorStore = new LibraryStore(folderDatabase, [Path.Combine(root, "Unknown Publisher", "alias", "inside")]);
+            var linkedAncestorStore = new LibraryStore(folderDatabase, [Path.Combine(createdPath, "inside")]);
             Reject<UnauthorizedAccessException>(() => linkedAncestorStore.CreateFileOperationFolder(new(0, "escaped")));
             Check(!Directory.Exists(Path.Combine(second, "inside", "escaped")), "Folder creation followed a symlink ancestor of its root.");
             Check(!Directory.Exists(Path.Combine(second, "escaped")), "Folder creation followed a symlink outside its root.");
-            File.CreateSymbolicLink(Path.Combine(root, "Unknown Publisher", "occupied.cbz"), Path.Combine(second, "missing.cbz"));
+            Directory.Delete(createdPath);
+            Directory.CreateDirectory(createdPath);
+            File.CreateSymbolicLink(Path.Combine(createdPath, "occupied.cbz"), Path.Combine(second, "missing.cbz"));
             Check(!store.PreviewFileMove(id, new(0, "", "occupied.cbz")).CanApply, "Dangling destination symlink was not a collision.");
-            Reject<UnauthorizedAccessException>(() => store.CreateFileOperationFolder(new(0, "occupied.cbz/escaped") { BookId = id }));
+            Reject<UnauthorizedAccessException>(() => store.CreateFileOperationFolder(new(0, createdFolder + "/occupied.cbz/escaped")));
             Check(!Directory.Exists(Path.Combine(second, "missing.cbz")), "Folder creation followed a dangling symlink.");
-            File.Delete(Path.Combine(root, "Unknown Publisher", "occupied.cbz"));
-            Directory.Delete(Path.Combine(root, "Unknown Publisher", "alias"));
-            File.Copy(path, Path.Combine(second, "Unknown Publisher", "collision.cbz"));
+            File.Delete(Path.Combine(createdPath, "occupied.cbz"));
+            File.Copy(path, Path.Combine(second, createdFolder, "collision.cbz"));
             Check(!store.PreviewFileMove(id, new(1, "", "collision.cbz")).CanApply, "Equal bytes at destination were not a collision.");
             store.ScanAsync(default).GetAwaiter().GetResult();
-            File.Delete(Path.Combine(second, "Unknown Publisher", "collision.cbz"));
+            File.Delete(Path.Combine(second, createdFolder, "collision.cbz"));
             Check(!store.PreviewFileMove(id, new(1, "", "collision.cbz")).CanApply, "Missing but cataloged destination was not reserved.");
 
             // A valid ZIP comment change leaves both length and the restored timestamp unchanged.
@@ -215,20 +216,20 @@ public static class FileOperationChecks
             File.WriteAllBytes(path, original);
             File.SetLastWriteTimeUtc(path, ticks);
             var originalIdentity = Identity(path);
-            var first = Move(0, "Unknown Publisher/" + createdFolder, "renamed.cbz");
+            var first = Move(0, createdFolder, "renamed.cbz");
             Check(!File.Exists(path) && File.ReadAllBytes(Path.Combine(createdPath, "renamed.cbz")).SequenceEqual(original), "Same-device rename into a created folder lost or rewrote bytes.");
             Check(Identity(Path.Combine(createdPath, "renamed.cbz")) == originalIdentity, "Same-device rename unnecessarily copied the inode.");
             Check(!store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")).CanApply, "Normalized no-op preview was applicable.");
             PrivateState();
             var secondMove = Move(1, "", "moved.cbz");
-            Check(store.GetBook("owner", id).Location == "Library 2/Unknown Publisher/moved.cbz", "Cross-root location was not refreshed.");
+            Check(store.GetBook("owner", id).Location == "Library 2/Unknown Publisher/Unknown Series/moved.cbz", "Cross-root location was not refreshed.");
             Check(!store.PreviewFileUndo(id, first.OperationId).CanApply, "Older move was undoable before its descendant.");
             var thirdMove = Move(roots.Length - 1, "", "cross-device.cbz");
-            Check(File.GetUnixFileMode(Path.Combine(roots[^1], "Unknown Publisher", "cross-device.cbz")) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead), "Cross-device copy lost permissions.");
+            Check(File.GetUnixFileMode(Path.Combine(roots[^1], createdFolder, "cross-device.cbz")) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead), "Cross-device copy lost permissions.");
             PrivateState();
-            File.WriteAllBytes(Path.Combine(second, "Unknown Publisher", "moved.cbz"), original);
+            File.WriteAllBytes(Path.Combine(second, createdFolder, "moved.cbz"), original);
             Check(!store.PreviewFileUndo(id, thirdMove.OperationId).CanApply, "Undo would overwrite an occupied original path.");
-            File.Delete(Path.Combine(second, "Unknown Publisher", "moved.cbz"));
+            File.Delete(Path.Combine(second, createdFolder, "moved.cbz"));
             Undo(thirdMove.OperationId);
             Undo(secondMove.OperationId);
             Undo(first.OperationId);
@@ -246,14 +247,14 @@ public static class FileOperationChecks
             var write = store.PreviewArchiveWrite(id);
             store.ApplyArchiveWrite(id, new(write.Revision, true));
             Check(!store.PreviewFileUndo(id, writtenMove.OperationId).CanApply, "Move undo accepted a changed comicbook hash.");
-            original = File.ReadAllBytes(Path.Combine(second, "Unknown Publisher", "written.cbz"));
+            original = File.ReadAllBytes(Path.Combine(second, createdFolder, "written.cbz"));
             PrivateState();
 
             // SQLite failure occurs after publication; the verified original is rolled back without reimport.
             Sql("CREATE TRIGGER fail_file_move BEFORE UPDATE OF path ON books BEGIN SELECT RAISE(ABORT,'injected catalog failure'); END");
             preview = store.PreviewFileMove(id, new(0, "", "failure.cbz"));
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "failure.cbz", preview.Revision, true)));
-            Check(!File.Exists(Path.Combine(root, "Unknown Publisher", "failure.cbz")) && File.ReadAllBytes(Path.Combine(second, "Unknown Publisher", "written.cbz")).SequenceEqual(original)
+            Check(!File.Exists(Path.Combine(root, createdFolder, "failure.cbz")) && File.ReadAllBytes(Path.Combine(second, createdFolder, "written.cbz")).SequenceEqual(original)
                 && store.GetFileOperations(id).Any(row => row.State == "failed"), "Catalog failure did not safely roll back filesystem state.");
             Sql("DROP TRIGGER fail_file_move");
             PrivateState();
@@ -265,14 +266,14 @@ public static class FileOperationChecks
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "pending.cbz", preview.Revision, true)));
             Sql("DROP TRIGGER fail_file_move; DROP TRIGGER fail_file_finish;");
             var pending = store.GetFileOperations(id).Single(row => row.State == "pending");
-            var pendingDestination = Path.Combine(root, "Unknown Publisher", "pending.cbz");
-            var pendingSource = Path.Combine(second, "Unknown Publisher", "written.cbz");
-            var hold = Path.Combine(second, "Unknown Publisher", $".panelhaven-move-{pending.Id}.hold");
-            var partialStage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{pending.Id}.stage");
+            var pendingDestination = Path.Combine(root, createdFolder, "pending.cbz");
+            var pendingSource = Path.Combine(second, createdFolder, "written.cbz");
+            var hold = Path.Combine(second, createdFolder, $".panelhaven-move-{pending.Id}.hold");
+            var partialStage = Path.Combine(root, createdFolder, $".panelhaven-move-{pending.Id}.stage");
             File.WriteAllText(partialStage, "partial copy; ownership was not published");
             store = new LibraryStore(database, roots);
             var partialRecovery = store.PreviewFileRecovery(id, pending.Id);
-            Check(partialRecovery.CanApply && partialRecovery.Message!.Contains("Library 1/Unknown Publisher/.panelhaven-move-" + pending.Id + ".stage"),
+            Check(partialRecovery.CanApply && partialRecovery.Message!.Contains("Library 1/Unknown Publisher/Unknown Series/.panelhaven-move-" + pending.Id + ".stage"),
                 "An intact source could not cancel an interrupted copy while retaining its unknown staging file.");
             store.RecoverFileOperation(id, pending.Id, new(partialRecovery.Revision, true));
             store = new LibraryStore(database, roots);
@@ -294,14 +295,14 @@ public static class FileOperationChecks
             Reject<FileOperationConflictException>(() => store.RemoveMissingBook(id));
             Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(0, "", "other.cbz")));
             Reject<FileOperationConflictException>(() => store.PreviewArchiveWrite(id));
-            var uncertainStage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{pending.Id}.stage");
+            var uncertainStage = Path.Combine(root, createdFolder, $".panelhaven-move-{pending.Id}.stage");
             File.WriteAllText(uncertainStage, "interrupted, unverified copy");
             Check(!store.PreviewFileRecovery(id, pending.Id).CanApply && File.Exists(uncertainStage),
                 "Recovery deleted or accepted an unknown partial staging file.");
             File.Delete(uncertainStage); // Explicit fixture-only manual quarantine simulation.
             var recovery = store.PreviewFileRecovery(id, pending.Id);
             Check(recovery.CanApply && recovery.Operation == "recover"
-                && recovery.Destination == "Library 2/Unknown Publisher/written.cbz", "Recovery preview omitted its cancellation destination.");
+                && recovery.Destination == "Library 2/Unknown Publisher/Unknown Series/written.cbz", "Recovery preview omitted its cancellation destination.");
             File.WriteAllBytes(pendingDestination, changed);
             Check(!store.PreviewFileRecovery(id, pending.Id).CanApply, "Recovery accepted a later external edit.");
             Reject<FileOperationConflictException>(() => store.RecoverFileOperation(id, pending.Id, new(recovery.Revision, true)));
@@ -329,7 +330,7 @@ public static class FileOperationChecks
             foreach (var (fixture, extension) in new[] { ("", ".zip"), ("rar4.cbr", ".cbr"), ("rar5.cbr", ".rar"), ("solid.cb7", ".cb7"), ("nonsolid.cb7", ".7z"), ("plain.cbt", ".cbt"), ("directories.cbt", ".tar") })
             {
                 var source = Path.Combine(root, "format" + extension);
-                File.Copy(fixture.Length == 0 ? Path.Combine(root, "Unknown Publisher", "committed.cbz") : Path.Combine(AppContext.BaseDirectory, "fixtures", fixture), source);
+                File.Copy(fixture.Length == 0 ? Path.Combine(root, createdFolder, "committed.cbz") : Path.Combine(AppContext.BaseDirectory, "fixtures", fixture), source);
                 Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "Container fixture did not import.");
                 var formatId = store.ListBooks("owner", null, pageSize: 100).Items.Single(book => book.Location == "Library 1/format" + extension).Id;
                 var bytes = File.ReadAllBytes(source);

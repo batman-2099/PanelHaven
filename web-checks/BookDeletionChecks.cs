@@ -65,12 +65,12 @@ internal static class BookDeletionChecks
             var prepared = store.PrepareIntake(ids[4], new(1, 2, 0), metadata);
             Check(store.ProcessIntake(ids[4], new(1, 2, 0, prepared.Revision, true), metadata).State == "completed", "Intake fixture did not complete.");
             paths[4] = (string)Sql("SELECT path FROM books WHERE id=$id", ("$id", ids[4]))!;
-            Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher"));
+            Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "Series"));
             var move = store.PreviewFileMove(ids[0], new(0, "", "moved.cbz"));
             var moved = store.ApplyFileMove(ids[0], new(0, "", "moved.cbz", move.Revision, true));
             var undo = store.PreviewFileUndo(ids[0], moved.OperationId);
             var undone = store.UndoFileOperation(ids[0], moved.OperationId, new(undo.Revision, true));
-            Check(File.Exists(paths[0]) && !File.Exists(Path.Combine(root, "Unknown Publisher", "moved.cbz")),
+            Check(File.Exists(paths[0]) && !File.Exists(Path.Combine(root, "Unknown Publisher", "Series", "moved.cbz")),
                 "Move undo did not restore the original unprefixed source.");
 
             foreach (var user in new[] { "owner", "other" })

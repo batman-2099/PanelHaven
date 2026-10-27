@@ -28,7 +28,7 @@
   const proposal = { fields: { Series: "Matched series", Number: "37", Title: "Matched issue", Volume: "2025", Year: "2026", Writer: "" } };
   const candidate = { issueId: 34, volumeId: 12, series: "Matched series", number: "37", title: "Matched issue", startYear: "2025", score: 90,
     url: "https://comicvine.gamespot.com/example/4000-34/", coverUrl: `${base}/thumbnail` };
-  let searchMode = "error", release, prepared, conflict = true, holdSave = false, saves = 0, fileOperation = false;
+  let searchMode = "error", release, conflict = true, holdSave = false, saves = 0, fileOperation = false;
   window.fetch = async (...args) => {
     const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
     const method = args[1]?.method || "GET";
@@ -39,11 +39,6 @@
       return json({ candidates: [candidate], warnings: [] });
     }
     if (url.pathname === "/api/comic-vine/issues/34/metadata") return json(proposal);
-    if (url.pathname === "/api/books/metadata/preview") {
-      const response = await originalFetch(...args);
-      if (response.ok) prepared = await response.clone().json();
-      return response;
-    }
     if (url.pathname === "/api/books/metadata" && method === "POST") {
       saves++;
       if (conflict) { conflict = false; await edit({ Title: "Concurrent edit" }); }
@@ -68,33 +63,10 @@
     await waitFor(() => !$("intake-match").disabled && $("intake-candidates").querySelector("button"));
     assert(saves === 0, "Search automatically accepted metadata.");
     $("intake-candidates").querySelector("button").click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    assert(saves === 0 && $("intake-preview").textContent.includes("Matched issue")
-      && $("intake-preview").textContent.includes("Before") && $("intake-preview").textContent.includes("After"), "Candidate metadata was not reviewable before saving.");
-    for (const book of prepared.books) {
-      const rendered = $("intake-preview-details").querySelector(`[data-preview-book="${CSS.escape(book.id)}"]`);
-      assert(rendered && [...rendered.querySelectorAll("h5")].length === book.changes.length
-        && book.changes.every(change => rendered.textContent.includes(change.field)
-          && [change.before, change.after].every(value => value == null || value === "" || rendered.textContent.includes(JSON.stringify(value)))),
-      "Metadata review omitted a proposed field or its before/after value.");
-    }
-    $("intake-discard").click();
-    assert($("intake-preview").hidden && saves === 0, "Cancelling review saved metadata.");
-    $("intake-candidates").querySelector("button").click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-series").dispatchEvent(new Event("input", { bubbles: true }));
-    assert($("intake-preview").hidden && $("intake-confirm").disabled && saves === 0, "Changed hints retained an applicable preview.");
-    $("intake-match").click();
-    await waitFor(() => !$("intake-match").disabled && $("intake-candidates").querySelector("button"));
-    $("intake-candidates").querySelector("button").click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-confirm").click();
     await waitFor(() => saves === 1 && !$("intake-match").disabled);
     assert($("intake-dialog").open && (await read(`${base}/metadata`)).fields.Title === "Concurrent edit", "Stale acceptance overwrote another edit.");
     holdSave = true;
     $("intake-candidates").querySelector("button").click();
-    await waitFor(() => !$("intake-confirm").disabled);
-    $("intake-confirm").click();
     await waitFor(() => !!release);
     assert($("intake-cancel").hidden && $("intake-candidates").querySelector("button").disabled, "Save permits cancellation or duplicate acceptance.");
     $("intake-dialog").querySelector("[data-close]").click();
@@ -108,7 +80,7 @@
       && after.fields.Volume === "2025" && after.fields.Year === "2026" && after.fields.Writer === "Preserved writer", "Acceptance lost suggested or existing metadata.");
     assert(JSON.stringify(before.custom) === JSON.stringify(after.custom) && beforeBook.location === afterBook.location
       && beforeBook.currentPage === afterBook.currentPage && !fileOperation && saves === 2, "Catalog acceptance changed source location, private state, custom metadata, or retried a save.");
-    console.log("PASS: ranked catalog matching, search failure/cancellation, exact-change review/cancellation/invalidation, stale-write refusal, guarded reviewed acceptance, missing-field preservation and catalog-only behavior. Provider responses simulated.");
+    console.log("PASS: ranked catalog matching, search failure/cancellation, stale-write refusal, guarded one-click acceptance, missing-field preservation and catalog-only behavior. Provider responses simulated.");
   } finally {
     release?.();
     window.fetch = originalFetch;

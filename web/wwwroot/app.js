@@ -2541,21 +2541,15 @@ function invalidateIntakePreview() {
 
 function showIntakePreview(preview, payload) {
   intake.preview = { ...preview, payload };
-  const metadataOnly = intake.metadataOnly;
-  $("intake-preview-title").textContent = metadataOnly ? "Review exact metadata changes" : "Review source and destination";
-  $("intake-preview-summary").textContent = metadataOnly
-    ? "Only actual changes are listed. Quoted values preserve whitespace. Acceptance updates the catalog only; the source comicbook stays unchanged."
-    : `${preview.converted ? "Converts to CBZ" : "Preserves the comicbook format"} and removes the source after verification. This cannot be undone.`;
+  $("intake-preview-title").textContent = "Review source and destination";
+  $("intake-preview-summary").textContent = `${preview.converted ? "Converts to CBZ" : "Preserves the comicbook format"} and removes the source after verification. This cannot be undone.`;
   const details = $("intake-preview-details");
-  if (metadataOnly) renderMetadataPreview(preview.books, details);
-  else {
-    const paths = document.createElement("dl");
-    paths.append(textElement("dt", "Source"), textElement("dd", preview.source),
-      textElement("dt", "Destination"), textElement("dd", preview.destination));
-    details.append(paths);
-    for (const warning of preview.warnings) details.append(textElement("p", warning, "notice"));
-  }
-  $("intake-confirm").textContent = metadataOnly ? "Accept reviewed metadata" : intake.replacement ? "Convert to CBZ" : "Accept and process";
+  const paths = document.createElement("dl");
+  paths.append(textElement("dt", "Source"), textElement("dd", preview.source),
+    textElement("dt", "Destination"), textElement("dd", preview.destination));
+  details.append(paths);
+  for (const warning of preview.warnings) details.append(textElement("p", warning, "notice"));
+  $("intake-confirm").textContent = intake.replacement ? "Convert to CBZ" : "Accept and process";
   $("intake-preview").hidden = false;
   $("intake-status").textContent = "Nothing has been saved. Review the proposed changes, then confirm or cancel.";
 }
@@ -2708,8 +2702,10 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
   }
 }
 
-async function previewMatchedMetadata(candidate) {
-  await intakeRequest("Loading candidate metadata…", async (options, current, state, row) => {
+async function acceptMatchedMetadata(candidate) {
+  const state = intake, row = state?.row;
+  let accepted = false;
+  await intakeRequest("Accepting catalog metadata…", async (options, current) => {
     const proposal = await api(`/api/comic-vine/issues/${candidate.issueId}/metadata?volumeId=${candidate.volumeId}&intake=true`, options);
     if (!current()) return;
     const fields = Object.fromEntries(Object.entries(proposal.fields).filter(([, value]) => typeof value === "string" && value.trim()));
@@ -2718,15 +2714,7 @@ async function previewMatchedMetadata(candidate) {
     const preview = await api("/api/books/metadata/preview", { ...options, method: "POST", body: JSON.stringify(payload) });
     if (!current()) return;
     if (!preview.revision) throw new Error("The server did not return a metadata revision");
-    showIntakePreview(preview, payload);
-  });
-}
-
-async function acceptMatchedMetadata(preview) {
-  const state = intake, row = state?.row;
-  let accepted = false;
-  await intakeRequest("Saving catalog metadata…", async (options, current) => {
-    await api("/api/books/metadata", { method: "POST", body: JSON.stringify({ ...preview.payload, expectedRevision: preview.revision }) });
+    await api("/api/books/metadata", { method: "POST", body: JSON.stringify({ ...payload, expectedRevision: preview.revision }) });
     if (!current()) return;
     accepted = true;
     invalidateReaderNextIssue(row.id);
@@ -2763,12 +2751,12 @@ function renderIntakeCandidates() {
     details.append(textElement("h3", `${candidate.series} #${candidate.number} — ${candidate.title || "Untitled"}`),
       textElement("p", `${candidate.publisher || "Unknown publisher"} · Run ${candidate.startYear || "unknown"} · Cover ${candidate.coverDate || "unknown"}`),
       textElement("p", `Rank score ${candidate.score}/100`));
-    const accept = textElement("button", intake.metadataOnly ? "Review metadata…" : "Review processing…", "primary");
+    const accept = textElement("button", intake.metadataOnly ? "Accept" : "Review processing…", intake.metadataOnly ? "success" : "primary");
     accept.type = "button";
     accept.setAttribute("aria-label", `${accept.textContent}: ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`);
     accept.addEventListener("click", () => {
       if (accept.disabled) return;
-      if (intake.metadataOnly) { previewMatchedMetadata(candidate); return; }
+      if (intake.metadataOnly) { acceptMatchedMetadata(candidate); return; }
       intakeRequest("Preparing metadata and destination. Nothing has changed yet…", async (options, current, state, row) => {
         const payload = { issueId: candidate.issueId, volumeId: candidate.volumeId, rootIndex: Number($("intake-root").value) };
         const prepared = await api(`/api/books/${encodeURIComponent(row.id)}/intake/prepare`, { ...options, method: "POST", body: JSON.stringify(payload) });
@@ -2893,7 +2881,6 @@ $("cbz-replacement-form").addEventListener("submit", (event) => {
 $("intake-confirm").addEventListener("click", () => {
   const preview = intake?.preview;
   if (!preview || $("intake-confirm").disabled) return;
-  if (intake.metadataOnly) { acceptMatchedMetadata(preview); return; }
   intakeRequest("Processing comicbook. Do not close this page; this cannot be cancelled or undone…", async (options, current, state, row) => {
     if (state.replacement) state.replacementAttempt = preview;
     state.processingStage = "Processing comicbook…";
@@ -3291,12 +3278,11 @@ function resetFileOperation() {
 }
 
 function fileOperationDraft() {
-  return { rootIndex: Number($("file-operation-root").value), folder: $("file-operation-folder").value, fileName: $("file-operation-name").value };
+  return { rootIndex: Number($("file-operation-root").value), folder: "", fileName: $("file-operation-name").value };
 }
 
 function organizationDraft() {
-  return JSON.stringify({ root: $("organization-root").value, folder: $("organization-folder").value,
-    name: $("organization-name").value, rows: organizationRows });
+  return JSON.stringify({ root: $("organization-root").value, name: $("organization-name").value, rows: organizationRows });
 }
 
 function fileOperationDirty() {
@@ -3450,7 +3436,7 @@ async function previewOrganization(templates) {
   const epoch = authEpoch;
   const body = templates ? {
     bookIds: [...organizationBookIds], rootIndex: Number($("organization-root").value),
-    folderTemplate: $("organization-folder").value, fileNameTemplate: $("organization-name").value
+    folderTemplate: "", fileNameTemplate: $("organization-name").value
   } : { items: organizationRows.map((row) => ({ ...row })) };
   organizationBusy = true;
   updateOrganizationControls();
@@ -3475,18 +3461,16 @@ async function previewOrganization(templates) {
       for (const [label, value] of [["From", item.source], ["To", item.destination], ["Source SHA-256", item.sourceHash]])
         paths.append(textElement("dt", label), textElement("dd", value || "Unavailable — see conflicts"));
       row.append(paths);
-      for (const [key, label] of [["folder", "Existing folder relative to root"], ["fileName", "Filename including unchanged extension"]]) {
-        const input = document.createElement("input");
-        input.value = organizationRows[index][key] || "";
-        input.autocomplete = "off";
-        input.setAttribute("aria-label", `${label} for ${item.source || `book ${item.bookId}`}`);
-        input.addEventListener("input", () => {
-          organizationRows[index][key] = input.value;
-          invalidateOrganizationPreview();
-          $("organization-status").textContent = "Row edits are not previewed. Re-preview edited destinations before confirming.";
-        });
-        row.append(labeledControl(label, input));
-      }
+      const input = document.createElement("input");
+      input.value = organizationRows[index].fileName || "";
+      input.autocomplete = "off";
+      input.setAttribute("aria-label", `Filename including unchanged extension for ${item.source || `book ${item.bookId}`}`);
+      input.addEventListener("input", () => {
+        organizationRows[index].fileName = input.value;
+        invalidateOrganizationPreview();
+        $("organization-status").textContent = "Row edits are not previewed. Re-preview edited destinations before confirming.";
+      });
+      row.append(labeledControl("Filename including unchanged extension", input));
       const conflicts = document.createElement("ul");
       conflicts.className = "scan-error";
       for (const conflict of item.conflicts) conflicts.append(textElement("li", conflict));
@@ -3655,7 +3639,6 @@ async function openFileOperation(book) {
   const slash = relative.lastIndexOf("/");
   const name = relative.slice(slash + 1);
   fileOperationExtension = name.match(/\.[^.]+$/u)?.[0] || "";
-  $("file-operation-folder").value = slash < 0 ? "" : relative.slice(0, slash);
   $("file-operation-name").value = name;
   $("file-operation-extension").textContent = `Keep the source extension${fileOperationExtension ? `: ${fileOperationExtension}` : ""}. This is a rename / move, not a comicbook conversion.`;
   $("file-operation-book").textContent = `${bookTitle(book)} · ${location || "Open history below; source availability is not required."}`;
@@ -3702,8 +3685,7 @@ $("create-file-operation-folder").addEventListener("click", async () => {
   try {
     const result = await api("/api/file-operation-folders", { method: "POST", body: JSON.stringify({ rootIndex, folder, bookId: fileOperationBookId }) });
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
-    $("file-operation-folder").value = result.folder;
-    $("file-operation-status").textContent = "Folder is ready. Preview the move, then confirm it to move the comic.";
+    $("file-operation-status").textContent = `Folder is ready: ${result.folder}. Preview the move, then confirm it to move the comic.`;
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration)
       $("file-operation-status").textContent = `Could not confirm folder creation: ${error.message}. Some parent folders may already exist. No comicbook was moved.`;

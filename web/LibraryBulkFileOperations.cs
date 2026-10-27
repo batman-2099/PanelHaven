@@ -82,7 +82,7 @@ public sealed partial class LibraryStore
                 {
                     string Expand(string text) => ExpandFileTemplate(text, token => token == "FileName"
                         ? Path.GetFileNameWithoutExtension(catalog.Path)
-                        : metadata.Elements().FirstOrDefault(element => element.Name.LocalName == token)?.Value);
+                        : metadata.Element(metadata.Name.Namespace + token)?.Value);
                     var folder = Expand(template.FolderTemplate);
                     var stem = Expand(template.FileNameTemplate);
                     if (string.IsNullOrWhiteSpace(stem) || stem.EndsWith(' ') || stem.EndsWith('.') || stem is "." or "..")
@@ -90,7 +90,7 @@ public sealed partial class LibraryStore
                     item = item with { Folder = folder, FileName = stem + Path.GetExtension(catalog.Path) };
                 }
                 ValidateFileOperationFolder(item.RootIndex, item.Folder);
-                item = item with { Folder = PublisherFolder(metadata, item.Folder) };
+                item = item with { Folder = ComicbookFolder(metadata) };
                 destinations[index] = FileDestination(new(item.RootIndex, item.Folder, item.FileName));
                 destination = FileDisplayPath(destinations[index]!);
                 var plan = PlanFileMove(db, item.BookId, destinations[index]!, null, cancellationToken, allowNoOp: true);

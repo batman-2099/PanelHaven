@@ -324,9 +324,9 @@
         await waitFor(() => !element("file-operation-dialog").querySelector("[data-close]").disabled);
         assert(element("apply-file-operation").disabled === !allowed, "Only an applicable reviewed move enables apply, without a second checkbox.");
       }
-      element("file-operation-folder").value += "audit-only";
+      element("file-operation-name").value = "audit-only.cbz";
       assert(!clean(), "An open move draft must block unload.");
-      element("file-operation-folder").dispatchEvent(new win.Event("input", { bubbles: true }));
+      element("file-operation-name").dispatchEvent(new win.Event("input", { bubbles: true }));
       assert(element("apply-file-operation").disabled && element("file-operation-preview").hidden, "Changing a draft must invalidate its reviewed move.");
       close("file-operation-dialog");
       close("details-dialog");
@@ -486,15 +486,16 @@
       assert(!clean(), "A busy organization preview must block unload even with an unchanged draft.");
       releaseRequest(); releaseRequest = null;
       await waitFor(() => !element("organization-dialog").querySelector("[data-close]").disabled);
-      element("organization-folder").value = "audit-only";
+      const originalNameTemplate = element("organization-name").value;
+      element("organization-name").value = "audit-only";
       assert(!clean(), "An open organization draft must block unload.");
-      element("organization-folder").value = "";
+      element("organization-name").value = originalNameTemplate;
       element("confirm-organization").checked = true;
       assert(!clean(), "Organization confirmation must protect unload even with an unchanged draft.");
       close("organization-dialog");
       await waitFor(clean);
-      element("organization-folder").value = "closed-stale-draft";
-      element("file-operation-folder").value = "closed-stale-draft";
+      element("organization-name").value = "closed-stale-draft";
+      element("file-operation-name").value = "closed-stale-draft";
       assert(clean(), "Closed organization/move drafts must not block unload.");
 
       failedPages.add(order.pages[1]);

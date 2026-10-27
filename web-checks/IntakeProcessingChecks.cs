@@ -41,8 +41,8 @@ internal static class IntakeProcessingChecks
             store.EditPageMetadata(id, new(preview.Revision, pages));
             var prepared = fixture.Prepare();
             var extension = format == "zip" ? ".zip" : ".cbz";
-            Check(prepared.Destination == "Library 1/Publisher/Example (2020)/Example Vol.2020 #01 (May, 2025)" + extension,
-                format + ": original-organizer naming differs.");
+            Check(prepared.Destination == "Library 1/Publisher/Example/Example Vol.2020 #01 (May, 2025)" + extension,
+                format + ": exact publisher/series folders or unchanged organizer filename differ.");
             Check(!Directory.Exists(Path.Combine(fixture.Library, "Publisher")) && File.ReadAllBytes(fixture.Source).SequenceEqual(fixture.Original),
                 "Prepare mutated folders or original bytes.");
             Reject<FileOperationConflictException>(() => store.ProcessIntake(id, new(1, 2, 0, "stale", true), Metadata));
@@ -117,7 +117,7 @@ internal static class IntakeProcessingChecks
         }
         using (var fixture = new Fixture("cbz"))
         {
-            var folder = Path.Combine(fixture.Library, "Publisher", "Example (2020)");
+            var folder = Path.Combine(fixture.Library, "Publisher", "Example");
             Directory.CreateDirectory(folder);
             Check(SetXattr(folder, "user.DOSATTRIB", [1], 1, 0) == 0, "Cannot set disposable destination attribute.");
             var preview = fixture.Prepare();
@@ -170,7 +170,7 @@ internal static class IntakeProcessingChecks
             fields["Series"] = "../Example:Name";
             fields["Publisher"] = "..";
             var prepared = fixture.Store.PrepareIntake(fixture.Id, new(1, 2, 0), new(fields, Metadata.Url));
-            Check(prepared.Destination.Contains("Unknown Publisher/.._Example_Name (Unknown)", StringComparison.Ordinal)
+            Check(prepared.Destination.Contains("Unknown Publisher/.._Example_Name/.._Example_Name", StringComparison.Ordinal)
                 && prepared.Destination.EndsWith("(Unknown Date).cbz", StringComparison.Ordinal), "Missing-date fallback or conservative component sanitization failed.");
             Reject<ArgumentException>(() => fixture.Store.PrepareIntake(fixture.Id, new(1, 2, 1), Metadata));
         }

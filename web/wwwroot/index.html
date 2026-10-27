@@ -430,9 +430,8 @@
     <form id="file-operation-draft" class="form-stack">
       <fieldset id="file-operation-controls" disabled><legend>Destination</legend>
         <label for="file-operation-root">Destination area / root</label><select id="file-operation-root" required></select>
-        <label for="file-operation-folder">Destination folder relative to this root</label><input id="file-operation-folder" autocomplete="off" aria-describedby="file-operation-folder-help">
-        <button id="create-file-operation-folder" type="button" disabled>Create folder</button>
-        <p id="file-operation-folder-help" class="muted">Destinations start with the publisher (Unknown Publisher if missing), without repeating an existing publisher prefix. Leave blank to use that folder. Create folder creates missing folders immediately without moving the comicbook. Use / between folders; no absolute paths, parent traversal, or symbolic links.</p>
+        <button id="create-file-operation-folder" type="button" aria-describedby="file-operation-folder-help" disabled>Create folder</button>
+        <p id="file-operation-folder-help" class="muted">Destination folders are set automatically from saved metadata: Publisher / Series. Missing values use Unknown Publisher or Unknown Series. Create folder creates this destination immediately without moving the comicbook. Preview the exact path before confirming.</p>
         <label for="file-operation-name">Filename, including unchanged extension</label><input id="file-operation-name" required autocomplete="off" aria-describedby="file-operation-extension">
         <p id="file-operation-extension" class="muted"></p>
       </fieldset>
@@ -462,16 +461,15 @@
     <form id="organization-draft" class="form-stack">
       <fieldset id="organization-controls" disabled><legend>Destination templates</legend>
         <label>Destination area / root<select id="organization-root" required></select></label>
-        <label>Existing folder template, relative to this root<input id="organization-folder" autocomplete="off" aria-describedby="organization-template-help"></label>
         <label>Filename template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
-        <p id="organization-template-help" class="muted">Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Destinations start with the publisher folder (Unknown Publisher if missing), without repeating an existing prefix. Blank uses that folder. Destination folders must exist. Explicit tokens reject missing metadata and unsafe values. Use / between folders.</p>
+        <p id="organization-template-help" class="muted">Destination folders are always Publisher / Series, from saved metadata, and must already exist. Missing values use Unknown Publisher or Unknown Series. Filename tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Explicit tokens reject missing metadata and unsafe values.</p>
       </fieldset>
       <button id="generate-organization" type="submit" disabled>Generate template preview</button>
     </form>
     <p id="organization-status" role="status"></p>
     <section id="organization-review" aria-labelledby="organization-review-title" tabindex="-1" hidden>
       <h3 id="organization-review-title">Review every destination</h3>
-      <p class="muted">Edit a row's folder or complete filename (including its unchanged extension), then explicitly re-preview edited destinations. Displayed paths and hashes describe the last preview, not unpreviewed edits. Changing the root or either template discards row edits.</p>
+      <p class="muted">You can edit each complete filename (including its unchanged extension), then re-preview before confirming. Folders always use Publisher / Series. Displayed paths and hashes describe the last preview, not unpreviewed edits. Changing the root or filename template discards row edits.</p>
       <div id="organization-rows"></div>
       <button id="preview-organization" type="button" disabled>Re-preview edited destinations</button>
     </section>

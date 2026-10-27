@@ -142,11 +142,11 @@ public static class PageOrderChecks
             PrivateState();
             if (OperatingSystem.IsLinux())
             {
-                Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher"));
+                Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "Unknown Series"));
                 var move = store.PreviewFileMove(id, new(0, "", "renamed.cbz"));
                 var moved = store.ApplyFileMove(id, new(0, "", "renamed.cbz", move.Revision, true));
-                Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(Path.Combine(root, "Unknown Publisher", "renamed.cbz")),
-                    "Move changed shared order or omitted the publisher folder.");
+                Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(Path.Combine(root, "Unknown Publisher", "Unknown Series", "renamed.cbz")),
+                    "Move changed shared order or omitted the publisher/series folders.");
                 var undo = store.PreviewFileUndo(id, moved.OperationId);
                 store.UndoFileOperation(id, moved.OperationId, new(undo.Revision, true));
                 Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(path), "Move undo changed shared order or the original path.");

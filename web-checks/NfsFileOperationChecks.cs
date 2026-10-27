@@ -41,13 +41,13 @@ public static class NfsFileOperationChecks
         var root = Path.Combine(directory, "books");
         var cross = Directory.Exists("/dev/shm") ? Path.Combine("/dev/shm", "panelhaven-nfs-moves-" + Guid.NewGuid().ToString("N")) : null;
         Directory.CreateDirectory(root);
-        Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher"));
-        if (cross is not null) Directory.CreateDirectory(Path.Combine(cross, "Unknown Publisher"));
+        Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "Unknown Series"));
+        if (cross is not null) Directory.CreateDirectory(Path.Combine(cross, "Unknown Publisher", "Unknown Series"));
         var database = Path.Combine(directory, "state", "library.sqlite");
         try
         {
             var source = Path.Combine(root, "original.cbz");
-            var destination = Path.Combine(root, "Unknown Publisher", "destination.cbz");
+            var destination = Path.Combine(root, "Unknown Publisher", "Unknown Series", "destination.cbz");
             var foreign = Path.Combine(root, "external-link");
             using (var archive = ZipFile.Open(source, ZipArchiveMode.Create))
             using (var page = archive.CreateEntry("1.png").Open())
@@ -116,13 +116,13 @@ public static class NfsFileOperationChecks
             if (cross is not null)
             {
                 Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(1, "", "cross.cbz")));
-                Check(!File.Exists(Path.Combine(cross, "Unknown Publisher", "cross.cbz")), "Unsupported ACL transfer touched its destination.");
+                Check(!File.Exists(Path.Combine(cross, "Unknown Publisher", "Unknown Series", "cross.cbz")), "Unsupported ACL transfer touched its destination.");
             }
 
             var operation = Journal();
             Original(source);
             var hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
-            var stage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{operation}.stage");
+            var stage = Path.Combine(root, "Unknown Publisher", "Unknown Series", $".panelhaven-move-{operation}.stage");
             void Pending(bool committed = false, string? stageIdentity = null)
             {
                 Sql("UPDATE file_operations SET state='pending',committed=0,stage_identity=COALESCE($stage,source_identity) WHERE id=$operation; "
@@ -186,17 +186,17 @@ public static class NfsFileOperationChecks
                 "Cannot remove fixture attributes.");
             if (cross is not null)
             {
-                Attribute(Path.Combine(cross, "Unknown Publisher"), "system.posix_acl_default", acl);
+                Attribute(Path.Combine(cross, "Unknown Publisher", "Unknown Series"), "system.posix_acl_default", acl);
                 Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(1, "", "cross.cbz")));
-                Check(RemoveAttribute(Path.Combine(cross, "Unknown Publisher"), "system.posix_acl_default") == 0, "Cannot remove fixture directory ACL.");
+                Check(RemoveAttribute(Path.Combine(cross, "Unknown Publisher", "Unknown Series"), "system.posix_acl_default") == 0, "Cannot remove fixture directory ACL.");
                 var crossPreview = store.PreviewFileMove(id, new(1, "", "cross.cbz"));
                 var crossMove = store.ApplyFileMove(id, new(1, "", "cross.cbz", crossPreview.Revision, true));
-                Check(File.ReadAllBytes(Path.Combine(cross, "Unknown Publisher", "cross.cbz")).SequenceEqual(bytes), "Plain cross-mount move changed bytes.");
+                Check(File.ReadAllBytes(Path.Combine(cross, "Unknown Publisher", "Unknown Series", "cross.cbz")).SequenceEqual(bytes), "Plain cross-mount move changed bytes.");
                 Undo(crossMove.OperationId);
             }
             operation = Journal();
             hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
-            stage = Path.Combine(root, "Unknown Publisher", $".panelhaven-move-{operation}.stage");
+            stage = Path.Combine(root, "Unknown Publisher", "Unknown Series", $".panelhaven-move-{operation}.stage");
             Sql("UPDATE file_operations SET security=json_remove(security,'$.ExtendedAttributesHash') WHERE id=$operation;", operation);
             Pending();
             Alias(source, hold);

@@ -142,7 +142,7 @@ public sealed partial class LibraryStore
         number = number.Length == 0 ? "00" : number.All(char.IsAsciiDigit) ? number.PadLeft(2, '0') : number;
         var date = year.Length == 0 ? "Unknown Date" : int.TryParse(Field("Month"), out var month) && month is >= 1 and <= 12
             ? CultureInfo.GetCultureInfo("en-US").DateTimeFormat.GetMonthName(month) + ", " + year : year;
-        var folder = publisher + "/" + IntakeComponent(series + " (" + volume + ")", "Unknown Series");
+        var folder = publisher + "/" + series;
         var stem = IntakeComponent(series + " Vol." + volume + " #" + number + " (" + date + ")", "Unknown");
         var outputExtension = extension == ".cbr" ? ".cbz" : extension;
         var destination = FileDestination(new(request.RootIndex, folder, stem + outputExtension));

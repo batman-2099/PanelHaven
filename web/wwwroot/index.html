@@ -387,7 +387,8 @@
       <div class="intake-candidate">
         <div id="intake-current-cover" class="intake-cover"></div>
         <fieldset id="intake-hints" disabled><legend>Editable search hints</legend>
-          <label>Series (required)<input id="intake-series" required maxlength="200"></label>
+          <label>Series name or Comic Vine series URL (required)<input id="intake-series" required maxlength="200" aria-describedby="intake-series-help"></label>
+          <p id="intake-series-help" class="muted">Paste a series URL containing /4050-…/ to match that exact run.</p>
           <div class="intake-short-fields">
             <label>Issue number<input id="intake-number" maxlength="40"></label>
             <label>Year<input id="intake-year" type="number" min="1" max="9999" step="1"></label>

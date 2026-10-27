@@ -72,10 +72,27 @@ public sealed class ComicVine : IDisposable
     public async Task<IntakeMatches> MatchIntakeAsync(IntakeHints? hints, CancellationToken cancellationToken = default)
     {
         hints = IntakeMatching.Validate(hints);
-        var volumes = await VolumesAsync(hints.Series, 0, cancellationToken);
+        ComicVinePage<ComicVineVolume> volumes;
+        if (hints.Series.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || hints.Series.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(hints.Series, UriKind.Absolute, out var uri) || uri.Scheme != "https"
+                || uri.Host != "comicvine.gamespot.com" || uri.Port != 443 || uri.UserInfo.Length != 0)
+                throw new ComicVineException(400, "Enter an HTTPS Comic Vine series URL containing /4050-series-id/.");
+            var match = Regex.Match(uri.AbsolutePath, @"/4050-([1-9][0-9]*)/?$", RegexOptions.CultureInvariant);
+            if (!match.Success || !int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                throw new ComicVineException(400, "Enter a Comic Vine series URL, not an issue URL.");
+            var item = Property(await GetAsync($"volume/4050-{id}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
+            if (Id(item) != id) throw InvalidResponse();
+            var volume = new ComicVineVolume(id, Text(item, "name"), Text(item, "start_year"),
+                Text(Property(item, "publisher"), "name"), uri.GetLeftPart(UriPartial.Path));
+            volumes = new([volume], 0, 1, 10);
+            hints = hints with { Series = volume.Name };
+        }
+        else volumes = await VolumesAsync(hints.Series, 0, cancellationToken);
         var warnings = new List<string>();
         var candidates = new List<IntakeCandidate>();
-        // ponytail: one search and at most three issue pages; pagination would require an explicit larger search budget.
+        // ponytail: name searches inspect at most three runs; a series URL selects one without widening the search budget.
         var selected = volumes.Results.DistinctBy(volume => volume.Id)
             .OrderByDescending(volume => IntakeMatching.SeriesScore(hints.Series, volume.Name)
                 + (hints.Publisher.Length != 0 && IntakeMatching.SamePublisher(hints.Publisher, volume.Publisher) ? 10 : 0)

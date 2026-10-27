@@ -79,6 +79,46 @@ internal static class IntakeMatchingChecks
             await Error(() => provider.MatchIntakeAsync(hints with { Number = "1?2" }), 400);
             Check(handler.Calls == 4, "Invalid matching hints reached the provider.");
         }
+        var exact = new Handler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/volume/4050-166619/")
+                return Json(new { status_code = 1, results = new { id = 166619, name = "Batman",
+                    start_year = "2025", publisher = new { name = "DC Comics" } } });
+            if (path == "/api/issues/")
+            {
+                Check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("filter=volume:166619,issue_number:1"),
+                    "Exact series matching searched a different run or lost issue normalization.");
+                return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                    new { id = 34, name = "Batman #1", issue_number = "1", cover_date = "2025-09-01",
+                        site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } } });
+            }
+            if (path == "/api/issue/4000-34/")
+                return Json(new { status_code = 1, results = new { id = 34, volume = new { id = 166619 },
+                    name = "Batman #1", issue_number = "1", site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } });
+            throw new Exception("Exact series matching made a broad search or unrelated provider request.");
+        });
+        using (var provider = new ComicVine("key", exact))
+        {
+            var exactHints = hints with { Series = "https://comicvine.gamespot.com/batman/4050-166619/", Volume = 1940 };
+            var result = await provider.MatchIntakeAsync(exactHints);
+            Check(result.Candidates.Single().VolumeId == 166619 && result.Candidates[0].Series == "Batman"
+                && result.Candidates[0].Number == "1" && exact.Calls == 2,
+                "Explicit series URL failed to override an older run hint.");
+            await provider.MatchIntakeAsync(exactHints);
+            var metadata = await provider.MetadataAsync(34, 166619, intake: true);
+            await provider.MetadataAsync(34, 166619, intake: true);
+            Check(metadata.Fields["Series"] == "Batman" && metadata.Fields["Volume"] == "2025"
+                && metadata.Fields["Publisher"] == "DC Comics" && exact.Calls == 3,
+                "Acceptance lost exact-run metadata or repeated the volume lookup.");
+            foreach (var url in new[] { "http://comicvine.gamespot.com/batman/4050-166619/",
+                "https://evil.example/batman/4050-166619/", "https://comicvine.gamespot.com.evil.example/batman/4050-166619/",
+                "https://user@comicvine.gamespot.com/batman/4050-166619/", "https://comicvine.gamespot.com:444/batman/4050-166619/",
+                "https://comicvine.gamespot.com/batman/4000-34/", "https://comicvine.gamespot.com/batman/4050-0/",
+                "https://comicvine.gamespot.com/batman/4050-99999999999999999/" })
+                await Error(() => provider.MatchIntakeAsync(exactHints with { Series = url }), 400);
+            Check(exact.Calls == 3, "Invalid series URLs reached the provider.");
+        }
         var volume = new ComicVineVolume(1, "Example", "2020", "Marvel Comics", "https://comicvine.gamespot.com/volume/4050-1/");
         var issue = new ComicVineIssue(1, "Title", "1", "2025-01-01", "https://comicvine.gamespot.com/issue/4000-1/");
         Check(IntakeMatching.Rank(hints with { Volume = 2020 }, volume, issue).Score == 100

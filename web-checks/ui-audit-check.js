@@ -490,8 +490,11 @@
       element("organization-name").value = "audit-only";
       assert(!clean(), "An open organization draft must block unload.");
       element("organization-name").value = originalNameTemplate;
-      element("confirm-organization").checked = true;
-      assert(!clean(), "Organization confirmation must protect unload even with an unchanged draft.");
+      const originalFolderTemplate = element("organization-folder").value;
+      element("organization-folder").value = "audit-only";
+      element("organization-folder").dispatchEvent(new win.Event("input", { bubbles: true }));
+      assert(!clean() && element("apply-organization").disabled, "Changing a folder template must protect unload and invalidate Move.");
+      element("organization-folder").value = originalFolderTemplate;
       close("organization-dialog");
       await waitFor(clean);
       element("organization-name").value = "closed-stale-draft";

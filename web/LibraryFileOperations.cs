@@ -269,7 +269,7 @@ public sealed partial class LibraryStore
         return file.Identity;
     }
 
-    private FileMovePlan PlanFileMove(SqliteConnection db, string id, string destination, FileJournal? undo, CancellationToken cancellationToken, bool allowNoOp = false)
+    private FileMovePlan PlanFileMove(SqliteConnection db, string id, string destination, FileJournal? undo, CancellationToken cancellationToken, bool allowNoOp = false, bool useRequestedFolder = false)
     {
         var catalog = ReadArchiveCatalog(db, null, id);
         RefusePendingFileOperation(db, id);
@@ -281,8 +281,11 @@ public sealed partial class LibraryStore
         {
             var rootIndex = Array.FindIndex(roots, root => IsContained(root, destination));
             if (rootIndex < 0) throw new UnauthorizedAccessException("Path is outside the configured libraries.");
-            var catalogMetadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
-            destination = FileDestination(new(rootIndex, ComicbookFolder(catalogMetadata), Path.GetFileName(destination)));
+            if (!useRequestedFolder)
+            {
+                var catalogMetadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
+                destination = FileDestination(new(rootIndex, ComicbookFolder(catalogMetadata), Path.GetFileName(destination)));
+            }
             cancellationToken.ThrowIfCancellationRequested();
             CreateFileOperationFolder(new(rootIndex, Path.GetRelativePath(roots[rootIndex], Path.GetDirectoryName(destination)!)));
         }
@@ -383,14 +386,14 @@ public sealed partial class LibraryStore
     }
 
     // The caller owns scanLock; bulk preflight and all of its serial moves share the same reservation.
-    private FileOperationResult ApplyFileMoveLocked(string id, string? destination, string? undoId, FileOperationRequest request, CancellationToken cancellationToken)
+    private FileOperationResult ApplyFileMoveLocked(string id, string? destination, string? undoId, FileOperationRequest request, CancellationToken cancellationToken, bool useRequestedFolder = false)
     {
         FileJournal? journal = null;
         try
         {
             using var db = Open();
             var undo = undoId is null ? null : ReadFileJournal(db, id, undoId);
-            var plan = PlanFileMove(db, id, undo?.Source ?? destination!, undo, cancellationToken);
+            var plan = PlanFileMove(db, id, undo?.Source ?? destination!, undo, cancellationToken, useRequestedFolder: useRequestedFolder);
             if (!plan.Preview.CanApply || plan.Preview.Revision != request.ExpectedRevision) throw new FileOperationConflictException();
             journal = new(Guid.NewGuid().ToString("N"), id, DateTimeOffset.UtcNow.ToString("O"), plan.Catalog.Path, plan.Destination,
                 plan.Preview.SourceHash, "pending", undo?.Id, false, plan.SourceIdentity, plan.SameDevice ? plan.SourceIdentity : null,

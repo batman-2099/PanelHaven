@@ -3281,7 +3281,8 @@ function fileOperationDraft() {
 }
 
 function organizationDraft() {
-  return JSON.stringify({ root: $("organization-root").value, name: $("organization-name").value, rows: organizationRows });
+  return JSON.stringify({ root: $("organization-root").value, folder: $("organization-folder").value,
+    name: $("organization-name").value, rows: organizationRows });
 }
 
 function fileOperationDirty() {
@@ -3289,7 +3290,7 @@ function fileOperationDirty() {
 }
 
 function organizationDirty() {
-  return organizationDraft() !== organizationInitialDraft || $("confirm-organization").checked;
+  return organizationDraft() !== organizationInitialDraft;
 }
 
 async function refreshFileOperationHistory() {
@@ -3392,8 +3393,7 @@ function updateOrganizationControls() {
   const available = session?.role === "admin" && selected && !organizationBusy;
   $("organization-controls").disabled = $("generate-organization").disabled = !available || !$("organization-root").options.length;
   $("preview-organization").disabled = !available || !organizationRows.length;
-  $("confirm-organization").disabled = !available || !organizationPreview?.canApply;
-  $("apply-organization").disabled = $("confirm-organization").disabled || !$("confirm-organization").checked;
+  $("apply-organization").disabled = !available || !organizationPreview?.canApply;
   for (const input of $("organization-rows").querySelectorAll("input")) input.disabled = !available;
   for (const button of $("organization-history").querySelectorAll("button")) button.disabled = organizationBusy;
   $("organization-dialog").querySelector("[data-close]").disabled = organizationBusy;
@@ -3402,7 +3402,6 @@ function updateOrganizationControls() {
 function invalidateOrganizationPreview(clearRows = false) {
   organizationDraftGeneration++;
   organizationPreview = null;
-  $("confirm-organization").checked = false;
   if (clearRows) {
     organizationRows = [];
     $("organization-rows").replaceChildren();
@@ -3435,7 +3434,7 @@ async function previewOrganization(templates) {
   const epoch = authEpoch;
   const body = templates ? {
     bookIds: [...organizationBookIds], rootIndex: Number($("organization-root").value),
-    folderTemplate: "", fileNameTemplate: $("organization-name").value
+    folderTemplate: $("organization-folder").value, fileNameTemplate: $("organization-name").value
   } : { items: organizationRows.map((row) => ({ ...row })) };
   organizationBusy = true;
   updateOrganizationControls();
@@ -3547,17 +3546,16 @@ for (const name of ["input", "change"]) $("organization-controls").addEventListe
 });
 $("organization-draft").addEventListener("submit", (event) => { event.preventDefault(); previewOrganization(true); });
 $("preview-organization").addEventListener("click", () => previewOrganization(false));
-$("confirm-organization").addEventListener("change", updateOrganizationControls);
 $("organization-apply-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (session?.role !== "admin" || organizationBusy) return;
   const preview = organizationPreview;
   const items = organizationRows.map((row) => ({ ...row }));
-  if (!preview?.canApply || !$("confirm-organization").checked || organizationBookIds.length !== selectedBooks.size ||
+  if (!preview?.canApply || organizationBookIds.length !== selectedBooks.size ||
       organizationBookIds.some((id) => !selectedBooks.has(id)) || JSON.stringify(items) !== JSON.stringify(
         preview.items.map(({ bookId, rootIndex, folder, fileName }) => ({ bookId, rootIndex, folder, fileName })))) {
     invalidateOrganizationPreview();
-    $("organization-status").textContent = "Preview every destination and explicitly confirm the batch before applying.";
+    $("organization-status").textContent = "Preview every destination before choosing Move.";
     return;
   }
   const generation = organizationGeneration;

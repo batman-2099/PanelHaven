@@ -68,15 +68,14 @@ public static class BulkFileOperationChecks
                 && templates.Items[0].Destination == "Library 2/Publisher/Series/Series (2025) v2 #1 - Title 1 - book1.cbz"
                 && templates.Revision == Preview(Items(templates)).Revision,
                 "Template expansion or explicit/template revision parity failed.");
-            var exact = Preview([drafts[0]]);
-            foreach (var folder in new[] { "custom/nested", "Publisher", "Publisher/Series", "Publisher/Series/custom" })
+            foreach (var (folder, expected) in new[] { ("custom/nested", "Publisher/custom/nested"), ("Publisher", "Publisher"), ("Publisher/Series/custom", "Publisher/Series/custom") })
             {
                 var normalized = Preview([drafts[0] with { Folder = folder }]);
-                Check(normalized.CanApply && normalized.Items.Single().Folder == "Publisher/Series"
-                    && normalized.Items.Single().Destination == exact.Items.Single().Destination && normalized.Revision == exact.Revision,
-                    "Custom or already-prefixed folder changed the exact metadata destination.");
+                Check(normalized.CanApply && normalized.Items.Single().Folder == expected
+                    && normalized.Items.Single().Destination == $"Library 2/{expected}/{drafts[0].FileName}",
+                    "Folder selection was discarded or its publisher prefix was duplicated.");
                 var templated = store.PreviewFileTemplates(new([ids[0]], 1, folder, Path.GetFileNameWithoutExtension(drafts[0].FileName)));
-                Check(templated.CanApply && templated.Revision == exact.Revision, "Custom template folder changed the exact metadata destination.");
+                Check(templated.CanApply && templated.Revision == normalized.Revision, "Template and explicit folder previews diverged.");
             }
             Check((long)Sql("SELECT COUNT(*) FROM file_operations")! == 0 && File.ReadAllBytes(Path.Combine(root, "book1.cbz")).SequenceEqual(original[0]),
                 "Template preview mutated archive or history.");
@@ -129,9 +128,9 @@ public static class BulkFileOperationChecks
                 var row = Preview([invalid]).Items.Single();
                 Check(!row.CanApply && row.Conflicts.All(message => !message.Contains(directory)), "Invalid destination leaked an absolute path or was accepted.");
             }
-            var collision = Preview([drafts[0] with { Folder = "custom-a" }, drafts[1] with { Folder = "custom-b", FileName = drafts[0].FileName }]);
-            Check(!collision.CanApply && collision.Items.All(row => !row.CanApply && row.Folder == "Publisher/Series")
-                && collision.Items[0].Destination == collision.Items[1].Destination, "Custom folders bypassed the same-publisher/series collision.");
+            var collision = Preview([drafts[0] with { Folder = "custom-a" }, drafts[1] with { Folder = "Publisher/custom-a", FileName = drafts[0].FileName }]);
+            Check(!collision.CanApply && collision.Items.All(row => !row.CanApply && row.Folder == "Publisher/custom-a")
+                && collision.Items[0].Destination == collision.Items[1].Destination, "Normalized folder aliases bypassed destination collision detection.");
             Reject<FileOperationConflictException>(() => Apply(collision));
             var preview = Preview(drafts);
             Reject<ArgumentException>(() => store.ApplyFileMoves(new(drafts, preview.Revision, false)));
@@ -251,6 +250,15 @@ public static class BulkFileOperationChecks
                 && File.ReadAllBytes(Path.Combine(target, "Publisher", "Other Series", "shared.cbz")).SequenceEqual(original[1]),
                 "Applying different series changed the exact destination or source bytes.");
             foreach (var operation in separated.Completed) Undo(operation);
+            var named = store.PreviewFileTemplates(new(ids, 1, "{Series} ({Year})", "{FileName}"));
+            Check(named.CanApply && named.Items[0].Folder == "Publisher/Series (2025)" && named.Items[0].FileName == "book1.cbz",
+                "Series/year folder template or original filename expansion failed.");
+            var organized = Apply(named);
+            Check(organized.Completed.Count == ids.Length && organized.FailedBookId is null, "Templated folder batch did not complete.");
+            foreach (var row in named.Items)
+                Check(File.ReadAllBytes(Path.Combine(target, row.Folder, row.FileName)).SequenceEqual(original[Array.IndexOf(ids, row.BookId)]),
+                    "Apply discarded the reviewed folder template or changed comicbook bytes.");
+            foreach (var operation in organized.Completed) Undo(operation);
             for (var index = 0; index < ids.Length; index++)
                 Check(File.ReadAllBytes(Path.Combine(root, $"book{index + 1}.cbz")).SequenceEqual(original[index]), "Bulk failure/recovery/undo changed bytes.");
             Check(!Directory.EnumerateFiles(root, ".panelhaven-move-*", SearchOption.AllDirectories).Any()

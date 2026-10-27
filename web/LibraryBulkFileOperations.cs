@@ -90,10 +90,14 @@ public sealed partial class LibraryStore
                     item = item with { Folder = folder, FileName = stem + Path.GetExtension(catalog.Path) };
                 }
                 ValidateFileOperationFolder(item.RootIndex, item.Folder);
-                item = item with { Folder = ComicbookFolder(metadata) };
+                var publisher = IntakeComponent(metadata.Element(metadata.Name.Namespace + "Publisher")?.Value ?? "", "Unknown Publisher");
+                var targetFolder = item.Folder.Length == 0
+                    ? IntakeComponent(metadata.Element(metadata.Name.Namespace + "Series")?.Value ?? "", "Unknown Series") : item.Folder;
+                item = item with { Folder = targetFolder.Equals(publisher, PathComparison) || targetFolder.StartsWith(publisher + "/", PathComparison)
+                    ? targetFolder : publisher + "/" + targetFolder };
                 destinations[index] = FileDestination(new(item.RootIndex, item.Folder, item.FileName));
                 destination = FileDisplayPath(destinations[index]!);
-                var plan = PlanFileMove(db, item.BookId, destinations[index]!, null, cancellationToken, allowNoOp: true);
+                var plan = PlanFileMove(db, item.BookId, destinations[index]!, null, cancellationToken, allowNoOp: true, useRequestedFolder: true);
                 if (catalog != plan.Catalog) throw new FileOperationConflictException();
                 var preview = plan.Preview;
                 rows[index] = new(item.BookId, preview.Source, preview.Destination, item.RootIndex, item.Folder, item.FileName,
@@ -175,7 +179,7 @@ public sealed partial class LibraryStore
                     using var previous = Command(db, "SELECT COALESCE(MAX(rowid),0) FROM file_operations WHERE book_id=$id", ("$id", row.BookId));
                     lastOperation = (long)previous.ExecuteScalar()!;
                     completed.Add(ApplyFileMoveLocked(row.BookId, FileDestination(new(row.RootIndex, row.Folder, row.FileName)), null,
-                        new(row.Revision, true), cancellationToken));
+                        new(row.Revision, true), cancellationToken, useRequestedFolder: true));
                 }
                 catch (Exception exception) when (IsArchiveError(exception)
                     || exception is FileOperationConflictException or SqliteException or KeyNotFoundException or OperationCanceledException)

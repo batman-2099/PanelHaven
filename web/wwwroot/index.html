@@ -455,26 +455,26 @@
   <dialog id="organization-dialog" aria-labelledby="organization-title" aria-describedby="organization-safety">
     <div class="dialog-heading"><h2 id="organization-title">Organize selected books</h2><button type="button" data-close="organization-dialog" class="quiet">Close</button></div>
     <p id="organization-selection"></p>
-    <p id="organization-safety" class="notice">Preview creates missing destination folders inside configured libraries; cancelling or a failed preview may leave empty folders. Comicbooks keep their extension and contents, identity, metadata, list memberships, and private reading progress. Nothing moves until you explicitly confirm.</p>
+    <p id="organization-safety" class="notice">Preview creates missing destination folders inside configured libraries; cancelling or a failed preview may leave empty folders. Comicbooks keep their extension and contents, identity, metadata, list memberships, and private reading progress. Nothing moves until you choose Move.</p>
     <p class="muted">This batch runs sequentially, not all-or-nothing: it stops at the first execution failure and keeps earlier completed moves. No overwriting, path swaps, or cycles. Stop other programs from editing these files. Nothing is retried automatically.</p>
     <form id="organization-draft" class="form-stack">
       <fieldset id="organization-controls" disabled><legend>Destination templates</legend>
         <label>Destination area / root<select id="organization-root" required></select></label>
-        <label>Filename template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
-        <p id="organization-template-help" class="muted">Destination folders are always Publisher / Series, from saved metadata, and are created automatically. Missing values use Unknown Publisher or Unknown Series. Filename tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Explicit tokens reject missing metadata and unsafe values.</p>
+        <label>Folder name template<input id="organization-folder" value="{Series} ({Year})" autocomplete="off" aria-describedby="organization-template-help"></label>
+        <label>File name template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
+        <p id="organization-template-help" class="muted">Folders are created beneath each comicbook's publisher folder; an existing publisher prefix is not repeated. Blank folder template uses the series name. Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Missing metadata and unsafe token values are reported before moving.</p>
       </fieldset>
       <button id="generate-organization" type="submit" disabled>Generate template preview</button>
     </form>
     <p id="organization-status" role="status"></p>
     <section id="organization-review" aria-labelledby="organization-review-title" tabindex="-1" hidden>
       <h3 id="organization-review-title">Review every destination</h3>
-      <p class="muted">You can edit each complete filename (including its unchanged extension), then re-preview before confirming. Folders always use Publisher / Series. Displayed paths and hashes describe the last preview, not unpreviewed edits. Changing the root or filename template discards row edits.</p>
+      <p class="muted">You can edit each complete filename (including its unchanged extension), then re-preview before moving. Displayed paths and hashes describe the last preview, not unpreviewed edits. Changing the destination or either template discards row edits.</p>
       <div id="organization-rows"></div>
       <button id="preview-organization" type="button" disabled>Re-preview edited destinations</button>
     </section>
     <form id="organization-apply-form" class="form-stack">
-      <label><input id="confirm-organization" type="checkbox" required disabled><span>I reviewed every exact path, hash, and conflict and confirm this sequential batch, including the possibility of partial completion.</span></label>
-      <button id="apply-organization" type="submit" class="primary" disabled>Apply reviewed batch</button>
+      <button id="apply-organization" type="submit" class="success" disabled>Move</button>
     </form>
     <section id="organization-result" aria-labelledby="organization-result-title" tabindex="-1" hidden>
       <h3 id="organization-result-title">Batch outcome</h3><div id="organization-outcome"></div>

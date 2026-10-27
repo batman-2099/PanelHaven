@@ -88,13 +88,13 @@ public static class BulkFileOperationChecks
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = null }));
             Check(!store.PreviewFileTemplates(new(ids, 1, "{Publisher}", "{FileName}")).Items[1].CanApply, "Missing metadata was silently replaced.");
             var fallback = store.PreviewFileTemplates(new([ids[1]], 1, "", "{FileName}"));
-            Check(!fallback.CanApply && fallback.Items.Single().Folder == "Unknown Publisher/Series"
-                && !Directory.Exists(Path.Combine(target, "Unknown Publisher")), "Missing publisher preview created its destination folder.");
-            Directory.CreateDirectory(Path.Combine(target, "Unknown Publisher", "Series"));
-            fallback = store.PreviewFileTemplates(new([ids[1]], 1, "", "{FileName}"));
             Check(fallback.CanApply && fallback.Items.Single().Folder == "Unknown Publisher/Series"
+                && Directory.Exists(Path.Combine(target, "Unknown Publisher", "Series"))
                 && fallback.Items.Single().Destination == "Library 2/Unknown Publisher/Series/book2.cbz"
-                && fallback.Revision == Preview(Items(fallback)).Revision, "Implicit missing publisher did not use the normalized fallback.");
+                && File.Exists(Path.Combine(root, "book2.cbz"))
+                && !File.Exists(Path.Combine(target, "Unknown Publisher", "Series", "book2.cbz"))
+                && fallback.Revision == Preview(Items(fallback)).Revision,
+                "Missing publisher preview did not create only the fallback directories.");
             Check(!store.PreviewFileTemplates(new([ids[1]], 1, "{Publisher}", "{FileName}")).CanApply,
                 "Explicit missing publisher token bypassed template validation.");
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = "../escape" }));
@@ -104,9 +104,10 @@ public static class BulkFileOperationChecks
             store.EditMetadata(ids[1], new(new() { ["Year"] = "2025" }));
             store.EditMetadata(ids[1], new(new() { ["Series"] = null }));
             var missingSeries = Preview([drafts[1]]);
-            Check(!missingSeries.CanApply && missingSeries.Items.Single().Folder == "Publisher/Unknown Series"
-                && !Directory.Exists(Path.Combine(target, "Publisher", "Unknown Series")), "Missing series preview created its fallback folder.");
-            Directory.CreateDirectory(Path.Combine(target, "Publisher", "Unknown Series"));
+            Check(missingSeries.CanApply && missingSeries.Items.Single().Folder == "Publisher/Unknown Series"
+                && Directory.Exists(Path.Combine(target, "Publisher", "Unknown Series"))
+                && File.Exists(Path.Combine(root, "book2.cbz")),
+                "Missing series preview failed to create its fallback folder or moved the source.");
             Check(Preview([drafts[1]]).CanApply
                 && !store.PreviewFileTemplates(new([ids[1]], 1, "{Series}", "{FileName}")).CanApply,
                 "Missing series fallback or explicit template validation failed.");

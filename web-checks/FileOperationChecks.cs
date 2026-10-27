@@ -80,8 +80,10 @@ public static class FileOperationChecks
             var initialXml = (string)Sql("SELECT info_xml FROM books WHERE id=$id")!;
             Sql("UPDATE books SET info_xml=$value WHERE id=$id",
                 "<ComicInfo xmlns='urn:publisher-check'><Publisher> Catalog/Press. </Publisher><Series> Series/Name. </Series></ComicInfo>");
-            Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(0, "new", "publisher.cbz")));
-            Check(!Directory.Exists(Path.Combine(root, "Catalog_Press")), "Publisher preview created its destination directories.");
+            Check(store.PreviewFileMove(id, new(0, "new", "publisher.cbz")).CanApply
+                && Directory.Exists(Path.Combine(root, "Catalog_Press", "Series_Name"))
+                && File.ReadAllBytes(path).SequenceEqual(original) && store.GetFileOperations(id).Count == 0,
+                "Preview did not create destination folders safely without moving the comicbook.");
             Check(store.CreateFileOperationFolder(new(0, "new") { BookId = id }).Folder == "Catalog_Press/Series_Name",
                 "Book-aware folder creation ignored namespace-aware publisher/series metadata or its sanitization.");
             var publisherPreview = store.PreviewFileMove(id, new(0, "new", "publisher.cbz"));
@@ -126,9 +128,9 @@ public static class FileOperationChecks
 
             const string createdFolder = "Unknown Publisher/Unknown Series";
             var createdPath = Path.Combine(root, createdFolder);
-            Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")));
-            Check(!Directory.Exists(createdPath) && File.ReadAllBytes(path).SequenceEqual(original)
-                && store.GetFileOperations(id).Count == 0, "Preview created a missing folder or changed archive/history.");
+            Check(store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")).CanApply
+                && Directory.Exists(createdPath) && File.ReadAllBytes(path).SequenceEqual(original)
+                && store.GetFileOperations(id).Count == 0, "Automatic folder creation changed archive bytes or move history.");
             Check(store.CreateFileOperationFolder(new(0, "created//nested/") { BookId = id }).Folder == createdFolder && Directory.Exists(createdPath)
                 && !Directory.Exists(Path.Combine(root, "created")), "Book-aware folder creation retained a custom subfolder.");
             File.SetUnixFileMode(createdPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -216,7 +218,9 @@ public static class FileOperationChecks
             File.WriteAllBytes(path, original);
             File.SetLastWriteTimeUtc(path, ticks);
             var originalIdentity = Identity(path);
-            var first = Move(0, createdFolder, "renamed.cbz");
+            var firstPreview = store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz"));
+            Directory.Delete(createdPath);
+            var first = store.ApplyFileMove(id, new(0, createdFolder, "renamed.cbz", firstPreview.Revision, true));
             Check(!File.Exists(path) && File.ReadAllBytes(Path.Combine(createdPath, "renamed.cbz")).SequenceEqual(original), "Same-device rename into a created folder lost or rewrote bytes.");
             Check(Identity(Path.Combine(createdPath, "renamed.cbz")) == originalIdentity, "Same-device rename unnecessarily copied the inode.");
             Check(!store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")).CanApply, "Normalized no-op preview was applicable.");

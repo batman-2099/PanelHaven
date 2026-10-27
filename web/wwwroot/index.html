@@ -430,8 +430,7 @@
     <form id="file-operation-draft" class="form-stack">
       <fieldset id="file-operation-controls" disabled><legend>Destination</legend>
         <label for="file-operation-root">Destination area / root</label><select id="file-operation-root" required></select>
-        <button id="create-file-operation-folder" type="button" aria-describedby="file-operation-folder-help" disabled>Create folder</button>
-        <p id="file-operation-folder-help" class="muted">Destination folders are set automatically from saved metadata: Publisher / Series. Missing values use Unknown Publisher or Unknown Series. Create folder creates this destination immediately without moving the comicbook. Preview the exact path before confirming.</p>
+        <p id="file-operation-folder-help" class="muted">Destination folders are set automatically from saved metadata: Publisher / Series. Missing values use Unknown Publisher or Unknown Series. Preview creates missing destination folders; cancelling or a failed preview may leave empty folders. Comicbooks move only after confirmation.</p>
         <label for="file-operation-name">Filename, including unchanged extension</label><input id="file-operation-name" required autocomplete="off" aria-describedby="file-operation-extension">
         <p id="file-operation-extension" class="muted"></p>
       </fieldset>
@@ -456,13 +455,13 @@
   <dialog id="organization-dialog" aria-labelledby="organization-title" aria-describedby="organization-safety">
     <div class="dialog-heading"><h2 id="organization-title">Organize selected books</h2><button type="button" data-close="organization-dialog" class="quiet">Close</button></div>
     <p id="organization-selection"></p>
-    <p id="organization-safety" class="notice">Only existing folders within configured libraries are allowed; no folders are created. Comicbooks keep their extension and contents, identity, metadata, list memberships, and private reading progress. Nothing moves until you preview and explicitly confirm.</p>
+    <p id="organization-safety" class="notice">Preview creates missing destination folders inside configured libraries; cancelling or a failed preview may leave empty folders. Comicbooks keep their extension and contents, identity, metadata, list memberships, and private reading progress. Nothing moves until you explicitly confirm.</p>
     <p class="muted">This batch runs sequentially, not all-or-nothing: it stops at the first execution failure and keeps earlier completed moves. No overwriting, path swaps, or cycles. Stop other programs from editing these files. Nothing is retried automatically.</p>
     <form id="organization-draft" class="form-stack">
       <fieldset id="organization-controls" disabled><legend>Destination templates</legend>
         <label>Destination area / root<select id="organization-root" required></select></label>
         <label>Filename template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
-        <p id="organization-template-help" class="muted">Destination folders are always Publisher / Series, from saved metadata, and must already exist. Missing values use Unknown Publisher or Unknown Series. Filename tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Explicit tokens reject missing metadata and unsafe values.</p>
+        <p id="organization-template-help" class="muted">Destination folders are always Publisher / Series, from saved metadata, and are created automatically. Missing values use Unknown Publisher or Unknown Series. Filename tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Explicit tokens reject missing metadata and unsafe values.</p>
       </fieldset>
       <button id="generate-organization" type="submit" disabled>Generate template preview</button>
     </form>

@@ -235,7 +235,7 @@ public sealed partial class LibraryStore
         try { EnsureSafePath(root, parent); }
         catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
-            throw new FileOperationConflictException($"Folder not found: {FileDisplayPath(parent)}. For a new destination, choose Create folder before previewing. If this is the source folder, restore it before moving the comic.");
+            throw new FileOperationConflictException($"Folder not found: {FileDisplayPath(parent)}. Restore this source or original undo folder before retrying.");
         }
         if (!Directory.Exists(parent)) throw new ArgumentException("The comicbook's parent path must be an existing folder.");
         return root;
@@ -274,16 +274,19 @@ public sealed partial class LibraryStore
         var catalog = ReadArchiveCatalog(db, null, id);
         RefusePendingFileOperation(db, id);
         var sourceRoot = FileOperationRootFor(catalog.Path);
+        if (!IsArchive(catalog.Path) || !Path.GetExtension(destination).Equals(Path.GetExtension(catalog.Path), StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Keep the same supported comicbook extension.");
+        var version = ReadSourceVersion(sourceRoot, catalog.Path);
         if (undo is null)
         {
             var rootIndex = Array.FindIndex(roots, root => IsContained(root, destination));
             if (rootIndex < 0) throw new UnauthorizedAccessException("Path is outside the configured libraries.");
             var catalogMetadata = ParseXml(catalog.Xml, "ComicInfo").Root!;
             destination = FileDestination(new(rootIndex, ComicbookFolder(catalogMetadata), Path.GetFileName(destination)));
+            cancellationToken.ThrowIfCancellationRequested();
+            CreateFileOperationFolder(new(rootIndex, Path.GetRelativePath(roots[rootIndex], Path.GetDirectoryName(destination)!)));
         }
         var destinationRoot = FileOperationRootFor(destination);
-        if (!IsArchive(catalog.Path) || !Path.GetExtension(destination).Equals(Path.GetExtension(catalog.Path), StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Keep the same supported comicbook extension.");
         if (ArchiveStatx(-100, catalog.Path, 0x100, 0x17ff, out var sourceStat) != 0
             || ArchiveStatx(-100, Path.GetDirectoryName(destination)!, 0x100, 0x17ff, out var directoryStat) != 0)
             throw new UnauthorizedAccessException("Cannot verify the source and destination filesystems.");
@@ -291,7 +294,6 @@ public sealed partial class LibraryStore
         var sameDevice = (sourceStat.Mask & directoryStat.Mask & 0x1000) != 0 && sourceStat.MountId == directoryStat.MountId
             && sourceStat.DeviceMajor == directoryStat.DeviceMajor && sourceStat.DeviceMinor == directoryStat.DeviceMinor;
         if (!sameDevice) RefuseCrossMountAttributes(catalog.Path, destination);
-        var version = ReadSourceVersion(sourceRoot, catalog.Path);
         var security = ArchiveWritePermissions(sourceRoot, catalog.Path, preserveInode: sameDevice);
         var identity = FileIdentity(catalog.Path);
         using var source = OpenArchive(sourceRoot, catalog.Path);

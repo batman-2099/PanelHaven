@@ -3247,7 +3247,6 @@ $("archive-form").addEventListener("submit", async (event) => {
 function updateFileOperationControls() {
   const available = session?.role === "admin" && fileOperationBookId !== null;
   $("file-operation-controls").disabled = $("preview-file-operation").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length;
-  $("create-file-operation-folder").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length;
   $("refresh-file-operation-history").disabled = !available || fileOperationBusy;
   $("apply-file-operation").disabled = !available || fileOperationBusy || !fileOperationPreview?.canApply;
   for (const button of $("file-operation-history").querySelectorAll("button")) button.disabled = !available || fileOperationBusy;
@@ -3355,7 +3354,7 @@ async function previewFileOperation(operation = "move", operationId = null) {
   const epoch = authEpoch;
   fileOperationBusy = true;
   updateFileOperationControls();
-  $("file-operation-status").textContent = "Checking exact paths and comicbook bytes. Nothing is being changed…";
+  $("file-operation-status").textContent = "Checking paths and comicbook bytes; move previews also create missing destination folders. No comicbook is being moved…";
   try {
     const path = `/api/books/${encodeURIComponent(fileOperationBookId)}/file-operations${operation === "move" ? "" : `/${encodeURIComponent(operationId)}/${operation}`}/preview`;
     const preview = await api(path, { method: "POST", ...(operation === "move" ? { body: JSON.stringify(draft) } : {}) });
@@ -3372,7 +3371,7 @@ async function previewFileOperation(operation = "move", operationId = null) {
     $("file-operation-preview").hidden = false;
     $("file-operation-preview").focus();
     $("file-operation-status").textContent = [preview.message, fileOperationPreview.canApply
-      ? "Nothing has changed. Review the paths and hash, then use the Apply button to confirm. A changed source, catalog, or destination requires a new preview."
+      ? "No comicbook has moved. Review the paths and hash, then use the Apply button to confirm. A changed source, catalog, or destination requires a new preview."
       : preview.conflicts.length ? "This operation is blocked. Resolve the conflicts and preview again; apply is disabled." : "No change to apply. The comicbook remains where it is; apply is disabled."].filter(Boolean).join("\n");
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration && draftGeneration === fileOperationDraftGeneration) {
@@ -3440,7 +3439,7 @@ async function previewOrganization(templates) {
   } : { items: organizationRows.map((row) => ({ ...row })) };
   organizationBusy = true;
   updateOrganizationControls();
-  $("organization-status").textContent = "Checking every destination and source hash. No files are being changed…";
+  $("organization-status").textContent = "Creating missing destination folders and checking every source hash. No comicbooks are being moved…";
   try {
     const preview = await api(`/api/file-operations/${templates ? "template-preview" : "preview"}`, { method: "POST", body: JSON.stringify(body) });
     if (epoch !== authEpoch || generation !== organizationGeneration || draftGeneration !== organizationDraftGeneration) return;
@@ -3674,28 +3673,6 @@ for (const name of ["input", "change"]) $("file-operation-controls").addEventLis
   $("file-operation-status").textContent = "Destination changed. Preview again before confirming; nothing has been applied.";
 });
 $("file-operation-draft").addEventListener("submit", (event) => { event.preventDefault(); previewFileOperation(); });
-$("create-file-operation-folder").addEventListener("click", async () => {
-  if (session?.role !== "admin" || !fileOperationBookId || fileOperationBusy || $("create-file-operation-folder").disabled) return;
-  const generation = fileOperationGeneration;
-  const epoch = authEpoch;
-  const { rootIndex, folder } = fileOperationDraft();
-  fileOperationBusy = true;
-  invalidateFileOperationPreview();
-  $("file-operation-status").textContent = "Creating destination folder… No comicbook is being moved.";
-  try {
-    const result = await api("/api/file-operation-folders", { method: "POST", body: JSON.stringify({ rootIndex, folder, bookId: fileOperationBookId }) });
-    if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
-    $("file-operation-status").textContent = `Folder is ready: ${result.folder}. Preview the move, then confirm it to move the comic.`;
-  } catch (error) {
-    if (epoch === authEpoch && generation === fileOperationGeneration)
-      $("file-operation-status").textContent = `Could not confirm folder creation: ${error.message}. Some parent folders may already exist. No comicbook was moved.`;
-  } finally {
-    if (epoch === authEpoch && generation === fileOperationGeneration) {
-      fileOperationBusy = false;
-      updateFileOperationControls();
-    }
-  }
-});
 $("refresh-file-operation-history").addEventListener("click", refreshFileOperationHistory);
 $("file-operation-apply-form").addEventListener("submit", async (event) => {
   event.preventDefault();

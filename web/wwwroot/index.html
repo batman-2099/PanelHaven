@@ -462,7 +462,7 @@
         <label>Destination area / root<select id="organization-root" required></select></label>
         <label>Folder name template<input id="organization-folder" value="{Series} ({Year})" autocomplete="off" aria-describedby="organization-template-help"></label>
         <label>File name template, without extension<input id="organization-name" value="{FileName}" required autocomplete="off" aria-describedby="organization-template-help"></label>
-        <p id="organization-template-help" class="muted">Folders are created beneath each comicbook's publisher folder; an existing publisher prefix is not repeated. Blank folder template uses the series name. Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Missing metadata and unsafe token values are reported before moving.</p>
+        <p id="organization-template-help" class="muted">Folders are created beneath each comicbook's publisher folder; an existing publisher prefix is not repeated. Blank folder template uses the series name. Tokens: {Series}, {Year}, {Number}, {Title}, {Publisher}, {Volume}, {FileName}. {FileName} keeps the original filename; its extension is appended unchanged. Unsafe metadata characters become underscores; missing metadata is reported before moving.</p>
       </fieldset>
       <button id="generate-organization" type="submit" disabled>Generate template preview</button>
     </form>

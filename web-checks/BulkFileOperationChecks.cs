@@ -97,7 +97,8 @@ public static class BulkFileOperationChecks
             Check(!store.PreviewFileTemplates(new([ids[1]], 1, "{Publisher}", "{FileName}")).CanApply,
                 "Explicit missing publisher token bypassed template validation.");
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = "../escape" }));
-            Check(!store.PreviewFileTemplates(new(ids, 1, "{Publisher}", "{FileName}")).Items[1].CanApply, "Token injected a directory separator.");
+            var safePublisher = store.PreviewFileTemplates(new(ids, 1, "{Publisher}", "{FileName}")).Items[1];
+            Check(safePublisher.CanApply && safePublisher.Folder == ".._escape", "Metadata token escaped its single sanitized component.");
             store.EditMetadata(ids[1], new(new() { ["Publisher"] = "Publisher", ["Year"] = "-1" }));
             Check(!store.PreviewFileTemplates(new(ids, 1, "", "{Year}-{FileName}")).Items[1].CanApply, "Unknown numeric metadata became a name.");
             store.EditMetadata(ids[1], new(new() { ["Year"] = "2025" }));
@@ -250,9 +251,13 @@ public static class BulkFileOperationChecks
                 && File.ReadAllBytes(Path.Combine(target, "Publisher", "Other Series", "shared.cbz")).SequenceEqual(original[1]),
                 "Applying different series changed the exact destination or source bytes.");
             foreach (var operation in separated.Completed) Undo(operation);
+            store.EditMetadata(ids[0], new(new() { ["Series"] = "BRZRKR: A Faceful of Bullets" }));
             var named = store.PreviewFileTemplates(new(ids, 1, "{Series} ({Year})", "{FileName}"));
-            Check(named.CanApply && named.Items[0].Folder == "Publisher/Series (2025)" && named.Items[0].FileName == "book1.cbz",
-                "Series/year folder template or original filename expansion failed.");
+            Check(named.CanApply && named.Items[0].Folder == "Publisher/BRZRKR_ A Faceful of Bullets (2025)" && named.Items[0].FileName == "book1.cbz",
+                "Series punctuation was not sanitized or the original filename changed.");
+            var renamed = store.PreviewFileTemplates(new([ids[0]], 1, "{Series} ({Year})", "{Series}-{FileName}"));
+            Check(renamed.CanApply && renamed.Items[0].FileName == "BRZRKR_ A Faceful of Bullets-book1.cbz",
+                "Filename metadata tokens did not use the same safe naming as folder tokens.");
             var organized = Apply(named);
             Check(organized.Completed.Count == ids.Length && organized.FailedBookId is null, "Templated folder batch did not complete.");
             foreach (var row in named.Items)

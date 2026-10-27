@@ -133,7 +133,8 @@ public sealed partial class LibraryStore
             var value = valueFor(token);
             if (string.IsNullOrWhiteSpace(value) || (token is "Year" or "Volume") && value == "-1")
                 throw new FormatException($"Missing metadata for {{{token}}}.");
-            if (value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || value.Contains('/') || value.Contains('\\')
+            if (token != "FileName") value = IntakeComponent(value, "");
+            if (string.IsNullOrWhiteSpace(value) || value.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || value.Contains('/') || value.Contains('\\')
                 || value.Contains(':') || value.Any(char.IsControl) || value is "." or ".." || value.EndsWith(' ') || value.EndsWith('.'))
                 throw new FormatException($"Unsafe value for {{{token}}}; edit metadata or use another template.");
             output.Append(value);

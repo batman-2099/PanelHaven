@@ -117,7 +117,7 @@
     await waitFor(() => !$("move-archive").hidden);
     $("move-archive").click();
     await waitFor(() => !$("file-operation-dialog").querySelector("[data-close]").disabled);
-    assert(document.activeElement === $("file-operation-title") && $("file-operation-dialog").scrollTop === 0, "Move must open at its visible heading, not its history.");
+    assert(document.activeElement === $("file-operation-title") && $("file-operation-dialog").scrollTop === 0, "Move must open at its visible heading, not its recovery controls.");
     document.querySelector('[data-close="file-operation-dialog"]').click();
     document.querySelector('[data-close="details-dialog"]').click();
     change("reader-mode", "single");
@@ -156,6 +156,8 @@
     let frame, win, doc, holdPath, releaseRequest, heldPage, releaseImage, allowMove = false, confirmCalls = 0;
     let sourceOrder = null, sourceWrites = 0, sourceLocation = book.location, nextLookups = 0, failProgress = false;
     let expireDetails = false;
+    let pendingMove = true, recoveryWrites = 0;
+    let archiveRoots = null, organizationPreviews = 0, organizationWrites = 0;
     const privateFailures = { bookmark: false, preferences: false };
     const privateWrites = { bookmark: [], preferences: [] };
     const element = id => doc.getElementById(id);
@@ -237,6 +239,24 @@
           sourceLocation = book.location === "archived" ? "library" : "archived";
           return new win.Response(null, { status: 204 });
         }
+        if (path === `${bookPath}/file-operations` && method === "GET") return json(pendingMove ? [{
+          id: "audit-pending", state: "pending", createdAt: "2026-01-01T00:00:00Z",
+          source: "audit/source.cbz", destination: "audit/destination.cbz", hash: "audit-only", canRecover: true
+        }] : []);
+        if (path === `${bookPath}/file-operations/audit-pending/recover/preview`) return json({
+          bookId, operationId: "audit-pending", operation: "recover", revision: "audit-recovery",
+          canApply: true, conflicts: [], source: "audit/source.cbz", destination: "audit/destination.cbz", sourceHash: "audit-only"
+        });
+        if (path === `${bookPath}/file-operations/audit-pending/recover` && method === "POST") {
+          const body = JSON.parse(options.body);
+          assert(body.confirmed === true && body.expectedRevision === "audit-recovery", "Recovery lost explicit confirmation or its preview revision.");
+          recoveryWrites++;
+          pendingMove = false;
+          return new win.Response(null, { status: 204 });
+        }
+        if (path === "/api/file-operation-roots" && archiveRoots !== null) return json(archiveRoots);
+        if (path === "/api/file-operations/template-preview") organizationPreviews++;
+        if (path === "/api/file-operations" && method === "POST") organizationWrites++;
         if (failProgress && path.endsWith("/progress") && method === "POST")
           return new win.Response("Simulated progress save failure", { status: 503 });
         if (path.startsWith(`${bookPath}/pages/`)) {
@@ -314,6 +334,22 @@
       releaseRequest(); releaseRequest = null;
       await waitFor(() => !element("file-operation-dialog").querySelector("[data-close]").disabled);
       assert(clean() && element("apply-file-operation").disabled, "An unchanged move is clean and cannot apply without a preview.");
+      const recovery = element("file-operation-recovery");
+      assert(recovery.textContent.includes("audit/source.cbz") && recovery.textContent.includes("audit/destination.cbz"),
+        "Pending recovery must retain both paths.");
+      recovery.querySelector("button").click();
+      await waitFor(() => !element("apply-file-operation").disabled);
+      assert(recoveryWrites === 0 && doc.activeElement === element("file-operation-preview"),
+        "Recovery preview must require a separate accessible confirmation.");
+      element("refresh-file-operation-recovery").click();
+      await waitFor(() => !element("refresh-file-operation-recovery").disabled);
+      assert(element("apply-file-operation").disabled && recoveryWrites === 0, "Refreshing recovery must invalidate confirmation without applying.");
+      recovery.querySelector("button").click();
+      await waitFor(() => !element("apply-file-operation").disabled);
+      element("file-operation-apply-form").requestSubmit();
+      await waitFor(() => !element("refresh-file-operation-recovery").disabled);
+      assert(recoveryWrites === 1 && !recovery.children.length,
+        "Resolved recovery must disappear without retained completed history.");
       for (const allowed of [false, true]) {
         allowMove = allowed;
         holdPath = `${bookPath}/file-operations/preview`;
@@ -480,6 +516,15 @@
       releaseRequest(); releaseRequest = null;
       await waitFor(() => !element("organization-dialog").querySelector("[data-close]").disabled);
       assert(clean(), "Unchanged organization must not block unload.");
+      const recoveryButton = element("organization-recovery").querySelector("button");
+      holdPath = `/api/books/${encodeURIComponent(recoveryButton.dataset.bookId)}/file-operations`;
+      recoveryButton.click();
+      await waitFor(() => Boolean(releaseRequest));
+      assert(element("file-operation-dialog").open && element("organization-dialog").open,
+        "Per-book recovery must open the selected book's recovery dialog above organization.");
+      releaseRequest(); releaseRequest = null;
+      await waitFor(() => !element("file-operation-dialog").querySelector("[data-close]").disabled);
+      close("file-operation-dialog");
       holdPath = "/api/file-operations/template-preview";
       element("generate-organization").click();
       await waitFor(() => Boolean(releaseRequest));
@@ -500,6 +545,15 @@
       element("organization-name").value = "closed-stale-draft";
       element("file-operation-name").value = "closed-stale-draft";
       assert(clean(), "Closed organization/move drafts must not block unload.");
+      archiveRoots = [{ index: 0, label: "Library 1" }];
+      const beforeArchive = [organizationPreviews, organizationWrites];
+      element("archive-selected").click();
+      await waitFor(() => element("organization-dialog").open && !element("organization-dialog").querySelector("[data-close]").disabled);
+      assert(organizationPreviews === beforeArchive[0] && organizationWrites === beforeArchive[1]
+        && element("apply-organization").disabled && element("generate-organization").disabled,
+        "Archive without a configured Archived root must stop, never preview or move into another root.");
+      close("organization-dialog");
+      archiveRoots = null;
 
       failedPages.add(order.pages[1]);
       heldPage = order.pages[1];

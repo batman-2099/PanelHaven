@@ -67,11 +67,12 @@ internal static class BookDeletionChecks
             paths[4] = (string)Sql("SELECT path FROM books WHERE id=$id", ("$id", ids[4]))!;
             Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "Series"));
             var move = store.PreviewFileMove(ids[0], new(0, "", "moved.cbz"));
-            var moved = store.ApplyFileMove(ids[0], new(0, "", "moved.cbz", move.Revision, true));
-            var undo = store.PreviewFileUndo(ids[0], moved.OperationId);
-            var undone = store.UndoFileOperation(ids[0], moved.OperationId, new(undo.Revision, true));
-            Check(File.Exists(paths[0]) && !File.Exists(Path.Combine(root, "Unknown Publisher", "Series", "moved.cbz")),
-                "Move undo did not restore the original unprefixed source.");
+            store.ApplyFileMove(ids[0], new(0, "", "moved.cbz", move.Revision, true));
+            var returnMove = store.PreviewFileMove(ids[0], new(0, "", "book0.cbz"));
+            store.ApplyFileMove(ids[0], new(0, "", "book0.cbz", returnMove.Revision, true));
+            paths[0] = Path.Combine(root, "Unknown Publisher", "Series", "book0.cbz");
+            Check(File.Exists(paths[0]) && !File.Exists(Path.Combine(root, "Unknown Publisher", "Series", "moved.cbz"))
+                && store.GetFileOperations(ids[0]).Count == 0, "Return move lost the source or retained completed history.");
 
             foreach (var user in new[] { "owner", "other" })
             {
@@ -181,10 +182,13 @@ internal static class BookDeletionChecks
             UnchangedSources();
 
             preview = Preview(selected);
-            Sql("UPDATE file_operations SET state='pending' WHERE id=$id", ("$id", undone.OperationId));
+            Sql("""
+                INSERT INTO file_operations(id,book_id,created_at,source,destination,hash,state,source_identity,security,file_size,modified_ticks)
+                VALUES('pending',$id,'',$source,$destination,'','pending','','{}',0,0)
+                """, ("$id", ids[0]), ("$source", paths[0]), ("$destination", paths[0] + ".reserved"));
             Check(!Preview(selected).CanDelete, "Pending move was deletable.");
             Reject<FileOperationConflictException>(() => Apply(preview));
-            Sql("UPDATE file_operations SET state='applied' WHERE id=$id", ("$id", undone.OperationId));
+            Sql("DELETE FROM file_operations WHERE id='pending'");
             Sql("INSERT INTO intake_operations(id,book_id,source,destination,state,journal) VALUES('pending',$id,$source,$destination,'pending','{}')",
                 ("$id", ids[3]), ("$source", paths[3]), ("$destination", source));
             Check(!Preview(selected).CanDelete && !Preview(ids[3]).CanDelete, "Pending intake owner or destination reservation was deletable.");
@@ -199,7 +203,7 @@ internal static class BookDeletionChecks
             Sql($"CREATE TRIGGER fail_selected_delete BEFORE DELETE ON books WHEN OLD.id='{ids[1]}' BEGIN SELECT RAISE(ABORT,'injected'); END");
             using var disconnected = new CancellationTokenSource();
             using var seenDeletion = new ManualResetEventSlim();
-            using var watcher = new FileSystemWatcher(root, Path.GetFileName(paths[0]));
+            using var watcher = new FileSystemWatcher(Path.GetDirectoryName(paths[0])!, Path.GetFileName(paths[0]));
             watcher.Deleted += (_, _) => { disconnected.Cancel(); seenDeletion.Set(); };
             watcher.EnableRaisingEvents = true;
             var result = Apply(preview, disconnected.Token);

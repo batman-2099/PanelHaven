@@ -55,7 +55,7 @@ public static class FileOperationChecks
             var store = new LibraryStore(database, roots);
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 1, "File-operation fixture did not import.");
             var id = store.ListBooks("owner", null).Items.Single().Id;
-            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database }.ToString());
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = database, ForeignKeys = true }.ToString());
             db.Open();
             object? Sql(string sql, object? value = null)
             {
@@ -71,11 +71,19 @@ public static class FileOperationChecks
                 Check(preview.CanApply, "Move preview unexpectedly conflicted: " + string.Join("; ", preview.Conflicts));
                 return store.ApplyFileMove(id, new(target, folder, filename, preview.Revision, true));
             }
-            void Undo(string operation)
+            void SeedLegacyHistory(string pendingId)
             {
-                var preview = store.PreviewFileUndo(id, operation);
-                Check(preview.CanApply, "Undo preview unexpectedly conflicted.");
-                store.UndoFileOperation(id, operation, new(preview.Revision, true));
+                Sql("""
+                    ALTER TABLE file_operations ADD COLUMN undo_of TEXT REFERENCES file_operations(id);
+                    ALTER TABLE file_operations ADD COLUMN message TEXT;
+                    INSERT INTO file_operations(id,book_id,created_at,source,destination,hash,state,committed,
+                        source_identity,stage_identity,security,file_size,modified_ticks)
+                    SELECT 'legacy-' || legacy.state,book_id,created_at,destination,source,hash,legacy.state,1,
+                        source_identity,stage_identity,security,file_size,modified_ticks
+                    FROM file_operations CROSS JOIN (SELECT 'applied' AS state UNION ALL SELECT 'undone' UNION ALL SELECT 'failed') legacy
+                    WHERE id=$value;
+                    UPDATE file_operations SET undo_of='legacy-applied' WHERE id=$value;
+                    """, pendingId);
             }
             var initialXml = (string)Sql("SELECT info_xml FROM books WHERE id=$id")!;
             Sql("UPDATE books SET info_xml=$value WHERE id=$id",
@@ -220,37 +228,35 @@ public static class FileOperationChecks
             var originalIdentity = Identity(path);
             var firstPreview = store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz"));
             Directory.Delete(createdPath);
-            var first = store.ApplyFileMove(id, new(0, createdFolder, "renamed.cbz", firstPreview.Revision, true));
+            store.ApplyFileMove(id, new(0, createdFolder, "renamed.cbz", firstPreview.Revision, true));
             Check(!File.Exists(path) && File.ReadAllBytes(Path.Combine(createdPath, "renamed.cbz")).SequenceEqual(original), "Same-device rename into a created folder lost or rewrote bytes.");
             Check(Identity(Path.Combine(createdPath, "renamed.cbz")) == originalIdentity, "Same-device rename unnecessarily copied the inode.");
             Check(!store.PreviewFileMove(id, new(0, createdFolder, "renamed.cbz")).CanApply, "Normalized no-op preview was applicable.");
             PrivateState();
-            var secondMove = Move(1, "", "moved.cbz");
+            Move(1, "", "moved.cbz");
             Check(store.GetBook("owner", id).Location == "Library 2/Unknown Publisher/Unknown Series/moved.cbz", "Cross-root location was not refreshed.");
-            Check(!store.PreviewFileUndo(id, first.OperationId).CanApply, "Older move was undoable before its descendant.");
-            var thirdMove = Move(roots.Length - 1, "", "cross-device.cbz");
+            Move(roots.Length - 1, "", "cross-device.cbz");
             Check(File.GetUnixFileMode(Path.Combine(roots[^1], createdFolder, "cross-device.cbz")) == (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead), "Cross-device copy lost permissions.");
             PrivateState();
             File.WriteAllBytes(Path.Combine(second, createdFolder, "moved.cbz"), original);
-            Check(!store.PreviewFileUndo(id, thirdMove.OperationId).CanApply, "Undo would overwrite an occupied original path.");
+            Check(!store.PreviewFileMove(id, new(1, "", "moved.cbz")).CanApply, "Return move would overwrite an occupied path.");
             File.Delete(Path.Combine(second, createdFolder, "moved.cbz"));
-            Undo(thirdMove.OperationId);
-            Undo(secondMove.OperationId);
-            Undo(first.OperationId);
+            Move(1, "", "moved.cbz");
+            Move(0, "", "original.cbz");
+            path = Path.Combine(createdPath, "original.cbz");
             PrivateState();
-            Check(File.ReadAllBytes(path).SequenceEqual(original) && !Directory.EnumerateFileSystemEntries(createdPath).Any()
-                && store.GetFileOperations(id).Count(row => row.State == "undone") == 3,
-                "Undo chain did not restore original bytes/path or durable history.");
-            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Scan split identity after moves/undo.");
+            Check(File.ReadAllBytes(path).SequenceEqual(original) && store.GetFileOperations(id).Count == 0
+                && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 0,
+                "Return moves changed bytes or retained completed history.");
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Scan split identity after moves.");
 
-            // Move/undo follows journal relationships even when the clock moves backwards.
-            var writtenMove = Move(1, "", "written.cbz");
-            var chainMove = Move(0, "nested", "move-chain.cbz");
-            Sql("UPDATE file_operations SET created_at='2000-01-01T00:00:00Z' WHERE id=$value", chainMove.OperationId);
-            Undo(chainMove.OperationId);
+            Move(1, "", "written.cbz");
+            Move(0, "nested", "move-chain.cbz");
+            Move(1, "", "written.cbz");
+            var beforeWrite = store.PreviewFileMove(id, new(0, "", "written-back.cbz"));
             var write = store.PreviewArchiveWrite(id);
             store.ApplyArchiveWrite(id, new(write.Revision, true));
-            Check(!store.PreviewFileUndo(id, writtenMove.OperationId).CanApply, "Move undo accepted a changed comicbook hash.");
+            Reject<FileOperationConflictException>(() => store.ApplyFileMove(id, new(0, "", "written-back.cbz", beforeWrite.Revision, true)));
             original = File.ReadAllBytes(Path.Combine(second, createdFolder, "written.cbz"));
             PrivateState();
 
@@ -259,34 +265,54 @@ public static class FileOperationChecks
             preview = store.PreviewFileMove(id, new(0, "", "failure.cbz"));
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "failure.cbz", preview.Revision, true)));
             Check(!File.Exists(Path.Combine(root, createdFolder, "failure.cbz")) && File.ReadAllBytes(Path.Combine(second, createdFolder, "written.cbz")).SequenceEqual(original)
-                && store.GetFileOperations(id).Any(row => row.State == "failed"), "Catalog failure did not safely roll back filesystem state.");
+                && store.GetFileOperations(id).Count == 0 && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 0,
+                "Catalog failure did not safely roll back and erase its journal.");
             Sql("DROP TRIGGER fail_file_move");
             PrivateState();
 
             // Retain a real journal reservation by failing both catalog commit and journal finalization.
             Sql("CREATE TRIGGER fail_file_move BEFORE UPDATE OF path ON books BEGIN SELECT RAISE(ABORT,'injected catalog failure'); END");
-            Sql("CREATE TRIGGER fail_file_finish BEFORE UPDATE OF state ON file_operations BEGIN SELECT RAISE(ABORT,'injected journal failure'); END");
+            Sql("CREATE TRIGGER fail_file_finish BEFORE DELETE ON file_operations BEGIN SELECT RAISE(ABORT,'injected journal failure'); END");
             preview = store.PreviewFileMove(id, new(0, "", "pending.cbz"));
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "pending.cbz", preview.Revision, true)));
             Sql("DROP TRIGGER fail_file_move; DROP TRIGGER fail_file_finish;");
             var pending = store.GetFileOperations(id).Single(row => row.State == "pending");
+            Check(store.GetBook("owner", id).Availability == "unavailable", "Unresolved rollback remained available before restart.");
+            SeedLegacyHistory(pending.Id);
             var pendingDestination = Path.Combine(root, createdFolder, "pending.cbz");
             var pendingSource = Path.Combine(second, createdFolder, "written.cbz");
             var hold = Path.Combine(second, createdFolder, $".panelhaven-move-{pending.Id}.hold");
             var partialStage = Path.Combine(root, createdFolder, $".panelhaven-move-{pending.Id}.stage");
             File.WriteAllText(partialStage, "partial copy; ownership was not published");
+            var olderStage = Path.Combine(second, createdFolder, ".panelhaven-move-legacy-failed.stage");
+            File.WriteAllText(olderStage, "legacy unverified copy");
+            var blockedMigration = false;
+            try { _ = new LibraryStore(database, roots); }
+            catch (InvalidDataException exception) { blockedMigration = exception.Message.Contains(id) && exception.Message.Contains(olderStage); }
+            Check(blockedMigration && File.Exists(olderStage) && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 4
+                && (string)Sql("SELECT undo_of FROM file_operations WHERE id=$value", pending.Id)! == "legacy-applied",
+                "Overlapping legacy recovery did not fail atomically with actionable staging details.");
+            File.Delete(olderStage); // Explicit fixture-only quarantine of the older unrelated stage.
             store = new LibraryStore(database, roots);
             var partialRecovery = store.PreviewFileRecovery(id, pending.Id);
-            Check(partialRecovery.CanApply && partialRecovery.Message!.Contains("Library 1/Unknown Publisher/Unknown Series/.panelhaven-move-" + pending.Id + ".stage"),
-                "An intact source could not cancel an interrupted copy while retaining its unknown staging file.");
-            store.RecoverFileOperation(id, pending.Id, new(partialRecovery.Revision, true));
+            Check(!partialRecovery.CanApply && partialRecovery.Conflicts.Any(conflict => conflict.Contains(".panelhaven-move-" + pending.Id + ".stage")),
+                "Unknown staging file did not block recovery with its location.");
+            Reject<FileOperationConflictException>(() => store.RecoverFileOperation(id, pending.Id, new(partialRecovery.Revision, true)));
             store = new LibraryStore(database, roots);
             Check(File.Exists(partialStage) && File.Exists(pendingSource) && !File.Exists(pendingDestination)
+                && store.GetFileOperations(id).Single().Id == pending.Id
+                && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 1
+                && store.GetBook("owner", id).Availability == "unavailable"
                 && store.ScanAsync(default).GetAwaiter().GetResult().Added == 0,
-                "Partial-copy cancellation lost bytes or imported its staging file.");
-            PrivateState();
-            File.Delete(partialStage); // Remove only this check's intentionally retained partial copy.
-            Sql("UPDATE file_operations SET state='pending',message=NULL WHERE id=$value", pending.Id);
+                "Migration or partial-copy recovery lost pending legacy reversal, retained history, or imported staging.");
+            SeedLegacyHistory(pending.Id);
+            Sql("UPDATE file_operations SET state='failed' WHERE id=$value", pending.Id);
+            store = new LibraryStore(database, roots);
+            Check(store.GetFileOperations(id).Single().Id == pending.Id
+                && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 1
+                && !store.PreviewFileRecovery(id, pending.Id).CanApply && File.Exists(partialStage),
+                "Migration erased a legacy canceled operation whose unverified staging file still needed inspection.");
+            File.Delete(partialStage); // Explicit fixture-only manual quarantine simulation.
             File.Move(pendingSource, hold);
             File.Copy(hold, pendingDestination);
             File.SetUnixFileMode(pendingDestination, File.GetUnixFileMode(hold));
@@ -314,20 +340,27 @@ public static class FileOperationChecks
             File.WriteAllBytes(pendingDestination, original);
             recovery = store.PreviewFileRecovery(id, pending.Id);
             store.RecoverFileOperation(id, pending.Id, new(recovery.Revision, true));
-            Check(!File.Exists(hold) && !File.Exists(pendingDestination) && File.ReadAllBytes(pendingSource).SequenceEqual(original), "Explicit recovery did not cancel safely.");
+            Check(!File.Exists(hold) && !File.Exists(pendingDestination) && File.ReadAllBytes(pendingSource).SequenceEqual(original)
+                && store.GetFileOperations(id).Count == 0, "Explicit recovery did not cancel safely and erase its journal.");
             PrivateState();
 
             // An already committed move with interrupted journal finalization is completed, not reversed.
-            Sql("CREATE TRIGGER fail_file_finish BEFORE UPDATE OF state ON file_operations BEGIN SELECT RAISE(ABORT,'injected journal failure'); END");
+            Sql("CREATE TRIGGER fail_file_finish BEFORE DELETE ON file_operations BEGIN SELECT RAISE(ABORT,'injected journal failure'); END");
             preview = store.PreviewFileMove(id, new(0, "", "committed.cbz"));
             Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "committed.cbz", preview.Revision, true)));
             Sql("DROP TRIGGER fail_file_finish");
             pending = store.GetFileOperations(id).Single(row => row.State == "pending");
+            Check(store.GetBook("owner", id).Availability == "unavailable", "Committed pending cleanup remained available before restart.");
+            SeedLegacyHistory(pending.Id);
             store = new LibraryStore(database, roots);
-            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Committed pending path split identity on restart.");
+            Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0
+                && store.GetFileOperations(id).Single().Id == pending.Id
+                && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 1,
+                "Migration lost committed legacy reversal, retained completed parents, or split identity.");
             recovery = store.PreviewFileRecovery(id, pending.Id);
             store.RecoverFileOperation(id, pending.Id, new(recovery.Revision, true));
-            Check(store.GetFileOperations(id).Single(row => row.Id == pending.Id).State == "applied", "Committed recovery was not durable.");
+            Check(store.GetFileOperations(id).Count == 0 && (long)Sql("SELECT COUNT(*) FROM file_operations")! == 0
+                && File.Exists(Path.Combine(root, createdFolder, "committed.cbz")), "Committed recovery did not retain destination and erase its journal.");
             PrivateState();
 
             // Every supported container family and alias uses the same byte-preserving move protocol.
@@ -341,11 +374,12 @@ public static class FileOperationChecks
                 var firstPage = store.GetPage(formatId, 0).Bytes;
                 var formatFolder = store.CreateFileOperationFolder(new(1, "") { BookId = formatId }).Folder;
                 var formatPreview = store.PreviewFileMove(formatId, new(1, "", "format" + extension));
-                var moved = store.ApplyFileMove(formatId, new(1, "", "format" + extension, formatPreview.Revision, true));
+                store.ApplyFileMove(formatId, new(1, "", "format" + extension, formatPreview.Revision, true));
                 Check(File.ReadAllBytes(Path.Combine(second, formatFolder, "format" + extension)).SequenceEqual(bytes), "Container move changed bytes.");
-                var undo = store.PreviewFileUndo(formatId, moved.OperationId);
-                store.UndoFileOperation(formatId, moved.OperationId, new(undo.Revision, true));
-                Check(store.GetPage(formatId, 0).Bytes.SequenceEqual(firstPage), "Moved/undone non-ZIP reader returned different page bytes.");
+                var returnMove = store.PreviewFileMove(formatId, new(0, "", "format" + extension));
+                store.ApplyFileMove(formatId, new(0, "", "format" + extension, returnMove.Revision, true));
+                Check(store.GetPage(formatId, 0).Bytes.SequenceEqual(firstPage) && store.GetFileOperations(formatId).Count == 0,
+                    "Return move changed non-ZIP reader bytes or retained history.");
             }
             Check(!Directory.EnumerateFiles(root, ".panelhaven-move-*", SearchOption.AllDirectories).Any()
                 && !Directory.EnumerateFiles(second, ".panelhaven-move-*", SearchOption.AllDirectories).Any(), "Completed operations left staging scaffolds.");

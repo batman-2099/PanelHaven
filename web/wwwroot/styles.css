@@ -311,9 +311,9 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
 #page-metadata-status { white-space: pre-wrap; overflow-wrap: anywhere; }
 #file-operation-controls { display: grid; gap: .5rem; min-width: 0; }
 #file-operation-controls input, #file-operation-controls select { min-width: 0; width: 100%; }
-#file-operation-preview, #file-operation-history { margin: 1.2rem 0; }
-#file-operation-preview dd, #file-operation-history p { overflow-wrap: anywhere; white-space: pre-wrap; }
-#file-operation-status, #file-operation-history-status { white-space: pre-wrap; }
+#file-operation-preview, #file-operation-recovery { margin: 1.2rem 0; }
+#file-operation-preview dd, #file-operation-recovery p { overflow-wrap: anywhere; white-space: pre-wrap; }
+#file-operation-status, #file-operation-recovery-status { white-space: pre-wrap; }
 #file-operation-apply-form { margin-bottom: 1.5rem; }
 #organization-controls, .organization-row label { display: grid; min-width: 0; gap: .5rem; }
 #organization-controls label { display: grid; gap: .35rem; min-width: 0; }
@@ -322,8 +322,8 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
 .organization-row dl { grid-template-columns: minmax(65px, 1fr) minmax(0, 4fr); }
 .organization-row dd, #organization-status { white-space: pre-wrap; overflow-wrap: anywhere; }
 #organization-review, #organization-result { margin: 1.2rem 0; }
-.organization-history { display: flex; flex-wrap: wrap; gap: .5rem; }
-.organization-history button { max-width: 100%; overflow-wrap: anywhere; }
+.organization-recovery { display: flex; flex-wrap: wrap; gap: .5rem; }
+.organization-recovery button { max-width: 100%; overflow-wrap: anywhere; }
 #management-status { overflow-wrap: anywhere; }
 #process-unsorted { margin-bottom: .65rem; }
 #intake-queue, #intake-root { width: 100%; min-width: 0; margin-bottom: var(--space); }

@@ -306,7 +306,6 @@ let metadataPreview = null;
 let metadataReportPage = 1;
 let metadataReportPages = 1;
 let metadataReportGeneration = 0;
-let metadataExportBusy = false;
 let intake = null;
 let archiveBookId = null;
 let archiveGeneration = 0;
@@ -528,13 +527,13 @@ function showLogin() {
   $("metadata-report-items").replaceChildren();
   $("metadata-report-status").textContent = "";
   $("metadata-report-page").textContent = "Page 1 of 1";
-  metadataDirty = metadataBusy = metadataBulk = metadataExportBusy = false;
+  metadataDirty = metadataBusy = metadataBulk = false;
   invalidateMetadataPreview();
   $("metadata-status").textContent = "";
   resetArchiveWrite();
   resetFileOperation();
   resetOrganization();
-  $("organize-selected").hidden = true;
+  $("organize-selected").hidden = $("archive-selected").hidden = true;
   deletion = null;
   deletionBusy = false;
   $("delete-selected").hidden = true;
@@ -623,7 +622,7 @@ function signedIn(data) {
   $("login-form").reset();
   clearError();
   $("bulk-metadata").hidden = data.role !== "admin";
-  $("organize-selected").hidden = data.role !== "admin";
+  $("organize-selected").hidden = $("archive-selected").hidden = data.role !== "admin";
   $("delete-selected").hidden = data.role !== "admin";
   deletion = null;
   deletionBusy = false;
@@ -1447,13 +1446,12 @@ function updateSelection() {
   $("export-selected-comics").disabled = !session || session.mustChangePassword || !count || count > 100;
   $("mark-selected-read").disabled = $("mark-selected-unread").disabled = readingStatusBusy || !session || session.mustChangePassword || !count || count > 100;
   if (comicExport?.selection && !comicExportCurrent(comicExport)) resetComicExport();
-  $("organize-selected").disabled = session?.role !== "admin" || !count || count > 100;
+  $("organize-selected").disabled = $("archive-selected").disabled = session?.role !== "admin" || !count || count > 100;
   $("delete-selected").disabled = deletionBusy || session?.role !== "admin" || !count || count > 100;
   if ($("organization-dialog").open && (organizationBookIds.length !== count || organizationBookIds.some((id) => !selectedBooks.has(id)))) {
     invalidateOrganizationPreview(true);
     $("organization-status").textContent = "Selection changed. Close and reopen Organize selected to use the current selection.";
   }
-  $("export-metadata-json").disabled = $("export-metadata-csv").disabled = metadataExportBusy || !count;
   $("add-list-books").disabled = managementBusy || !count || !$("add-to-list").value;
   $("remove-list-books").hidden = activeList()?.kind !== "manual";
   $("remove-list-books").disabled = managementBusy || !count;
@@ -2465,31 +2463,6 @@ $("download-comics").addEventListener("click", async () => {
   }
 });
 
-async function exportMetadata(format) {
-  if (!session || session.mustChangePassword || metadataExportBusy || !selectedBooks.size || selectedBooks.size > 100) return;
-  const epoch = authEpoch;
-  const ids = [...selectedBooks];
-  metadataExportBusy = true;
-  updateSelection();
-  $("management-status").textContent = `Exporting metadata for ${ids.length} selected books…`;
-  try {
-    const blob = await api(`/api/books/metadata/export?format=${format}`, { method: "POST", body: JSON.stringify({ bookIds: ids }), blob: true });
-    if (epoch !== authEpoch) return;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `panelhaven-metadata.${format}`;
-    document.body.append(link);
-    try { link.click(); }
-    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-    $("management-status").textContent = `Metadata ${format.toUpperCase()} download started for ${ids.length} selected books.`;
-  } catch (error) {
-    if (epoch === authEpoch) $("management-status").textContent = `Metadata export failed: ${error.message}`;
-  } finally {
-    if (epoch === authEpoch) { metadataExportBusy = false; updateSelection(); }
-  }
-}
-
 function comicVineLink(url, label = "Comic Vine") {
   const link = textElement("a", label);
   try {
@@ -3247,9 +3220,9 @@ $("archive-form").addEventListener("submit", async (event) => {
 function updateFileOperationControls() {
   const available = session?.role === "admin" && fileOperationBookId !== null;
   $("file-operation-controls").disabled = $("preview-file-operation").disabled = !available || fileOperationBusy || !$("file-operation-root").options.length;
-  $("refresh-file-operation-history").disabled = !available || fileOperationBusy;
+  $("refresh-file-operation-recovery").disabled = !available || fileOperationBusy;
   $("apply-file-operation").disabled = !available || fileOperationBusy || !fileOperationPreview?.canApply;
-  for (const button of $("file-operation-history").querySelectorAll("button")) button.disabled = !available || fileOperationBusy;
+  for (const button of $("file-operation-recovery").querySelectorAll("button")) button.disabled = !available || fileOperationBusy;
   $("file-operation-dialog").querySelector("[data-close]").disabled = fileOperationBusy;
 }
 
@@ -3271,8 +3244,8 @@ function resetFileOperation() {
   $("file-operation-draft").reset();
   $("file-operation-name").setCustomValidity("");
   $("file-operation-root").replaceChildren();
-  $("file-operation-history").replaceChildren();
-  for (const id of ["file-operation-book", "file-operation-status", "file-operation-history-status", "file-operation-extension"]) $(id).textContent = "";
+  $("file-operation-recovery").replaceChildren();
+  for (const id of ["file-operation-book", "file-operation-status", "file-operation-recovery-status", "file-operation-extension"]) $(id).textContent = "";
   invalidateFileOperationPreview();
 }
 
@@ -3293,15 +3266,15 @@ function organizationDirty() {
   return organizationDraft() !== organizationInitialDraft;
 }
 
-async function refreshFileOperationHistory() {
+async function refreshFileOperationRecovery() {
   if (session?.role !== "admin" || !fileOperationBookId || fileOperationBusy) return;
   const generation = fileOperationGeneration;
   const epoch = authEpoch;
   fileOperationBusy = true;
-  if (fileOperationPreview) $("file-operation-status").textContent = "History refresh cleared the confirmation. Preview again before applying.";
+  if (fileOperationPreview) $("file-operation-status").textContent = "Checking pending recovery cleared the confirmation. Preview again before applying.";
   invalidateFileOperationPreview();
-  $("file-operation-history").replaceChildren();
-  $("file-operation-history-status").textContent = "Loading move and undo history…";
+  $("file-operation-recovery").replaceChildren();
+  $("file-operation-recovery-status").textContent = "Checking for interrupted moves…";
   try {
     const operations = await api(`/api/books/${encodeURIComponent(fileOperationBookId)}/file-operations`);
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
@@ -3312,27 +3285,24 @@ async function refreshFileOperationHistory() {
         textElement("p", `From: ${operation.source}`), textElement("p", `To: ${operation.destination}`),
         textElement("p", `SHA-256: ${operation.hash}`, "duplicate-key"));
       if (operation.message) row.append(textElement("p", operation.message));
-      if (operation.state === "pending") row.append(textElement("p", "Pending operation: do not move, remove, or overwrite either path yourself. Review recovery below; if blocked, preserve all files and resolve the reported conflict before trying a new preview.", "book-availability"));
-      if (operation.canRecover || operation.canUndo) {
-        const action = operation.canRecover ? "recover" : "undo";
-        const button = textElement("button", action === "recover" ? "Preview pending recovery" : "Preview undo");
+      row.append(textElement("p", "Pending recovery: do not move, remove, or overwrite either path yourself. Review recovery below; if blocked, preserve all files and resolve the reported conflict before trying a new preview.", "book-availability"));
+      if (operation.canRecover) {
+        const button = textElement("button", "Preview pending recovery");
         button.type = "button";
         button.dataset.operationId = operation.id;
-        button.dataset.operation = action;
-        button.setAttribute("aria-label", `Preview ${action === "recover" ? "recovery" : "undo"} for operation ${operation.id}`);
-        button.addEventListener("click", () => previewFileOperation(action, operation.id));
+        button.dataset.operation = "recover";
+        button.setAttribute("aria-label", `Preview recovery for operation ${operation.id}`);
+        button.addEventListener("click", () => previewFileOperation("recover", operation.id));
         row.append(button);
-      } else if (operation.state === "applied") {
-        row.append(textElement("p", "Undo is not currently available for this record. A newer move, changed comicbook, or occupied original path can prevent undo.", "muted"));
       }
-      $("file-operation-history").append(row);
+      $("file-operation-recovery").append(row);
     }
-    $("file-operation-history-status").textContent = operations.length
-      ? `Showing ${operations.length} most recent operation(s), up to 100. Undo and recovery always require a fresh preview.`
-      : "No file operations are recorded for this book.";
+    $("file-operation-recovery-status").textContent = operations.length
+      ? `${operations.length} interrupted move(s) need recovery. Preview and confirm each recovery separately.`
+      : "No pending move recovery. Completed moves are not retained; check the comicbook's current location if an outcome was uncertain.";
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration)
-      $("file-operation-history-status").textContent = `Could not load history: ${error.message}. Use Refresh history to try again. Do not assume an uncertain operation failed.`;
+      $("file-operation-recovery-status").textContent = `Could not check pending recovery: ${error.message}. Use Check pending recovery to try again. Do not assume an uncertain operation failed.`;
   } finally {
     if (epoch === authEpoch && generation === fileOperationGeneration) {
       fileOperationBusy = false;
@@ -3363,12 +3333,12 @@ async function previewFileOperation(operation = "move", operationId = null) {
     if (preview.bookId !== fileOperationBookId || preview.operation !== operation || (operationId !== null && preview.operationId !== operationId) || !preview.revision)
       throw new Error("The preview did not match this book and operation.");
     fileOperationPreview = { ...preview, draft, canApply: preview.canApply === true && !preview.conflicts.length };
-    $("file-operation-preview-title").textContent = operation === "recover" ? "Review pending recovery" : operation === "undo" ? "Review exact undo" : "Review exact move";
+    $("file-operation-preview-title").textContent = operation === "recover" ? "Review pending recovery" : "Review exact move";
     $("file-operation-source").textContent = preview.source;
     $("file-operation-destination").textContent = preview.destination;
     $("file-operation-hash").textContent = preview.sourceHash;
     for (const conflict of preview.conflicts) $("file-operation-conflicts").append(textElement("li", conflict));
-    $("apply-file-operation").textContent = operation === "recover" ? "Apply reviewed recovery" : operation === "undo" ? "Apply reviewed undo" : "Apply reviewed move";
+    $("apply-file-operation").textContent = operation === "recover" ? "Apply reviewed recovery" : "Apply reviewed move";
     $("file-operation-preview").hidden = false;
     $("file-operation-preview").focus();
     $("file-operation-status").textContent = [preview.message, fileOperationPreview.canApply
@@ -3392,10 +3362,8 @@ function updateOrganizationControls() {
     organizationBookIds.length === selectedBooks.size && organizationBookIds.every((id) => selectedBooks.has(id));
   const available = session?.role === "admin" && selected && !organizationBusy;
   $("organization-controls").disabled = $("generate-organization").disabled = !available || !$("organization-root").options.length;
-  $("preview-organization").disabled = !available || !organizationRows.length;
   $("apply-organization").disabled = !available || !organizationPreview?.canApply;
-  for (const input of $("organization-rows").querySelectorAll("input")) input.disabled = !available;
-  for (const button of $("organization-history").querySelectorAll("button")) button.disabled = organizationBusy;
+  for (const button of $("organization-recovery").querySelectorAll("button")) button.disabled = organizationBusy;
   $("organization-dialog").querySelector("[data-close]").disabled = organizationBusy;
 }
 
@@ -3416,31 +3384,30 @@ function resetOrganization() {
   organizationBookIds = [];
   $("organization-draft").reset();
   $("organization-root").replaceChildren();
-  $("organization-history").replaceChildren();
+  $("organization-recovery").replaceChildren();
   $("organization-outcome").replaceChildren();
   $("organization-result").hidden = true;
   $("organization-selection").textContent = $("organization-status").textContent = "";
   invalidateOrganizationPreview(true);
 }
 
-async function previewOrganization(templates) {
+async function previewOrganization() {
   if (session?.role !== "admin" || organizationBusy || !organizationBookIds.length ||
       organizationBookIds.length !== selectedBooks.size || organizationBookIds.some((id) => !selectedBooks.has(id))) return;
-  if (templates && !$("organization-draft").reportValidity()) return;
-  if (!templates && !organizationRows.length) return;
+  if (!$("organization-draft").reportValidity()) return;
   invalidateOrganizationPreview();
   const generation = organizationGeneration;
   const draftGeneration = organizationDraftGeneration;
   const epoch = authEpoch;
-  const body = templates ? {
+  const body = {
     bookIds: [...organizationBookIds], rootIndex: Number($("organization-root").value),
     folderTemplate: $("organization-folder").value, fileNameTemplate: $("organization-name").value
-  } : { items: organizationRows.map((row) => ({ ...row })) };
+  };
   organizationBusy = true;
   updateOrganizationControls();
   $("organization-status").textContent = "Creating missing destination folders and checking every source hash. No comicbooks are being moved…";
   try {
-    const preview = await api(`/api/file-operations/${templates ? "template-preview" : "preview"}`, { method: "POST", body: JSON.stringify(body) });
+    const preview = await api("/api/file-operations/template-preview", { method: "POST", body: JSON.stringify(body) });
     if (epoch !== authEpoch || generation !== organizationGeneration || draftGeneration !== organizationDraftGeneration) return;
     if (!preview.revision || !Array.isArray(preview.items) || preview.items.length !== organizationBookIds.length ||
         new Set(preview.items.map((row) => row.bookId)).size !== organizationBookIds.length ||
@@ -3450,38 +3417,29 @@ async function previewOrganization(templates) {
     organizationPreview = { ...preview, canApply: preview.canApply === true &&
       preview.items.every((row) => !row.conflicts.length && (row.canApply || row.noOp)) && preview.items.some((row) => !row.noOp) };
     $("organization-rows").replaceChildren();
-    preview.items.forEach((item, index) => {
+    preview.items.forEach((item) => {
       const row = textElement("article", "", "maintenance-row organization-row");
       row.append(textElement("h4", item.source || `Book ${item.bookId}`));
-      const historyButton = $("organization-history").querySelector(`[data-book-id="${CSS.escape(item.bookId)}"]`);
-      if (historyButton) historyButton.textContent = `Move history: ${item.source || item.bookId}`;
+      const recoveryButton = $("organization-recovery").querySelector(`[data-book-id="${CSS.escape(item.bookId)}"]`);
+      if (recoveryButton) recoveryButton.textContent = `Check pending recovery: ${item.source || item.bookId}`;
       const paths = document.createElement("dl");
       for (const [label, value] of [["From", item.source], ["To", item.destination], ["Source SHA-256", item.sourceHash]])
         paths.append(textElement("dt", label), textElement("dd", value || "Unavailable — see conflicts"));
       row.append(paths);
-      const input = document.createElement("input");
-      input.value = organizationRows[index].fileName || "";
-      input.autocomplete = "off";
-      input.setAttribute("aria-label", `Filename including unchanged extension for ${item.source || `book ${item.bookId}`}`);
-      input.addEventListener("input", () => {
-        organizationRows[index].fileName = input.value;
-        invalidateOrganizationPreview();
-        $("organization-status").textContent = "Row edits are not previewed. Re-preview edited destinations before confirming.";
-      });
-      row.append(labeledControl("Filename including unchanged extension", input));
       const conflicts = document.createElement("ul");
       conflicts.className = "scan-error";
       for (const conflict of item.conflicts) conflicts.append(textElement("li", conflict));
-      row.append(conflicts, textElement("p", item.conflicts.length ? "Blocked — resolve conflicts and preview again." :
-        item.noOp ? "No change — this book will be skipped." : "Ready for review."));
+      row.append(conflicts);
+      if (item.conflicts.length || item.noOp)
+        row.append(textElement("p", item.conflicts.length ? "Blocked — resolve conflicts and preview again." : "No change — this book will be skipped."));
       $("organization-rows").append(row);
     });
     $("organization-review").hidden = false;
     $("organization-review").focus();
     $("organization-status").textContent = organizationPreview.canApply
-      ? "Nothing has moved. Review every path and hash, then explicitly confirm. Any destination edit requires a new preview."
+      ? "Review every destination, then choose Move. Changing the destination or templates requires a new preview."
       : preview.items.some((row) => row.conflicts.length)
-        ? "The entire batch is blocked by row conflicts. Edit destinations or templates and preview again."
+        ? "The entire batch is blocked by row conflicts. Edit the destination or templates and preview again."
         : "There are no applicable moves. All unchanged rows are skipped; apply is disabled.";
   } catch (error) {
     if (epoch === authEpoch && generation === organizationGeneration && draftGeneration === organizationDraftGeneration) {
@@ -3496,7 +3454,7 @@ async function previewOrganization(templates) {
   }
 }
 
-$("organize-selected").addEventListener("click", async () => {
+async function openOrganization(archive = false) {
   if (session?.role !== "admin" || organizationBusy) return;
   if (!selectedBooks.size || selectedBooks.size > 100) {
     $("management-status").textContent = "Select between 1 and 100 books across pages to organize.";
@@ -3506,15 +3464,15 @@ $("organize-selected").addEventListener("click", async () => {
   organizationBookIds = [...selectedBooks];
   $("organization-selection").textContent = `${organizationBookIds.length} of at most 100 books selected across library pages.`;
   for (const id of organizationBookIds) {
-    const button = textElement("button", `Move history: ${id}`);
+    const button = textElement("button", `Check pending recovery: ${id}`);
     button.type = "button";
     button.dataset.bookId = id;
     button.addEventListener("click", () => {
       invalidateOrganizationPreview();
-      $("organization-status").textContent = "Opening history cleared this batch confirmation. Preview the batch again after any undo or recovery.";
+      $("organization-status").textContent = "Checking pending recovery cleared this batch confirmation. Preview the batch again after recovery.";
       openFileOperation({ id, title: `Book ${id}`, location: "" });
     });
-    $("organization-history").append(button);
+    $("organization-recovery").append(button);
   }
   organizationBusy = true;
   updateOrganizationControls();
@@ -3525,12 +3483,19 @@ $("organize-selected").addEventListener("click", async () => {
   try {
     const roots = await api("/api/file-operation-roots");
     if (epoch !== authEpoch || generation !== organizationGeneration) return;
+    const archived = archive ? roots.find((root) => root.label === "Archived") : null;
+    if (archive && !archived) {
+      $("organization-status").textContent = "Configure an Archived folder in Server settings and restart before archiving.";
+      return;
+    }
     $("organization-root").replaceChildren(...roots.map((root) => new Option(root.label, root.index)));
+    if (archived) $("organization-root").value = String(archived.index);
     $("organization-status").textContent = roots.length ? "Choose a root and templates, then generate the preview. No files have changed."
-      : "No configured destination roots are available. Per-book history is still accessible below.";
+      : "No configured destination roots are available. Pending recovery is still accessible below.";
   } catch (error) {
     if (epoch === authEpoch && generation === organizationGeneration)
-      $("organization-status").textContent = `Could not load roots: ${error.message}. Close and reopen to try again. Per-book history is still accessible below.`;
+      $("organization-status").textContent = `Could not load roots: ${error.message}. Close and reopen to try again. Pending recovery is still accessible below.`;
+    return;
   } finally {
     if (epoch === authEpoch && generation === organizationGeneration) {
       organizationInitialDraft = organizationDraft();
@@ -3538,14 +3503,20 @@ $("organize-selected").addEventListener("click", async () => {
       updateOrganizationControls();
     }
   }
-});
+  if (archive) {
+    await previewOrganization();
+    if (epoch === authEpoch && generation === organizationGeneration && organizationPreview?.canApply)
+      $("organization-apply-form").requestSubmit();
+  }
+}
+$("organize-selected").addEventListener("click", () => openOrganization());
+$("archive-selected").addEventListener("click", () => openOrganization(true));
 $("organization-dialog").addEventListener("close", () => { if (!$("organization-dialog").open) resetOrganization(); });
 for (const name of ["input", "change"]) $("organization-controls").addEventListener(name, () => {
   invalidateOrganizationPreview(true);
-  $("organization-status").textContent = "Root or template changed. Generate a new template preview; previous row edits were discarded.";
+  $("organization-status").textContent = "Destination or template changed. Generate a new template preview.";
 });
-$("organization-draft").addEventListener("submit", (event) => { event.preventDefault(); previewOrganization(true); });
-$("preview-organization").addEventListener("click", () => previewOrganization(false));
+$("organization-draft").addEventListener("submit", (event) => { event.preventDefault(); previewOrganization(); });
 $("organization-apply-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (session?.role !== "admin" || organizationBusy) return;
@@ -3581,8 +3552,8 @@ $("organization-apply-form").addEventListener("submit", async (event) => {
       $("organization-outcome").append(entries.length ? list : textElement("p", "None"));
     }
     $("organization-status").textContent = result.failedBookId
-      ? "Batch stopped at the first failure. Completed moves were kept. A book may appear as both completed and failed if its journal needs recovery. Inspect the per-book histories below before a new preview; nothing will be retried automatically."
-      : "Batch completed. Unchanged books were skipped. Book identity and private reading progress were kept. Use per-book history for reviewed undo.";
+      ? "Batch stopped at the first failure. Completed moves were kept. A book may appear as both completed and failed if cleanup needs recovery. Check pending recovery below before a new preview; nothing will be retried automatically."
+      : "Batch completed. Unchanged books were skipped. Book identity and private reading progress were kept.";
     $("organization-result").hidden = false;
     $("organization-result").focus();
     if (!result.failedBookId) organizationInitialDraft = organizationDraft();
@@ -3590,11 +3561,11 @@ $("organization-apply-form").addEventListener("submit", async (event) => {
     if (epoch === authEpoch && generation === organizationGeneration) {
       const message = error.status === 409
         ? `${error.message} Revalidation rejected this batch before execution. Resolve conflicts and preview again.`
-        : `Could not confirm the batch outcome: ${error.message}. Some moves may have completed. Inspect every per-book history below before proceeding; pending entries offer recovery previews.`;
+        : `Could not confirm the batch outcome: ${error.message}. Some moves may have completed. Check pending recovery for every book below, and check each comicbook's current location before proceeding.`;
       $("organization-status").textContent = `${message} Nothing will be retried automatically.`;
       $("organization-outcome").append(textElement("p", error.status === 409
         ? "No moves were executed by this request. The preview is no longer valid."
-        : "Completed, skipped, failed, and not-attempted counts are unknown. The per-book journals are authoritative."));
+        : "Completed, skipped, failed, and not-attempted counts are unknown. Only interrupted moves are retained for recovery; completed moves are not retained."));
       $("organization-result").hidden = false;
       $("organization-result").focus();
     }
@@ -3620,7 +3591,7 @@ $("organization-apply-form").addEventListener("submit", async (event) => {
           }
         } catch (error) {
           if (epoch === authEpoch && detailsGeneration === detailGeneration)
-            $("details-status").textContent = `Could not refresh details: ${error.message}. Close and reopen Book details; inspect move history for the operation outcome.`;
+            $("details-status").textContent = `Could not refresh details: ${error.message}. Close and reopen Book details; check pending recovery and the comicbook's current location before proceeding.`;
         }
       }
     }
@@ -3638,7 +3609,7 @@ async function openFileOperation(book) {
   fileOperationExtension = name.match(/\.[^.]+$/u)?.[0] || "";
   $("file-operation-name").value = name;
   $("file-operation-extension").textContent = `Keep the source extension${fileOperationExtension ? `: ${fileOperationExtension}` : ""}. This is a rename / move, not a comicbook conversion.`;
-  $("file-operation-book").textContent = `${bookTitle(book)} · ${location || "Open history below; source availability is not required."}`;
+  $("file-operation-book").textContent = `${bookTitle(book)} · ${location || "Check pending recovery below; source availability is not required."}`;
   $("file-operation-status").textContent = "Loading destinations…";
   fileOperationBusy = true;
   updateFileOperationControls();
@@ -3651,15 +3622,15 @@ async function openFileOperation(book) {
     $("file-operation-root").replaceChildren(...roots.map((root) => new Option(root.label, root.index)));
     const sourceRoot = roots.find((root) => location.startsWith(`${root.label}/`));
     if (sourceRoot) $("file-operation-root").value = String(sourceRoot.index);
-    $("file-operation-status").textContent = roots.length ? "Choose a destination, then preview the exact paths before moving." : "No destinations are configured. Move history is available below.";
+    $("file-operation-status").textContent = roots.length ? "Choose a destination, then preview the exact paths before moving." : "No destinations are configured. Pending recovery is available below.";
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration)
-      $("file-operation-status").textContent = `Could not load destination roots: ${error.message}. Close and reopen to try again. History and pending recovery remain available below.`;
+      $("file-operation-status").textContent = `Could not load destination roots: ${error.message}. Close and reopen to try again. Pending recovery remains available below.`;
   } finally {
     if (epoch === authEpoch && generation === fileOperationGeneration) {
       fileOperationInitialDraft = JSON.stringify(fileOperationDraft());
       fileOperationBusy = false;
-      await refreshFileOperationHistory();
+      await refreshFileOperationRecovery();
     }
   }
 }
@@ -3671,7 +3642,7 @@ for (const name of ["input", "change"]) $("file-operation-controls").addEventLis
   $("file-operation-status").textContent = "Destination changed. Preview again before confirming; nothing has been applied.";
 });
 $("file-operation-draft").addEventListener("submit", (event) => { event.preventDefault(); previewFileOperation(); });
-$("refresh-file-operation-history").addEventListener("click", refreshFileOperationHistory);
+$("refresh-file-operation-recovery").addEventListener("click", refreshFileOperationRecovery);
 $("file-operation-apply-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (session?.role !== "admin" || !fileOperationBookId || fileOperationBusy) return;
@@ -3694,7 +3665,7 @@ $("file-operation-apply-form").addEventListener("submit", async (event) => {
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
     invalidateReaderNextIssue(id);
     fileOperationInitialDraft = JSON.stringify(fileOperationDraft());
-    $("file-operation-status").textContent = "Reviewed operation completed. Book identity, metadata, and private reading data were kept. Review refreshed history below.";
+    $("file-operation-status").textContent = "Reviewed operation completed. Book identity, metadata, and private reading data were kept.";
     failedCovers.delete(id);
     loadLists();
     loadPublishers();
@@ -3717,12 +3688,12 @@ $("file-operation-apply-form").addEventListener("submit", async (event) => {
   } catch (error) {
     if (epoch === authEpoch && generation === fileOperationGeneration)
       $("file-operation-status").textContent = error.status === 409
-        ? `${error.message} The preview is invalid. Inspect refreshed history, resolve conflicts, and preview again before confirming. Nothing will be retried automatically.`
-        : `Could not confirm the operation: ${error.message}. It may have completed. Inspect refreshed history and both paths before proceeding; pending operations offer recovery previews. Nothing will be retried automatically.`;
+        ? `${error.message} The preview is invalid. Check pending recovery below, resolve conflicts, and preview again before confirming. Nothing will be retried automatically.`
+        : `Could not confirm the operation: ${error.message}. It may have completed. Check pending recovery below and the comicbook's current location before proceeding. Nothing will be retried automatically.`;
   } finally {
     if (epoch === authEpoch && generation === fileOperationGeneration) {
       fileOperationBusy = false;
-      await refreshFileOperationHistory();
+      await refreshFileOperationRecovery();
     }
   }
 });
@@ -4305,8 +4276,6 @@ $("metadata-controls").addEventListener("change", metadataChanged);
 $("custom-values").addEventListener("focusout", (event) => {
   if (event.target.matches(".custom-name")) queueMicrotask(filterMetadataFields);
 });
-$("export-metadata-json").addEventListener("click", () => exportMetadata("json"));
-$("export-metadata-csv").addEventListener("click", () => exportMetadata("csv"));
 $("metadata-report").addEventListener("click", () => { $("metadata-report-dialog").showModal(); loadMetadataReport(); });
 $("metadata-report-dialog").addEventListener("close", () => { metadataReportGeneration++; });
 $("metadata-report-kind").addEventListener("change", () => { metadataReportPage = 1; loadMetadataReport(); });

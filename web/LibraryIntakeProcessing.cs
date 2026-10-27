@@ -433,7 +433,7 @@ public sealed partial class LibraryStore
     }
 
     private static FileJournal IntakeOutputJournal(IntakeJournal row) => new(row.Id, row.BookId, "", IntakeStage(row), row.Destination,
-        row.OutputHash!, "pending", null, row.Committed, row.OutputIdentity!, row.OutputIdentity, row.Security, row.OutputSize, 0);
+        row.OutputHash!, "pending", row.Committed, row.OutputIdentity!, row.OutputIdentity, row.Security, row.OutputSize, 0);
 
     private void CheckIntakeOutput(IntakeJournal row, string path) => CheckOwnedFile(IntakeOutputJournal(row), path, row.OutputIdentity, default);
 

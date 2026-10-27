@@ -46,7 +46,7 @@ public static class NfsFileOperationChecks
         var database = Path.Combine(directory, "state", "library.sqlite");
         try
         {
-            var source = Path.Combine(root, "original.cbz");
+            var source = Path.Combine(root, "Unknown Publisher", "Unknown Series", "original.cbz");
             var destination = Path.Combine(root, "Unknown Publisher", "Unknown Series", "destination.cbz");
             var foreign = Path.Combine(root, "external-link");
             using (var archive = ZipFile.Open(source, ZipArchiveMode.Create))
@@ -83,20 +83,32 @@ public static class NfsFileOperationChecks
                     && GetAttribute(path, "system.posix_acl_access", readAcl, (nuint)readAcl.Length) == readAcl.Length
                     && readAcl.SequenceEqual(acl), "Move/recovery changed bytes, inode, mode, owner/group, or exact ACL values.");
             }
-            void Undo(string operation)
+            void MoveBack()
             {
-                var undo = store.PreviewFileUndo(id, operation);
-                Check(undo.CanApply, "ACL undo was refused.");
-                store.UndoFileOperation(id, operation, new(undo.Revision, true));
+                var preview = store.PreviewFileMove(id, new(0, "", "original.cbz"));
+                Check(preview.CanApply, "ACL return move was refused.");
+                store.ApplyFileMove(id, new(0, "", "original.cbz", preview.Revision, true));
             }
             string Journal()
             {
                 var preview = store.PreviewFileMove(id, new(0, "", "destination.cbz"));
                 Check(preview.CanApply, "ACL move was refused.");
-                var moved = store.ApplyFileMove(id, new(0, "", "destination.cbz", preview.Revision, true));
+                store.ApplyFileMove(id, new(0, "", "destination.cbz", preview.Revision, true));
                 Check(!File.Exists(source) && File.ReadAllBytes(destination).SequenceEqual(bytes), "Move lost its only archive.");
-                Undo(moved.OperationId);
-                return moved.OperationId;
+                MoveBack();
+                Check(store.GetFileOperations(id).Count == 0, "Completed ACL moves retained history.");
+                Sql("""
+                    CREATE TRIGGER fail_move BEFORE UPDATE OF path ON books BEGIN SELECT RAISE(ABORT,'injected'); END;
+                    CREATE TRIGGER fail_finish BEFORE DELETE ON file_operations BEGIN SELECT RAISE(ABORT,'injected'); END;
+                    """);
+                preview = store.PreviewFileMove(id, new(0, "", "destination.cbz"));
+                Reject<SqliteException>(() => store.ApplyFileMove(id, new(0, "", "destination.cbz", preview.Revision, true)));
+                Sql("""
+                    DROP TRIGGER fail_move; DROP TRIGGER fail_finish;
+                    DROP TABLE IF EXISTS recovery_fixture;
+                    CREATE TEMP TABLE recovery_fixture AS SELECT * FROM file_operations;
+                    """);
+                return store.GetFileOperations(id).Single().Id;
             }
             var preview = store.PreviewFileMove(id, new(0, "", "destination.cbz"));
             File.WriteAllText(destination, "external destination");
@@ -121,10 +133,11 @@ public static class NfsFileOperationChecks
 
             var operation = Journal();
             Original(source);
-            var hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
+            var hold = Path.Combine(Path.GetDirectoryName(source)!, $".panelhaven-move-{operation}.hold");
             var stage = Path.Combine(root, "Unknown Publisher", "Unknown Series", $".panelhaven-move-{operation}.stage");
             void Pending(bool committed = false, string? stageIdentity = null)
             {
+                Sql("INSERT OR IGNORE INTO file_operations SELECT * FROM recovery_fixture;");
                 Sql("UPDATE file_operations SET state='pending',committed=0,stage_identity=COALESCE($stage,source_identity) WHERE id=$operation; "
                     + "UPDATE books SET path=$source,availability='unavailable' WHERE id=$id;", operation, stageIdentity);
                 if (committed) Sql("UPDATE file_operations SET committed=1 WHERE id=$operation; UPDATE books SET path=$destination WHERE id=$id;", operation);
@@ -135,7 +148,8 @@ public static class NfsFileOperationChecks
                 var recovery = store.PreviewFileRecovery(id, operation);
                 Check(recovery.CanApply, "Verified alias recovery was refused: " + string.Join("; ", recovery.Conflicts));
                 store.RecoverFileOperation(id, operation, new(recovery.Revision, true));
-                Check(!File.Exists(hold) && !File.Exists(stage), "Recovery retained a verified redundant operation alias.");
+                Check(!File.Exists(hold) && !File.Exists(stage) && store.GetFileOperations(id).Count == 0,
+                    "Recovery retained a verified redundant alias or completed journal.");
             }
 
             Pending();
@@ -178,7 +192,7 @@ public static class NfsFileOperationChecks
             Pending(committed: true);
             Recover();
             Original(destination);
-            Undo(operation);
+            MoveBack();
             Original(source);
 
             // Old journals have no xattr field. Cross-mount copies still use distinct, verified inodes.
@@ -190,14 +204,15 @@ public static class NfsFileOperationChecks
                 Reject<FileOperationConflictException>(() => store.PreviewFileMove(id, new(1, "", "cross.cbz")));
                 Check(RemoveAttribute(Path.Combine(cross, "Unknown Publisher", "Unknown Series"), "system.posix_acl_default") == 0, "Cannot remove fixture directory ACL.");
                 var crossPreview = store.PreviewFileMove(id, new(1, "", "cross.cbz"));
-                var crossMove = store.ApplyFileMove(id, new(1, "", "cross.cbz", crossPreview.Revision, true));
+                store.ApplyFileMove(id, new(1, "", "cross.cbz", crossPreview.Revision, true));
                 Check(File.ReadAllBytes(Path.Combine(cross, "Unknown Publisher", "Unknown Series", "cross.cbz")).SequenceEqual(bytes), "Plain cross-mount move changed bytes.");
-                Undo(crossMove.OperationId);
+                MoveBack();
             }
             operation = Journal();
-            hold = Path.Combine(root, $".panelhaven-move-{operation}.hold");
+            hold = Path.Combine(Path.GetDirectoryName(source)!, $".panelhaven-move-{operation}.hold");
             stage = Path.Combine(root, "Unknown Publisher", "Unknown Series", $".panelhaven-move-{operation}.stage");
-            Sql("UPDATE file_operations SET security=json_remove(security,'$.ExtendedAttributesHash') WHERE id=$operation;", operation);
+            Sql("UPDATE file_operations SET security=json_remove(security,'$.ExtendedAttributesHash') WHERE id=$operation; "
+                + "UPDATE recovery_fixture SET security=json_remove(security,'$.ExtendedAttributesHash');", operation);
             Pending();
             Alias(source, hold);
             Recover();
@@ -214,7 +229,7 @@ public static class NfsFileOperationChecks
                 Pending(committed, stageIdentity);
                 Recover();
                 Check(File.ReadAllBytes(committed ? destination : source).SequenceEqual(bytes), "Stage+destination recovery lost bytes.");
-                if (committed) Undo(operation);
+                if (committed) MoveBack();
                 else Check(!File.Exists(destination), "Canceled copied publication retained its destination.");
             }
             Check(store.ScanAsync(default).GetAwaiter().GetResult().Added == 0, "Recovery split catalog identity.");

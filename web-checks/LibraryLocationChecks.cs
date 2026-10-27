@@ -120,7 +120,7 @@ public static class LibraryLocationChecks
                 Directory.CreateDirectory(Path.Combine(archived, "Regular publisher", "Shared series"));
                 var preview = store.PreviewFileMove(regularBook.Id, new(archiveIndex, "", "Moved.cbz"));
                 Check(preview.CanApply, "Moving into Archived was blocked.");
-                var moved = store.ApplyFileMove(regularBook.Id, new(archiveIndex, "", "Moved.cbz", preview.Revision, true));
+                store.ApplyFileMove(regularBook.Id, new(archiveIndex, "", "Moved.cbz", preview.Revision, true));
                 Check(store.ListBooks("alice", null).Total == 1 && store.ListBooks("alice", null, location: "archived").Total == 2,
                     "A move did not immediately change browsing scope.");
                 var book = store.GetBook("alice", regularBook.Id);
@@ -128,11 +128,12 @@ public static class LibraryLocationChecks
                     && store.GetList("alice", list.Id).BookIds!.Contains(regularBook.Id)
                     && File.ReadAllBytes(Path.Combine(archived, "Regular publisher", "Shared series", "Moved.cbz")).SequenceEqual(originalBytes),
                     "Archiving changed comicbook identity, contents, or private data.");
-                var undo = store.PreviewFileUndo(regularBook.Id, moved.OperationId);
-                store.UndoFileOperation(regularBook.Id, moved.OperationId, new(undo.Revision, true));
+                var returnMove = store.PreviewFileMove(regularBook.Id, new(0, "", "Regular.cbz"));
+                store.ApplyFileMove(regularBook.Id, new(0, "", "Regular.cbz", returnMove.Revision, true));
                 Check(store.ListBooks("alice", null).Total == 2 && store.ListBooks("alice", null, location: "archived").Total == 1
-                    && File.ReadAllBytes(Path.Combine(regular, "Regular.cbz")).SequenceEqual(originalBytes),
-                    "Undo did not restore the original area and unprefixed path.");
+                    && File.ReadAllBytes(Path.Combine(regular, "Regular publisher", "Shared series", "Regular.cbz")).SequenceEqual(originalBytes)
+                    && store.GetFileOperations(regularBook.Id).Count == 0,
+                    "Return move did not restore the original area or retained completed history.");
                 Directory.CreateDirectory(Path.Combine(regular, "Intake publisher", "Shared series"));
                 preview = store.PreviewFileMove(intake.Id, new(0, "", "Organized.cbz"));
                 store.ApplyFileMove(intake.Id, new(0, "", "Organized.cbz", preview.Revision, true));

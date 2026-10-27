@@ -97,7 +97,7 @@ public sealed partial class LibraryStore
                     ? targetFolder : publisher + "/" + targetFolder };
                 destinations[index] = FileDestination(new(item.RootIndex, item.Folder, item.FileName));
                 destination = FileDisplayPath(destinations[index]!);
-                var plan = PlanFileMove(db, item.BookId, destinations[index]!, null, cancellationToken, allowNoOp: true, useRequestedFolder: true);
+                var plan = PlanFileMove(db, item.BookId, destinations[index]!, cancellationToken, allowNoOp: true, useRequestedFolder: true);
                 if (catalog != plan.Catalog) throw new FileOperationConflictException();
                 var preview = plan.Preview;
                 rows[index] = new(item.BookId, preview.Source, preview.Destination, item.RootIndex, item.Folder, item.FileName,
@@ -149,10 +149,10 @@ public sealed partial class LibraryStore
         FileOperationConflictException => exception.Message,
         FormatException => exception.Message,
         KeyNotFoundException => "Book no longer exists in the catalog.",
-        OperationCanceledException => "Operation canceled. Review each book's file-operation history before trying again.",
-        SqliteException => "Catalog update failed. Review each book's file-operation history and recover any pending operation before trying again.",
+        OperationCanceledException => "Operation canceled. Check each book for pending recovery before trying again.",
+        SqliteException => "Catalog update failed. Recover any pending file operation before trying again.",
         ArgumentException => "Invalid destination: select a configured library, an existing relative folder, and a safe filename with the unchanged comicbook extension.",
-        _ => "Comicbook or destination is unavailable, unsafe, or invalid. Review file-operation history for pending recovery."
+        _ => "Comicbook or destination is unavailable, unsafe, or invalid. Check for pending file recovery."
     };
 
     public BulkFileMoveResult ApplyFileMoves(BulkFileMoveApplyRequest request, CancellationToken cancellationToken = default)
@@ -172,27 +172,18 @@ public sealed partial class LibraryStore
             {
                 var row = preview.Items[index];
                 if (row.NoOp) { skipped.Add(row.BookId); continue; }
-                // rowid distinguishes this attempt from earlier history, including undone or failed moves.
-                var lastOperation = long.MaxValue;
+                FileOperationResult? committed = null;
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    using var previous = Command(db, "SELECT COALESCE(MAX(rowid),0) FROM file_operations WHERE book_id=$id", ("$id", row.BookId));
-                    lastOperation = (long)previous.ExecuteScalar()!;
-                    completed.Add(ApplyFileMoveLocked(row.BookId, FileDestination(new(row.RootIndex, row.Folder, row.FileName)), null,
-                        new(row.Revision, true), cancellationToken, useRequestedFolder: true));
+                    completed.Add(ApplyFileMoveLocked(row.BookId, FileDestination(new(row.RootIndex, row.Folder, row.FileName)),
+                        row.Revision, cancellationToken, out committed, useRequestedFolder: true));
                 }
                 catch (Exception exception) when (IsArchiveError(exception)
                     || exception is FileOperationConflictException or SqliteException or KeyNotFoundException or OperationCanceledException)
                 {
                     // A failed final journal cleanup can follow a durable catalog commit. Report that move honestly.
-                    try
-                    {
-                        using var committed = Command(db, "SELECT id FROM file_operations WHERE book_id=$id AND rowid>$previous AND committed=1 ORDER BY rowid DESC LIMIT 1",
-                            ("$id", row.BookId), ("$previous", lastOperation));
-                        if (committed.ExecuteScalar() is string operationId) completed.Add(new(row.BookId, operationId));
-                    }
-                    catch (SqliteException) { /* History remains authoritative if the database itself is unavailable. */ }
+                    if (committed is not null) completed.Add(committed);
                     return new(completed, skipped, row.BookId, FileMoveError(exception), preview.Items.Skip(index + 1).Select(item => item.BookId).ToArray());
                 }
             }

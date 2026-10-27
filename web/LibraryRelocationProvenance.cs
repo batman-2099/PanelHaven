@@ -23,10 +23,9 @@ public sealed partial class LibraryStore
         string id, string? mergedId, string source, string from, string to)
     {
         var paths = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) { source };
-        foreach (var table in new[] { "file_operations", "intake_operations" })
+        if (RelocationTableExists(db, "intake_operations", transaction))
         {
-            if (!RelocationTableExists(db, table, transaction)) continue;
-            using var command = Command(db, $"SELECT source,destination FROM {table} WHERE book_id IN ($id,$merged)",
+            using var command = Command(db, "SELECT source,destination FROM intake_operations WHERE book_id IN ($id,$merged)",
                 ("$id", id), ("$merged", mergedId));
             command.Transaction = transaction;
             using var reader = command.ExecuteReader();
@@ -51,11 +50,6 @@ public sealed partial class LibraryStore
                     """;
                 command.ExecuteNonQuery();
             }
-            if (RelocationTableExists(db, "file_operations", transaction))
-            {
-                command.CommandText = "UPDATE file_operations SET book_id=$id WHERE book_id=$merged";
-                command.ExecuteNonQuery();
-            }
             if (RelocationTableExists(db, "intake_operations", transaction))
             {
                 command.CommandText = "UPDATE intake_operations SET book_id=$id WHERE book_id=$merged";
@@ -64,7 +58,6 @@ public sealed partial class LibraryStore
         }
         command.Parameters.AddWithValue("$source", "");
         command.Parameters.AddWithValue("$destination", "");
-        var hasJournal = RelocationTableExists(db, "file_operations", transaction);
         foreach (var (source, destination) in paths)
         {
             command.Parameters["$source"].Value = source;
@@ -77,12 +70,6 @@ public sealed partial class LibraryStore
                     """;
                 command.ExecuteNonQuery();
             }
-            if (!hasJournal) continue;
-            command.CommandText = """
-                UPDATE file_operations SET source=CASE WHEN source=$source THEN $destination ELSE source END,
-                    destination=CASE WHEN destination=$source THEN $destination ELSE destination END WHERE book_id=$id;
-                """;
-            command.ExecuteNonQuery();
         }
     }
 }

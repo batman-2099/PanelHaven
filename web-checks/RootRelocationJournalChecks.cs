@@ -93,8 +93,8 @@ public static class RootRelocationJournalChecks
                 store.SaveProgress("owner", id, new(0, true));
             }
             var original = File.ReadAllBytes(Path.Combine(from, "inside.cbz"));
-            var insideMove = Move(ids["inside"], 0, "renamed.cbz");
-            var outsideMove = Move(ids["outside"], 1, "away.cbz");
+            Move(ids["inside"], 0, "renamed.cbz");
+            Move(ids["outside"], 1, "away.cbz");
             Sql("""
                 CREATE TABLE archive_backup_owners(owner_id TEXT PRIMARY KEY,book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE);
                 CREATE TABLE book_path_provenance(book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
@@ -108,40 +108,38 @@ public static class RootRelocationJournalChecks
                 && Snapshot() == beforeMigration, "Legacy backup metadata migration changed live books, private state or journals.");
             Directory.Move(from, to);
             var before = Snapshot();
-            Check(Relocate(from, to, false).Contains("mapped=3") && Snapshot() == before, "Journal-aware dry run mutated state or omitted outside-root history.");
-            Sql("UPDATE file_operations SET state='pending' WHERE id=$id", ("$id", outsideMove.OperationId));
+            Check(Relocate(from, to, false).Contains("mapped=2") && Snapshot() == before,
+                "Dry run mutated state or retained completed outside-root move history.");
+            Sql("""
+                INSERT INTO file_operations(id,book_id,created_at,source,destination,hash,state,source_identity,security,file_size,modified_ticks)
+                VALUES('pending',$id,'',$source,$destination,'','pending','','{}',0,0)
+                """, ("$id", ids["outside"]), ("$source", Path.Combine(from, "outside.cbz")),
+                ("$destination", Path.Combine(outside, "Unknown Publisher", "Unknown Series", "away.cbz")));
             var pending = Snapshot();
             var refused = false;
             try { Relocate(from, to, true); }
             catch (InvalidOperationException) { refused = true; }
             Check(refused && Snapshot() == pending, "Relevant pending journal was not refused before changes.");
-            Sql("UPDATE file_operations SET state='applied' WHERE id=$id", ("$id", outsideMove.OperationId));
+            Sql("DELETE FROM file_operations WHERE id='pending'");
             Sql("CREATE TRIGGER relocation_journal_abort BEFORE UPDATE ON books BEGIN SELECT RAISE(ABORT,'forced'); END");
             var failed = false;
             try { Relocate(from, to, true); }
             catch (SqliteException) { failed = true; }
             Check(failed && Snapshot() == before, "Relocation failure left partially remapped history.");
             Sql("DROP TRIGGER relocation_journal_abort");
-            Check(Relocate(from, to, true).Contains("applied=3"), "Completed journal blocked relocation.");
-            Check(Relocate(from, to, true).Contains("mapped=0"), "Journal relocation was not idempotent.");
+            Check(Relocate(from, to, true).Contains("applied=2"), "Completed moves blocked relocation.");
+            Check(Relocate(from, to, true).Contains("mapped=0"), "Relocation was not idempotent.");
             Directory.Move(to, again);
-            Check(Relocate(to, again, true).Contains("applied=3"), "Repeated relocation lost outside-root history.");
+            Check(Relocate(to, again, true).Contains("applied=2"), "Repeated relocation changed its book selection.");
             store = new LibraryStore(database, [again, outside]);
             foreach (var id in ids.Values)
                 Check(store.GetBook("owner", id).Completed, "Relocation lost private state.");
-            foreach (var (id, operation, name) in new[]
-            {
-                (ids["inside"], insideMove.OperationId, "inside.cbz"),
-                (ids["outside"], outsideMove.OperationId, "outside.cbz")
-            })
-            {
-                var undo = store.PreviewFileUndo(id, operation);
-                Check(undo.CanApply && undo.Destination == "Library 1/" + name, "Relocation failed to remap undo destination.");
-                store.UndoFileOperation(id, operation, new(undo.Revision, true));
-            }
-            Check(File.ReadAllBytes(Path.Combine(again, "inside.cbz")).SequenceEqual(original), "Move/relocate/undo changed comicbook bytes.");
+            foreach (var name in new[] { "inside", "outside" })
+                Move(ids[name], 0, name + ".cbz");
+            Check(File.ReadAllBytes(Path.Combine(again, "Unknown Publisher", "Unknown Series", "inside.cbz")).SequenceEqual(original)
+                && ids.Values.All(id => store.GetFileOperations(id).Count == 0), "Move/relocate/return changed bytes or retained history.");
 
-            // A previously scanned destination can own independent history and page-edit intent.
+            // A previously scanned destination can own independent page-edit intent.
             var mergeFrom = Path.Combine(directory, "merge-old");
             var mergeTo = Path.Combine(directory, "merge-new");
             Directory.CreateDirectory(mergeFrom);
@@ -156,9 +154,6 @@ public static class RootRelocationJournalChecks
             store.EditMetadata(duplicate, new(new() { ["Title"] = "Destination catalog edit" }));
             Sql("UPDATE books SET edited=1,info_xml=(SELECT info_xml FROM books WHERE id=$new) WHERE id=$old", ("$old", oldId), ("$new", duplicate));
             Sql("INSERT INTO page_metadata_edits(book_id,page,fields) VALUES($id,0,1)", ("$id", duplicate));
-            var firstMove = Move(duplicate, 1, "moved.cbz");
-            var undoMove = store.PreviewFileUndo(duplicate, firstMove.OperationId);
-            store.UndoFileOperation(duplicate, firstMove.OperationId, new(undoMove.Revision, true));
             var pageDraft = new[] { new PageMetadataRow(0, "FrontCover", null) };
             var pagePreview = store.PreviewPageMetadata(oldId, new(store.GetPageMetadata(oldId).Revision, pageDraft));
             store.EditPageMetadata(oldId, new(pagePreview.Revision, pageDraft));
@@ -176,8 +171,8 @@ public static class RootRelocationJournalChecks
             Sql("DROP TRIGGER relocation_merge_abort");
             Check(Relocate(mergeFrom, mergeTo, true).Contains("merged=1"), "Compatible duplicate failed to merge.");
             store = new LibraryStore(database, [mergeTo, outside]);
-            Check(Id(Path.Combine(mergeTo, "merge.cbz")) == oldId && store.GetFileOperations(oldId).Count == 2,
-                "Duplicate merge lost identity or undo relationships.");
+            Check(Id(Path.Combine(mergeTo, "merge.cbz")) == oldId && store.GetFileOperations(oldId).Count == 0,
+                "Duplicate merge lost identity or retained completed history.");
             Check((long)Sql("SELECT fields FROM page_metadata_edits WHERE book_id=$id", ("$id", oldId))! == 1,
                 "Duplicate merge discarded page-edit intent.");
             Check(File.ReadAllBytes(Path.Combine(mergeTo, "merge.cbz")).SequenceEqual(File.ReadAllBytes(Path.Combine(again, "stationary.cbz"))),

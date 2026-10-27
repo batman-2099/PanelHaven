@@ -359,14 +359,6 @@ public static class LibraryEndpoints
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapGet("/books/{id}/file-operations", (LibraryStore store, string id) => Results.Ok(store.GetFileOperations(id)))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/file-operations/{operationId}/undo/preview",
-            (LibraryStore store, string id, string operationId, CancellationToken cancellationToken) =>
-                Results.Ok(store.PreviewFileUndo(id, operationId, cancellationToken)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/file-operations/{operationId}/undo",
-            (LibraryStore store, string id, string operationId, FileOperationRequest request, CancellationToken cancellationToken) =>
-                Results.Ok(store.UndoFileOperation(id, operationId, request, cancellationToken)))
-            .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapPost("/books/{id}/file-operations/{operationId}/recover/preview",
             (LibraryStore store, string id, string operationId, CancellationToken cancellationToken) =>
                 Results.Ok(store.PreviewFileRecovery(id, operationId, cancellationToken)))

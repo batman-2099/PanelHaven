@@ -144,12 +144,14 @@ public static class PageOrderChecks
             {
                 Directory.CreateDirectory(Path.Combine(root, "Unknown Publisher", "Unknown Series"));
                 var move = store.PreviewFileMove(id, new(0, "", "renamed.cbz"));
-                var moved = store.ApplyFileMove(id, new(0, "", "renamed.cbz", move.Revision, true));
+                store.ApplyFileMove(id, new(0, "", "renamed.cbz", move.Revision, true));
                 Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(Path.Combine(root, "Unknown Publisher", "Unknown Series", "renamed.cbz")),
                     "Move changed shared order or omitted the publisher/series folders.");
-                var undo = store.PreviewFileUndo(id, moved.OperationId);
-                store.UndoFileOperation(id, moved.OperationId, new(undo.Revision, true));
-                Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(path), "Move undo changed shared order or the original path.");
+                var returnMove = store.PreviewFileMove(id, new(0, "", "pages.cbz"));
+                store.ApplyFileMove(id, new(0, "", "pages.cbz", returnMove.Revision, true));
+                path = Path.Combine(root, "Unknown Publisher", "Unknown Series", "pages.cbz");
+                Check(store.GetPageOrder(id).Revision == saved.Revision && File.Exists(path) && store.GetFileOperations(id).Count == 0,
+                    "Return move changed shared order, lost the source, or retained completed history.");
                 PrivateState();
             }
             var stamp = File.GetLastWriteTimeUtc(path);
@@ -176,7 +178,7 @@ public static class PageOrderChecks
 
             var destination = Path.Combine(directory, "relocated");
             Directory.Move(root, destination);
-            path = Path.Combine(destination, "pages.cbz");
+            path = Path.Combine(destination, Path.GetRelativePath(root, path));
             store = new LibraryStore(database, [root, destination]);
             store.ScanAsync(default).GetAwaiter().GetResult();
             var duplicate = store.ListBooks("owner", null).Items.Single(book => book.Id != id).Id;

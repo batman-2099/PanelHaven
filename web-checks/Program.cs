@@ -36,7 +36,7 @@ Console.WriteLine("PASS: shared page order permutations, stale/reset/source prot
 ComicExportChecks.Run();
 Console.WriteLine("PASS: download-only CBZ conversion, saved order and shared metadata remapping, private exclusion and staged single/batch exports.");
 FileOperationChecks.Run();
-Console.WriteLine("PASS: reviewed no-clobber file moves, preserved identities, verified undo and pending recovery.");
+Console.WriteLine("PASS: reviewed no-clobber file moves, preserved identities, completed-history removal and pending recovery.");
 AclSecurityChecks.Run();
 Console.WriteLine("PASS: bounded ACL snapshots, stale security detection and unsupported-attribute refusal during metadata writing.");
 NfsFileOperationChecks.Run();
@@ -68,7 +68,7 @@ Console.WriteLine("PASS: private ratings, nested list folders, expanded smart-ru
 RelocationChecks.Run();
 Console.WriteLine("PASS: verified root relocation, private-data preservation and conflict refusal.");
 RootRelocationJournalChecks.Run();
-Console.WriteLine("PASS: root relocation preserves move history and page-edit intent.");
+Console.WriteLine("PASS: root relocation preserves current move paths and page-edit intent.");
 StateMaintenanceChecks.Run();
 Console.WriteLine("PASS: exclusive state access, backup integrity and safe empty-target restore.");
 await DeploymentChecks.RunAsync();

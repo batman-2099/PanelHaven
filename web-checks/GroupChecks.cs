@@ -283,8 +283,8 @@ public static class GroupChecks
                 .SequenceEqual([(31, 35), (37, 37)]), "Series gaps lost whole numbers or treated variants as missing.");
             var report = store.ListMissingIssues();
             Check(report.Total == 2 && report.Items.SequenceEqual(new[] {
-                new MissingIssueReport("Gap checks", "library", 31, 35),
-                new MissingIssueReport("Gap checks", "library", 37, 37) }),
+                new MissingIssueReport("Gap checks", "library", 31, 35, null),
+                new MissingIssueReport("Gap checks", "library", 37, 37, null) }),
                 "Maintenance report disagreed with the series placeholders.");
             Check(store.ListMissingIssues(1, 1).Items.Single() == report.Items[0]
                 && store.ListMissingIssues(int.MaxValue, 1).Items.Single() == report.Items[1]
@@ -335,6 +335,39 @@ public static class GroupChecks
             Check(largeGap.Any(gap => gap.First == 40 && gap.Last == 2147483646)
                 && largeGap.Any(gap => gap.First == 37 && gap.Last == 38),
                 "Large gaps overflowed or decimal issue numbers were treated as whole numbers.");
+
+            var runs = new[] { ("2021", "1"), ("02021", "3"), ("2025", "2"), ("2025", "4"), ("", "8"), ("-1", "10") };
+            for (var index = 0; index < all.Count; index++)
+                store.EditMetadata(all[index].Id, new(new() { ["Series"] = "Batman", ["Volume"] = runs[index].Item1, ["Number"] = runs[index].Item2 }));
+            var volumeReport = store.ListMissingIssues();
+            Check(volumeReport.Items.SequenceEqual(new[] {
+                new MissingIssueReport("Batman", "library", 9, 9, null),
+                new MissingIssueReport("Batman", "library", 2, 2, 2021),
+                new MissingIssueReport("Batman", "library", 3, 3, 2025) }),
+                "Series volumes filled each other's gaps or produced gaps across runs.");
+            Check(store.ListMissingIssues(2, 1).Items.Single() == volumeReport.Items[1],
+                "Volume-specific report pagination changed run identity.");
+            foreach (var direction in new[] { "asc", "desc" })
+            {
+                var gaps = store.ListBooks("alice", null, sort: "number", direction: direction, groupBy: "series", groupKey: "Batman").MissingIssues;
+                Check(gaps.Count == 3 && gaps.Single(gap => gap.Volume == 2021).BeforeBookId == all[direction == "asc" ? 1 : 0].Id
+                    && gaps.Single(gap => gap.Volume == 2025).BeforeBookId == all[direction == "asc" ? 3 : 2].Id
+                    && gaps.Single(gap => gap.Volume is null).BeforeBookId == all[direction == "asc" ? 5 : 4].Id,
+                    "Series gap cards attached to an issue from a different volume.");
+            }
+            var runFilter = LibraryStore.ParseCatalogFilter("""{"match":"all","rules":[{"field":"Volume","operator":"equals","value":"2025"}]}""");
+            var runBooks = store.ListBooks("alice", null, groupBy: "series", groupKey: "Batman", advancedFilter: runFilter);
+            Check(runBooks.Total == 2 && runBooks.MissingIssues.Single().Volume == 2025 && runBooks.MissingIssues[0].First == 3,
+                "Volume-filtered browsing leaked books or gaps from another run.");
+            store.SetMissingIssueIgnored("Batman", true);
+            Check(store.ListMissingIssues().Total == 0 && store.ListMissingIssues(ignored: true).Items.SequenceEqual(volumeReport.Items),
+                "Series ignoring failed to cover all volumes.");
+            store.SetMissingIssueIgnored("Batman", false);
+            store.EditMetadata(all[3].Id, new(new() { ["Number"] = "3" }));
+            var missingFilter = LibraryStore.ParseCatalogFilter("""{"match":"all","rules":[{"field":"HasMissingIssues","operator":"equals","value":"yes"}]}""");
+            var missingRuns = store.ListBooks("alice", null, advancedFilter: missingFilter);
+            Check(missingRuns.Total == 4 && missingRuns.Items.All(book => book.Id != all[2].Id && book.Id != all[3].Id),
+                "Missing-issue filters included a complete run because another volume has gaps.");
 
             var scoped = new LibraryStore(Path.Combine(directory, "groups.sqlite"), [secondRoot],
                 Path.Combine(firstRoot, "Other"), Path.Combine(firstRoot, "Stacks"));

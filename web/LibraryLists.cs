@@ -682,6 +682,8 @@ public sealed partial class LibraryStore
                 var seriesWhere = "s.series=b.series AND trim(b.series)<>'' AND (" + archived + ")=("
                     + archived.Replace("b.path", "s.path", StringComparison.Ordinal) + ") AND (" + unsorted + ")=("
                     + unsorted.Replace("b.path", "s.path", StringComparison.Ordinal) + ")";
+                if (rule.Field == "HasMissingIssues")
+                    seriesWhere += " AND metadata_scalar(s.info_xml,'Volume') IS metadata_scalar(b.info_xml,'Volume')";
                 seriesColumn = rule.Field == "SeriesReadStatus"
                     ? "(SELECT CASE WHEN COUNT(*)=0 THEN NULL WHEN COUNT(sp.book_id)=0 THEN 'unread'"
                         + " WHEN SUM(COALESCE(sp.completed,0))=COUNT(*) THEN 'completed' ELSE 'in-progress' END"

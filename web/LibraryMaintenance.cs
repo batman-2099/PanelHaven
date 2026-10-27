@@ -5,7 +5,7 @@ namespace PanelHaven.Web;
 
 public sealed record MaintenanceBook(string Id, string Title, string Location, string Availability, string? DuplicateKey);
 public sealed record MaintenancePage(List<MaintenanceBook> Items, int Total, int Page, int PageSize);
-public sealed record MissingIssueReport(string Series, string Location, int First, int Last);
+public sealed record MissingIssueReport(string Series, string Location, int First, int Last, int? Volume);
 public sealed record MissingIssueReportPage(List<MissingIssueReport> Items, int Total, int Page, int PageSize);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record MissingIssueIgnoreRequest([property: JsonRequired] string Series, [property: JsonRequired] bool Ignored);
@@ -182,7 +182,7 @@ public sealed partial class LibraryStore
         var gaps = new List<MissingIssueReport>();
         foreach (var location in new[] { "library", "archived", "unsorted" })
             foreach (var (series, gap) in ReadMissingIssues(db, transaction, location, ignored: ignored))
-                gaps.Add(new(series, location, gap.First, gap.Last));
+                gaps.Add(new(series, location, gap.First, gap.Last, gap.Volume));
         page = Math.Min(page, Math.Max(1, (int)((gaps.Count + (long)pageSize - 1) / pageSize)));
         var offset = (page - 1) * pageSize;
         var result = new MissingIssueReportPage(gaps.GetRange(offset, Math.Min(pageSize, gaps.Count - offset)),

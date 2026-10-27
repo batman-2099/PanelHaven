@@ -50,7 +50,7 @@ public static class LibraryLocationChecks
             store.EditMetadata(saved.Id, new(new() { ["Number"] = "31" }));
             store.EditMetadata(intake.Id, new(new() { ["Number"] = "40" }));
             Check(store.ListMissingIssues().Items.SequenceEqual(new[] {
-                new MissingIssueReport("Shared series", "library", 31, 31) }),
+                new MissingIssueReport("Shared series", "library", 31, 31, null) }),
                 "Missing issue report merged locations or inferred leading/trailing gaps.");
             foreach (var (area, count, publishers) in new[] {
                 ("library", 2, new[] { "Nearby publisher", "Regular publisher" }),

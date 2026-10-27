@@ -26,7 +26,12 @@
   const hash = $('library-location').value === 'unsorted' ? '#unsorted' : '#library';
   if (location.hash !== hash) location.hash = hash;
   await waitFor(() => $('books').getAttribute('aria-busy') !== 'true' && history.state?.catalog?.hash === hash);
-  for (const entry of report.items.filter((row, index, rows) => rows.findIndex(other => other.location === row.location) === index)) {
+  for (const entry of report.items.filter((row, index, rows) => rows.findIndex(other =>
+    other.location === row.location && other.series === row.series && other.volume === row.volume) === index)) {
+    const runLabel = `${entry.series} · ${entry.volume === null ? "Volume unknown" : `Vol. ${entry.volume}`}`;
+    const expectedFilter = { match: "all", rules: [{
+      field: "Volume", operator: entry.volume === null ? "isEmpty" : "equals", value: entry.volume === null ? "" : String(entry.volume)
+    }] };
     $('clear-filters').click();
     await waitFor(() => $('books').getAttribute('aria-busy') !== 'true');
     $('edit-advanced-filters').click();
@@ -51,9 +56,9 @@
     $('maintenance-kind').value = 'missing-issues';
     $('maintenance-kind').dispatchEvent(new Event('change', { bubbles: true }));
     await waitFor(() => !previousRows?.isConnected &&
-      [...$('maintenance-items').children].some(row => row.querySelector('h3')?.textContent === entry.series
+      [...$('maintenance-items').children].some(row => row.querySelector('h3')?.textContent === runLabel
         && row.querySelector('p.muted')?.textContent.toLowerCase() === entry.location));
-    const row = [...$('maintenance-items').children].find(row => row.querySelector('h3')?.textContent === entry.series
+    const row = [...$('maintenance-items').children].find(row => row.querySelector('h3')?.textContent === runLabel
       && row.querySelector('p.muted')?.textContent.toLowerCase() === entry.location);
     assert(row, "Expected report row is absent.");
     const find = row.querySelector('a');
@@ -79,8 +84,17 @@
     assert($('search').value === '' && $('book-status').value === 'all' && $('book-sort').value === 'number'
       && $('reading-list').value === '' && $('sort-direction').value === 'asc'
       && $('group-by').value === 'none' && $('stack-by').value === 'series', "Old filters hid the report series.");
-    assert(catalogQuery && !catalogQuery.has('filter') && !history.state?.catalog?.advancedFilter,
-      "Report navigation retained the advanced rule in its request or saved catalog state.");
+    assert(catalogQuery && JSON.stringify(JSON.parse(catalogQuery.get('filter'))) === JSON.stringify(expectedFilter)
+      && JSON.stringify(history.state?.catalog?.advancedFilter) === JSON.stringify(expectedFilter),
+      "Report navigation did not replace old filters with the selected volume.");
+    for (const checkbox of $('books').querySelectorAll('[data-book-id]')) {
+      const metadataResponse = await originalFetch(`/api/books/${encodeURIComponent(checkbox.dataset.bookId)}/metadata`);
+      assert(metadataResponse.ok, "Could not inspect the opened run.");
+      const metadata = await metadataResponse.json();
+      const value = metadata.fields.Volume;
+      const volume = value === undefined || value.trim() === '' || Number(value) < 0 ? null : Number(value);
+      assert(volume === entry.volume, "View series included an issue from another volume.");
+    }
     assert($('books').querySelector('.book-selection') && document.activeElement === $('library-status'),
       "Series results or navigation focus are missing.");
     for (const card of $('books').querySelectorAll('.missing-issue')) {
@@ -91,5 +105,5 @@
     }
   }
   } finally { window.fetch = originalFetch; }
-  console.log('PASS: report buttons open exact series/locations, clear conflicting filters, and focus results.');
+  console.log('PASS: report buttons open exact series, volumes and locations, replace conflicting filters, and focus results.');
 })();

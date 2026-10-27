@@ -231,8 +231,13 @@ public static class ListChecks
                 ("Tags", "isNotEmpty", "", 1), ("Genre", "equals", "Adventure", 1),
                 ("Volume", "greaterOrEqual", "2", 1), ("Volume", "isEmpty", "", 5),
                 ("Format", "equals", "Annual", 1), ("CommunityRating", "greaterThan", "4.4", 1),
-                ("CommunityRating", "isEmpty", "", 5), ("HasMissingIssues", "equals", "yes", 4)
+                ("CommunityRating", "isEmpty", "", 5)
             }) Check(Matches(field, operation, value) == expected, $"Advanced rule failed: {field}/{operation}/{value}.");
+            Check(Matches("HasMissingIssues", "equals", "yes") == 0, "Known and unknown volumes were combined into a false gap.");
+            foreach (var title in new[] { "Two", "Variant", "Annual" })
+                Sql("UPDATE books SET info_xml=replace(info_xml,'</ComicInfo>','<Volume>2</Volume></ComicInfo>') WHERE id=$id",
+                    ("$id", byTitle[title]));
+            Check(Matches("HasMissingIssues", "equals", "yes") == 4, "A real gap within one volume was lost.");
             Check(Matches("HasMissingIssues", "equals", "yes", location: "archived") == 2
                 && Matches("HasMissingIssues", "equals", "no", location: "unsorted") == 1, "Series gaps mixed catalog areas.");
             foreach (var special in new[] { "1.5", "-1", "2147483648", "Annual", "02" })

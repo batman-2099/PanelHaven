@@ -966,7 +966,7 @@ async function loadLibrary(focusResults = false) {
         const card = textElement("article", "", "book-card missing-issue");
         const cover = textElement("div", "", "missing-issue-cover");
         cover.append(textElement("strong", label), textElement("span", range ? "Missing issues" : "Missing issue"));
-        card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel} ${label}`),
+        card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel} · ${gap.volume === null ? "Volume unknown" : `Vol. ${gap.volume}`} ${label}`),
           textElement("p", "Not in this location", "muted"), missingIssueLink(result.items[anchor].series, number));
         placeholders.push(card);
         if (range) break;
@@ -1172,10 +1172,11 @@ async function loadMaintenance() {
         const row = textElement("article", "", "maintenance-row");
         const issues = book.first === book.last ? `Missing issue #${book.first}` : `Missing issues #${book.first}–#${book.last}`;
         const location = { library: "Library", archived: "Archived", unsorted: "Unsorted" }[book.location];
-        row.append(textElement("h3", book.series), textElement("p", issues), textElement("p", location, "muted"));
+        const runLabel = `${book.series} · ${book.volume === null ? "Volume unknown" : `Vol. ${book.volume}`}`;
+        row.append(textElement("h3", runLabel), textElement("p", issues), textElement("p", location, "muted"));
         const view = textElement("button", "View series");
         view.type = "button";
-        view.setAttribute("aria-label", `View series: ${book.series} (${location})`);
+        view.setAttribute("aria-label", `View series: ${runLabel} (${location})`);
         view.addEventListener("click", async () => {
           if (!leaveServerSettings()) return;
           const epoch = authEpoch;
@@ -1185,7 +1186,10 @@ async function loadMaintenance() {
             if (epoch !== authEpoch || generation !== maintenanceGeneration || !$("maintenance-dialog").open) return;
             routeGeneration++;
             setCatalogLocation(book.location);
-            advancedFilter = null;
+            advancedFilter = { match: "all", rules: [{
+              field: "Volume", operator: book.volume === null ? "isEmpty" : "equals",
+              value: book.volume === null ? "" : String(book.volume)
+            }] };
             $("search").value = libraryQuery = "";
             $("reading-list").value = $("publisher").value = $("book-rating").value = "";
             $("book-status").value = $("book-availability").value = "all";

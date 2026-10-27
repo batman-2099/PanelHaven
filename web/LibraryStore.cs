@@ -12,7 +12,7 @@ public sealed record Book(string Id, string Title, string Series, string Number,
     string Summary, int PageCount, int CurrentPage, bool Completed, bool Started,
     Dictionary<string, object?>? Metadata = null, string Availability = "available", string Location = "",
     int PersonalRating = 0);
-public sealed record MissingIssue(string BeforeBookId, int First, int Last);
+public sealed record MissingIssue(string BeforeBookId, int First, int Last, int? Volume);
 public sealed record BookPage(List<Book> Items, int Total, int Page, int PageSize)
 {
     public List<MissingIssue> MissingIssues { get; init; } = [];

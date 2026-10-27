@@ -110,24 +110,27 @@ public sealed partial class LibraryStore
     {
         using var command = Command(db, "");
         command.Transaction = transaction;
-        command.CommandText = "SELECT b.series,b.id,b.number FROM books b WHERE "
+        command.CommandText = "SELECT b.series,b.id,b.number,metadata_scalar(b.info_xml,'Volume') AS volume FROM books b WHERE "
             + LocationFilter(command, location) + (series is null ? "" : " AND b.series=$series")
             + (ignored is null ? "" : " AND EXISTS(SELECT 1 FROM ignored_missing_issue_series i WHERE i.series=b.series)=$ignored")
-            + " ORDER BY b.series,b.id";
+            + " ORDER BY b.series,volume,b.id";
         if (series is not null) command.Parameters.AddWithValue("$series", series);
         if (ignored is not null) command.Parameters.AddWithValue("$ignored", ignored.Value);
         using var reader = command.ExecuteReader();
         var numbers = new SortedDictionary<int, string>();
         string? currentSeries = null;
+        int? currentVolume = null;
         while (reader.Read())
         {
             var name = reader.GetString(0);
+            var volume = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
             if (string.IsNullOrWhiteSpace(name)) continue;
-            if (name != currentSeries)
+            if (name != currentSeries || volume != currentVolume)
             {
                 foreach (var gap in Gaps()) yield return (currentSeries!, gap);
                 numbers.Clear();
                 currentSeries = name;
+                currentVolume = volume;
             }
             if (WholeIssueNumber(reader.GetString(2)) is { } number)
                 numbers.TryAdd(number, reader.GetString(1));
@@ -140,7 +143,7 @@ public sealed partial class LibraryStore
             foreach (var issue in numbers)
             {
                 if (previous is { } lower && (long)issue.Key - lower.Key > 1)
-                    yield return new(descending ? lower.Value : issue.Value, lower.Key + 1, issue.Key - 1);
+                    yield return new(descending ? lower.Value : issue.Value, lower.Key + 1, issue.Key - 1, currentVolume);
                 previous = issue;
             }
         }

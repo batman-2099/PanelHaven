@@ -1147,7 +1147,7 @@ async function requestScan(action = "status") {
 }
 
 async function loadMaintenance() {
-  if (session?.role !== "admin" || !$("maintenance-dialog").open) return;
+  if (session?.role !== "admin" || !$("maintenance-dialog").open || maintenanceBusy) return;
   const generation = ++maintenanceGeneration;
   const kind = $("maintenance-kind").value;
   const ignored = kind === "missing-issues" && $("maintenance-ignored").checked;
@@ -1158,6 +1158,8 @@ async function loadMaintenance() {
   $("missing-issues-note").hidden = kind !== "missing-issues";
   $("maintenance-ignored-control").hidden = kind !== "missing-issues";
   $("maintenance-file-note").hidden = kind === "missing-issues";
+  $("remove-all-missing").hidden = kind !== "missing";
+  $("remove-all-missing").disabled = true;
   try {
     const result = await api(`/api/maintenance?${new URLSearchParams({ kind, page: maintenancePage, pageSize: 48, ignored })}`);
     if (generation !== maintenanceGeneration) return;
@@ -1251,7 +1253,7 @@ async function loadMaintenance() {
         remove.type = "button";
         remove.disabled = maintenanceBusy;
         remove.setAttribute("aria-label", `Remove catalog entry: ${bookTitle(book)}`);
-        remove.addEventListener("click", () => removeMissingBook(book, remove));
+        remove.addEventListener("click", () => removeMissingBooks(book));
         actions.append(remove);
       }
       row.append(actions);
@@ -1265,6 +1267,7 @@ async function loadMaintenance() {
     $("maintenance-page").textContent = `Page ${maintenancePage} of ${maintenancePages}`;
     $("previous-maintenance").disabled = maintenancePage <= 1;
     $("next-maintenance").disabled = maintenancePage >= maintenancePages;
+    $("remove-all-missing").disabled = kind !== "missing" || !result.total;
   } catch (error) {
     if (generation !== maintenanceGeneration) return;
     $("maintenance-status").textContent = "Could not load maintenance records. Refresh to retry.";
@@ -1302,28 +1305,47 @@ async function setMissingIssueIgnored(series, ignored, generation) {
   }
 }
 
-async function removeMissingBook(book, button) {
-  if (maintenanceBusy || !confirm(`Remove “${bookTitle(book)}” at ${book.location} from the catalog?\n\nThis permanently removes its shared metadata and every user's reading progress, bookmarks, and list memberships. This cannot be undone. Source files are never deleted.\n\nRemoval is allowed only if the file is still genuinely missing from an accessible library.`)) return;
+async function removeMissingBooks(book = null) {
+  if (maintenanceBusy || session?.role !== "admin") return;
   const epoch = authEpoch;
+  const books = book ? [book] : [];
+  let removed = 0;
   maintenanceBusy = true;
-  button.disabled = true;
+  maintenanceGeneration++;
+  for (const control of $("maintenance-dialog").querySelectorAll("button, select, input")) control.disabled = true;
   $("maintenance-error").hidden = true;
+  $("maintenance-status").textContent = "Checking missing catalog entries…";
   try {
-    await api(`/api/books/${encodeURIComponent(book.id)}`, { method: "DELETE" });
-    if (epoch !== authEpoch) return;
-    clearSelection();
-    if (detailBook?.id === book.id) { $("details-dialog").close(); detailBook = null; }
-    loadLists();
-    loadPublishers();
+    if (!book) {
+      for (let page = 1; ; page++) {
+        const result = await api(`/api/maintenance?${new URLSearchParams({ kind: "missing", page, pageSize: 100 })}`);
+        if (epoch !== authEpoch) return;
+        books.push(...result.items);
+        if (page * result.pageSize >= result.total) break;
+      }
+    }
+    if (!books.length || !confirm(`Remove ${book ? `“${bookTitle(book)}” at ${book.location}` : `all ${books.length} missing comicbooks across every page`} from the catalog?\n\nThis permanently removes their shared metadata and every user's reading progress, bookmarks, and list memberships. This cannot be undone. Source files are never deleted.\n\nEach file must still be genuinely missing from an accessible library. Cleanup stops on the first failure; earlier removals are kept.`)) return;
+    for (const item of books) {
+      $("maintenance-status").textContent = `Removing missing catalog entries: ${removed} of ${books.length}…`;
+      await api(`/api/books/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      if (epoch !== authEpoch) return;
+      removed++;
+      selectedBooks.delete(item.id);
+      if (detailBook?.id === item.id) { $("details-dialog").close(); detailBook = null; }
+    }
   } catch (error) {
     if (epoch !== authEpoch) return;
-    $("maintenance-error").textContent = `Catalog removal failed: ${error.message}. Records have been refreshed; no source files were deleted.`;
+    $("maintenance-error").textContent = `Cleanup stopped. Confirmed removals: ${removed}. Could not confirm the next removal: ${error.message}. Refresh and inspect the remaining records before trying again. Nothing is retried automatically; no source files were deleted.`;
     $("maintenance-error").hidden = false;
   } finally {
     if (epoch === authEpoch) {
       maintenanceBusy = false;
-      loadMaintenance();
+      for (const control of $("maintenance-dialog").querySelectorAll("button, select, input")) control.disabled = false;
+      loadLists();
+      loadPublishers();
       loadLibrary();
+      await loadMaintenance();
+      if (epoch === authEpoch && $("maintenance-dialog").open) $("maintenance-status").focus();
     }
   }
 }
@@ -1975,6 +1997,7 @@ $("delete-selected").addEventListener("click", async () => {
 
 function canCloseDialog(id) {
   if (id === "kavita-import-dialog") return !kavitaImport?.applying;
+  if (id === "maintenance-dialog") return !maintenanceBusy;
   if (id === "details-dialog" && intake?.replacement && intake.saving) return false;
   if (id === "intake-dialog") return !intake?.saving && !metadataBusy && !organizationBusy && !archiveBusy && !fileOperationBusy;
   if (id === "data-relocation-dialog") return !serverSettingsBusy && (!dataRelocationDirty() || confirm("Discard this unsubmitted relocation request?"));
@@ -1991,7 +2014,7 @@ function canCloseDialog(id) {
   return !((rating && ratingDirty) || (folder && folderDirty)) || confirm(`Discard unsaved ${rating ? "rating" : "folder"} changes?`);
 }
 
-for (const id of ["kavita-import-dialog", "user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
+for (const id of ["maintenance-dialog", "kavita-import-dialog", "user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
   if (!canCloseDialog(id)) event.preventDefault();
 });
 
@@ -5631,6 +5654,7 @@ for (const id of ["maintenance-kind", "maintenance-ignored"]) $(id).addEventList
   loadMaintenance();
 });
 $("refresh-maintenance").addEventListener("click", () => { $("maintenance-error").hidden = true; loadMaintenance(); });
+$("remove-all-missing").addEventListener("click", () => removeMissingBooks());
 $("previous-maintenance").addEventListener("click", () => { if (maintenancePage > 1) { maintenancePage--; loadMaintenance(); } });
 $("next-maintenance").addEventListener("click", () => { if (maintenancePage < maintenancePages) { maintenancePage++; loadMaintenance(); } });
 

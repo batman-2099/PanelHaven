@@ -84,7 +84,8 @@
     await waitFor(() => !document.querySelector(".selection-toolbar").inert && $("books").getAttribute("aria-busy") !== "true");
     assert(await exists(first) === 404 && await exists(keep) === 200, "Deleted catalog entry must disappear; unrelated fixture must survive.");
     assert($("selection-count").textContent.startsWith("0 "), "Confirmed deleted ID must be deselected.");
-    assert(!document.querySelector("dialog[open]") && document.activeElement === $("management-status"), "Completion must remain inline with stable focus.");
+    assert(!document.querySelector("dialog[open]") && document.activeElement === $("library-page") && !$("management-status").textContent,
+      "Successful deletion must clear its summary and return focus to the catalog.");
     select(second);
     loseResponse = true;
     $("delete-selected").click();

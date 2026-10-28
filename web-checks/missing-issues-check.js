@@ -95,7 +95,7 @@
       const volume = value === undefined || value.trim() === '' || Number(value) < 0 ? null : Number(value);
       assert(volume === entry.volume, "View series included an issue from another volume.");
     }
-    assert($('books').querySelector('.book-selection') && document.activeElement === $('library-status'),
+    assert($('books').querySelector('.book-selection') && document.activeElement === $('library-page'),
       "Series results or navigation focus are missing.");
     for (const card of $('books').querySelectorAll('.missing-issue')) {
       const issue = card.querySelector('.missing-issue-cover strong').textContent.match(/\d+/)[0];

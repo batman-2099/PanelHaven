@@ -374,7 +374,6 @@ function updateCatalogArrangement() {
   arrangement.open = !narrowCatalog.matches;
   if (!narrowCatalog.matches && focused === summary) $("book-status").focus();
   summary.hidden = !narrowCatalog.matches;
-  $("reading-list").size = narrowCatalog.matches ? 1 : 8;
 }
 narrowCatalog.addEventListener("change", updateCatalogArrangement);
 updateCatalogArrangement();
@@ -726,7 +725,7 @@ function restoreLibraryFocus(key, generation) {
     closedSections.delete(section.dataset.sectionKey);
     rememberCatalogView();
   }
-  (target && !target.closest("[hidden]") ? target : $("library-status")).focus();
+  (target && !target.closest("[hidden]") ? target : $("library-page")).focus();
 }
 
 
@@ -976,9 +975,8 @@ async function loadLibrary(focusResults = false) {
     }
     updateSelection();
     const filtered = advancedFilter || libraryQuery || $("book-status").value !== "all" || $("book-rating").value !== "" || $("publisher").value || $("book-availability").value !== "all" || groupKey !== null;
-    const unit = seriesRoot ? "series" : grouping ? "stack" : "book";
     $("library-status").textContent = result.total
-      ? `${result.total} ${unit}${result.total === 1 || seriesRoot ? "" : "s"} · Showing ${(libraryPage - 1) * result.pageSize + 1}–${(libraryPage - 1) * result.pageSize + result.items.length}`
+      ? ""
       : seriesRoot ? series === "on-deck" ? "No series in Next Issue. Start reading a series from the library to continue it here."
         : series === "recently-updated" ? "No series received new comicbooks in the last 12 days. Choose All books to browse your library."
         : "No named series yet. Scan library comicbooks with Series metadata to see them here."
@@ -1000,8 +998,9 @@ async function loadLibrary(focusResults = false) {
     if (generation === searchGeneration && hash === location.hash) {
       finishLibraryLoading();
       if (focusResults && !$("library-view").hidden) {
-        $("library-status").focus({ preventScroll: true });
-        $("library-status").scrollIntoView({ block: "start" });
+        const target = $("library-status").textContent ? $("library-status") : $("library-page");
+        target.focus({ preventScroll: true });
+        target.scrollIntoView({ block: "start" });
       }
     }
   }
@@ -1519,7 +1518,7 @@ function clearSelection(announce = false) {
   updateSelection();
   if (announce) {
     $("management-status").textContent = "All selections cleared.";
-    $("library-status").focus();
+    $("library-page").focus();
   }
 }
 function folderPath(folder) {
@@ -1951,7 +1950,9 @@ $("delete-selected").addEventListener("click", async () => {
     if (deletion !== state) return;
     for (const id of result.deletedIds) { selectedBooks.delete(id); failedCovers.delete(id); }
     const failures = result.failures.map(item => `${preview.items.find(book => book.bookId === item.bookId)?.title || item.bookId}: ${item.error}`);
-    status.textContent = `${result.message}\nDeleted: ${result.deletedIds.length}. Failed: ${failures.length}.${failures.length ? `\n${failures.join("\n")}\nFailed comicbooks remain selected. Inspect them before trying again.` : ""}\nNothing will be retried automatically.`;
+    status.textContent = failures.length
+      ? `Deleted: ${result.deletedIds.length}. Failed: ${failures.length}.\n${failures.join("\n")}\nFailed comicbooks remain selected. Inspect them before trying again.`
+      : "";
   } catch (error) {
     if (deletion !== state) return;
     status.textContent = !submitted
@@ -1964,7 +1965,7 @@ $("delete-selected").addEventListener("click", async () => {
       deletionBusy = false;
       deletion = null;
       updateSelection();
-      status.focus({ preventScroll: true });
+      (status.textContent ? status : $("library-page")).focus({ preventScroll: true });
       loadLists();
       loadPublishers();
       loadLibrary();
@@ -2719,7 +2720,7 @@ async function intakeRequest(message, work, saving = false, checkProcessing = fa
           if (intakeCurrent(state, next)) $("intake-queue").focus({ preventScroll: true });
         } else {
           $("intake-dialog").close();
-          $("library-status").focus({ preventScroll: true });
+          $("library-page").focus({ preventScroll: true });
         }
       } else if (state.preview) $("intake-preview").focus();
       else if (focusStatus) $("intake-status").focus({ preventScroll: true });

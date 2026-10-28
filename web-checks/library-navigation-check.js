@@ -91,7 +91,7 @@
     await waitFor(() => !$('reader-view').hidden && !$('reader-details').disabled);
     hideBook = bookKey.slice('book:'.length);
     $('close-reader').click();
-    await waitFor(() => idle() && !$('library-view').hidden && document.activeElement === $('library-status'));
+    await waitFor(() => idle() && !$('library-view').hidden && document.activeElement === $('library-page'));
     hideBook = null;
     $('search').focus();
     const scan = await originalFetch('/api/scan').then(response => response.json());

@@ -72,10 +72,11 @@
     </section>
     <section id="library-view" aria-labelledby="library-title" hidden>
       <h1 id="library-title" class="catalog-title" tabindex="-1">Your library</h1>
-      <div class="library-layout">
-        <aside class="reading-list-sidebar" aria-labelledby="reading-lists-title">
-          <h2 id="reading-lists-title">Reading lists</h2>
-          <select id="reading-list" size="8" aria-labelledby="reading-lists-title"><option value="">All books</option></select>
+          <div class="library-controls">
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
+      <div class="catalog-browse">
+      <div class="library-filters" role="group" aria-label="Browse comicbooks">
+        <label>Reading lists<select id="reading-list"><option value="">All books</option></select></label>
           <details class="reading-list-management compact-disclosure"><summary>Manage lists</summary>
             <div class="reading-list-actions">
               <button id="create-list" type="button" class="primary">New list</button>
@@ -84,12 +85,6 @@
               <button id="manage-list-folders" type="button">Manage list folders</button>
             </div>
           </details>
-        </aside>
-        <div class="library-content">
-          <div class="library-controls">
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
-      <div class="catalog-browse">
-      <div class="library-filters" role="group" aria-label="Browse comicbooks">
         <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option><option value="unsorted">Unsorted</option></select></label>
         <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
       </div>
@@ -132,12 +127,10 @@
       <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
       <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
-      <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+      <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
           </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
       <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next →</button></nav>
-        </div>
-      </div>
     </section>
     <section id="reader-view" aria-labelledby="reader-title" hidden>
       <h1 id="reader-title" class="sr-only"></h1>

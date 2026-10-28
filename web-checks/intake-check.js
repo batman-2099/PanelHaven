@@ -162,7 +162,7 @@
     for (const [field, value] of Object.entries(originalMetadata.fields)) {
       if (field !== "Volume" && field !== "Title" && !proposal.fields[field]?.trim()) assert(saved.fields[field] === value, `Omitted provider field was erased: ${field}`);
     }
-    assert($("metadata-view").hidden && !$("organization-dialog").open && document.activeElement === $("library-status"),
+    assert($("metadata-view").hidden && !$("organization-dialog").open && document.activeElement === $("library-page"),
       "Successful acceptance did not close the window and return focus to the library.");
     assert(!mutations.some(item => item.path === "/api/books/metadata" || item.path === "/api/file-operations"), "Candidate acceptance used obsolete catalog-only/manual-move endpoints.");
     assert(matchRequests === 4 && mutations.filter(item => item.path.endsWith("/intake/prepare")).length === 3, "Unexpected automatic matching or preparation retry.");

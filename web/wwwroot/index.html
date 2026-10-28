@@ -92,7 +92,7 @@
         <label>Group by<select id="group-by" title="Divide results into labeled sections"><option value="none">None</option><option value="series">Series</option><option value="publisher" selected>Publisher</option><option value="folder">Folder</option></select></label>
         <label>Stack by<select id="stack-by" title="Combine matching comicbooks into cover stacks"><option value="none">None</option><option value="series" selected>Series</option><option value="publisher">Publisher</option><option value="folder">Folder</option></select></label>
         <label>Sort by<select id="book-sort"><option value="series">Series</option><option value="title">Title</option><option value="number" selected>Number</option><option value="publisher">Publisher</option><option value="pageCount">Page count</option><option value="personalRating">My rating</option><option value="list">List order</option></select></label>
-      </div><p class="muted catalog-help">Group by creates sections. Stack by combines covers. Sort by orders results.</p></details>
+      </div></details>
       </div>
       <p id="reading-status-hint" class="muted" hidden>Series discovery uses fixed criteria and order instead of your browsing filters. <button id="return-to-browse" type="button" class="quiet" hidden>Return to previous browse view</button></p>
       <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">· No active filters</span></summary><div class="library-filters">
@@ -126,8 +126,10 @@
       </div>
       <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
-      <div id="group-navigation" class="library-pagination" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
-      <nav class="library-pagination" aria-label="Library pages"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+      <nav class="library-pagination" aria-label="Library pages">
+        <div id="group-navigation" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
+        <button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button>
+      </nav>
           </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
       <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next →</button></nav>

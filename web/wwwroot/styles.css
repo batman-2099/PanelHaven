@@ -68,7 +68,7 @@ main { max-width: 1600px; margin: auto; padding: 2.5rem clamp(1rem, 4vw, 3.5rem)
 .compact-disclosure > summary { min-height: 44px; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-inset); }
 .compact-disclosure[open] > summary { margin-bottom: .5rem; }
 .catalog-title { font-size: var(--text-section); letter-spacing: normal; margin-bottom: var(--space); }
-.catalog-help, .selection-hint { font-size: var(--text-small); margin-bottom: var(--space-small); }
+.selection-hint { font-size: var(--text-small); margin-bottom: var(--space-small); }
 .selection-hint { flex-basis: 100%; }
 .book-details, .missing-issue > .button-link { margin-top: var(--space-small); width: 100%; }
 .reading-list-management { align-self: end; margin: 0; }
@@ -89,7 +89,8 @@ main { max-width: 1600px; margin: auto; padding: 2.5rem clamp(1rem, 4vw, 3.5rem)
 #active-filter-count { font-weight: 400; }
 .library-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .65rem; margin: 0 0 .75rem; }
 .library-pagination-bottom { margin-top: 2rem; }
-#group-navigation { justify-content: flex-start; gap: .75rem; text-align: left; overflow-wrap: anywhere; }
+#library-page { scroll-margin-block: var(--space); }
+#group-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-inline-end: auto; min-width: 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
 #group-label { font-size: 1.35rem; font-weight: 600; line-height: 1.4; }
 .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 1.8rem 1.25rem; }
 #books:has(> .book-section) { display: block; }

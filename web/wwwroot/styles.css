@@ -88,9 +88,11 @@ main { max-width: 1600px; margin: auto; padding: 2.5rem clamp(1rem, 4vw, 3.5rem)
 .filter-actions { flex-wrap: wrap; margin-bottom: .8rem; }
 #active-filter-count { font-weight: 400; }
 .library-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .65rem; margin: 0 0 .75rem; }
+.catalog-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.catalog-pagination > .library-pagination { grid-column: 2; margin: 0; }
 .library-pagination-bottom { margin-top: 2rem; }
 #library-page { scroll-margin-block: var(--space); }
-#group-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-inline-end: auto; min-width: 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+#group-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; min-width: 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
 #group-label { font-size: 1.35rem; font-weight: 600; line-height: 1.4; }
 .book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 1.8rem 1.25rem; }
 #books:has(> .book-section) { display: block; }
@@ -345,6 +347,8 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
   main:has(#library-view:not([hidden])) { max-width: none; }
 }
 @media (max-width: 900px) {
+  .catalog-pagination { grid-template-columns: minmax(0, 1fr); }
+  .catalog-pagination > .library-pagination { grid-column: 1; }
   .catalog-browse { display: block; }
   #catalog-arrangement { margin-bottom: .65rem; }
   .catalog-browse > .library-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }

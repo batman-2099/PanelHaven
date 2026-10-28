@@ -1,5 +1,5 @@
 // Run in the browser console, signed in as admin on an idle DISPOSABLE server.
-// Configure a writable Library root, the tested source location, and a real server-side Comic Vine key.
+// Configure a writable Library or Archived destination, the tested source location, and a real server-side Comic Vine key.
 // Scan a disposable CBZ/ZIP or real CBR fixture with no earlier processing operation.
 // Put the fixture on the current flat-books page. Use a fresh fixture for each run.
 // window.panelHavenIntakeCheck = { disposable: true, bookId: "fixture-id", destinationRoot: 0,
@@ -102,10 +102,12 @@
     $("process-selected").click();
     await waitFor(() => !$("intake-hints").disabled && $("intake-queue").value === config.bookId);
     assert($("intake-queue").options.length === 1 && $("intake-scope").textContent.includes("selected"), "Selected queue did not isolate the fixture.");
-    assert([...$("intake-root").options].every(option => /^Library \d+$/.test(option.textContent)), "Non-library destination was offered.");
+    assert([...$("intake-root").options].every(option => /^Library \d+$/.test(option.textContent) || option.textContent === "Archived"), "An unsupported processing destination was offered.");
     $("intake-root").value = String(config.destinationRoot);
     change("intake-root");
-    assert($("intake-root").value === String(config.destinationRoot), "Configured destination is not a regular library.");
+    assert($("intake-root").value === String(config.destinationRoot), "Configured destination is not available.");
+    const destinationLabel = $("intake-root").selectedOptions[0].textContent;
+    const destinationLocation = destinationLabel === "Archived" ? "archived" : "library";
     input("intake-series", series);
     $("intake-match").click();
     await waitFor(() => !$("intake-match").disabled && $("intake-status").textContent.includes("Disposable provider failure"));
@@ -155,6 +157,7 @@
     assert($("intake-progress").hidden, "Completed processing left the progress indicator active.");
     const status = await readJson(`${base}/intake-processing`), saved = await readJson(`${base}/metadata`), moved = await readJson(base);
     assert(status.state === "completed" && status.converted === config.converted && !status.canRecover, "Real persisted processing did not complete.");
+    assert(status.destination.startsWith(`${destinationLabel}/`), "Processing ignored the selected destination area.");
     assert(moved.id === originalBook.id && moved.location !== originalBook.location && moved.currentPage === originalBook.currentPage
       && moved.completed === originalBook.completed, "Processing lost comic identity/progress or did not move the comicbook.");
     assert(saved.fields.Series === series && saved.fields.Number === proposal.fields.Number
@@ -167,7 +170,7 @@
     assert(!mutations.some(item => item.path === "/api/books/metadata" || item.path === "/api/file-operations"), "Candidate acceptance used obsolete catalog-only/manual-move endpoints.");
     assert(matchRequests === 4 && mutations.filter(item => item.path.endsWith("/intake/prepare")).length === 3, "Unexpected automatic matching or preparation retry.");
     assert(!$("intake-dialog").open, "Completed acceptance reopened the queue.");
-    location.hash = `reader/${encodeURIComponent(config.bookId)}?location=library`;
+    location.hash = `reader/${encodeURIComponent(config.bookId)}?location=${destinationLocation}`;
     await waitFor(() => !$("reader-view").hidden && !$("reader-details").disabled);
     $("reader-details").click();
     await waitFor(() => $("details-dialog").open && !$("intake-history").hidden);
@@ -185,7 +188,7 @@
     close("details-dialog");
     $("close-reader").click();
     await waitFor(() => !$("library-view").hidden);
-    $("library-location").value = "library";
+    $("library-location").value = destinationLocation;
     change("library-location");
     await waitFor(() => !$("library-view").hidden && $("books").getAttribute("aria-busy") !== "true" && document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`));
     document.querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`).click();

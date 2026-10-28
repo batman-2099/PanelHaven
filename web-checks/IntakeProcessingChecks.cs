@@ -103,6 +103,33 @@ internal static class IntakeProcessingChecks
             }
         }
 
+        foreach (var format in new[] { "cbz", "zip", "rar4.cbr" })
+        using (var fixture = new Fixture(format))
+        {
+            Directory.CreateDirectory(fixture.Archived);
+            var store = new LibraryStore(fixture.Database, [fixture.Library], fixture.Archived, fixture.Unsorted);
+            var page = store.GetPage(fixture.Id, 0).Bytes;
+            store.SaveProgress("owner", fixture.Id, new(1, true));
+            var prepared = store.PrepareIntake(fixture.Id, new(1, 2, 1), Metadata);
+            Check(prepared.Destination.StartsWith("Archived/Publisher/Example/", StringComparison.Ordinal),
+                "Processing did not target the configured Archived publisher/series folder.");
+            Reject<ArgumentException>(() => store.PrepareIntake(fixture.Id, new(1, 2, 2), Metadata));
+            Reject<ArgumentException>(() => store.PrepareIntake(fixture.Id, new(1, 2, 99), Metadata));
+            Reject<FileOperationConflictException>(() => store.ProcessIntake(fixture.Id, new(1, 2, 0, prepared.Revision, true), Metadata));
+            var result = store.ProcessIntake(fixture.Id, new(1, 2, 1, prepared.Revision, true), Metadata);
+            Check(result.State == "completed" && !File.Exists(fixture.Source)
+                && store.ListBooks("owner", null, location: "archived").Items.Single().Id == fixture.Id
+                && store.ListBooks("owner", null, location: "unsorted").Total == 0
+                && store.ListBooks("owner", null).Total == 0, "Archived processing left the comicbook in the wrong area.");
+            Check(store.GetBook("owner", fixture.Id).Completed && store.GetPage(fixture.Id, 0).Bytes.SequenceEqual(page)
+                && store.GetMetadata(fixture.Id).Fields["Title"] == "Accepted title",
+                "Archived processing lost reading progress, page bytes or accepted metadata.");
+            var restarted = new LibraryStore(fixture.Database, [fixture.Library], fixture.Archived, fixture.Unsorted);
+            Check(restarted.GetIntakeProcessing(fixture.Id).State == "completed"
+                && restarted.ScanAsync(default).GetAwaiter().GetResult().Added == 0,
+                "Archived processing lost its completed state or duplicated the comicbook after restart.");
+        }
+
         using (var fixture = new Fixture("cbz"))
         {
             var first = fixture.Prepare();

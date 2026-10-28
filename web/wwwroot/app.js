@@ -2877,7 +2877,7 @@ async function showIntakeRow() {
       if (!$("intake-root").options.length) {
         const roots = await api("/api/file-operation-roots", options);
         if (!current()) return;
-        $("intake-root").replaceChildren(...roots.filter((root) => /^Library \d+$/.test(root.label)).map((root) => new Option(root.label, root.index)));
+        $("intake-root").replaceChildren(...roots.filter((root) => root.label !== "Unsorted").map((root) => new Option(root.label, root.index)));
       }
       if (row.completed || result.state === "pending" || result.canRecover) {
         $("intake-status").textContent = row.outcome;
@@ -2894,8 +2894,8 @@ async function showIntakeRow() {
     }
     $("intake-status").textContent = state.metadataOnly ? "Check the hints, then match and choose a candidate."
       : $("intake-root").options.length
-      ? "Check the hints and destination library, then match. Scores rank suggestions; they are not approval."
-      : "No regular destination library is configured. Configure a writable library in Server settings before accepting.";
+      ? "Check the hints and destination, then match. Scores rank suggestions; they are not approval."
+      : "No destination is configured. Configure a writable Library or Archived path in Server settings before accepting.";
   });
 }
 
@@ -2911,7 +2911,7 @@ function openIntake(rows, scope, mode = "process") {
   $("intake-root").hidden = document.querySelector('label[for="intake-root"]').hidden = historyOnly || metadataOnly;
   $("intake-outcome").hidden = metadataOnly;
   $("intake-refresh").textContent = metadataOnly ? "Refresh hints" : "Refresh processing status";
-  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Accept saves metadata and organizes the comicbook in the selected library. Processing removes the source after verified success and cannot be undone.");
+  $("intake-scope").textContent = scope + (historyOnly || metadataOnly ? "" : " Accept saves metadata and organizes the comicbook in the selected destination. Processing removes the source after verified success and cannot be undone.");
   $("intake-queue").replaceChildren(...rows.map((row) => new Option(row.title, row.id)));
   $("intake-dialog").showModal();
   showIntakeRow();
@@ -2984,7 +2984,7 @@ $("intake-refresh").addEventListener("click", () => {
 });
 $("intake-root").addEventListener("change", () => {
   cancelIntakeRequest();
-  $("intake-status").textContent = "Destination changed. Accept a candidate to process it in the selected library.";
+  $("intake-status").textContent = "Destination changed. Accept a candidate to process it in the selected destination.";
 });
 $("intake-recover").addEventListener("click", () => {
   if (!intake?.row?.processing?.canRecover) return;

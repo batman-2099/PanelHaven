@@ -107,8 +107,8 @@ public sealed partial class LibraryStore
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.IssueId <= 0 || request.VolumeId <= 0 || request.RootIndex < 0 || request.RootIndex >= roots.Length
-            || !RootLabel(request.RootIndex).StartsWith("Library ", StringComparison.Ordinal))
-            throw new ArgumentException("Select a provider issue and a regular destination library.");
+            || roots[request.RootIndex].Equals(unsortedPath, PathComparison))
+            throw new ArgumentException("Select a provider issue and a Library or Archived destination.");
         GetIntake(id);
         RefusePendingFileOperation(db, id);
         var catalog = ReadArchiveCatalog(db, null, id);

@@ -1,0 +1,12 @@
+/* Hallmark · Panel Haven app foundations · v2.0.0 */
+html, body { overflow-x: clip; }
+html { scrollbar-color: var(--line) var(--canvas); }
+body { font-family: var(--font-body); font-size: 1rem; line-height: 1.5; background: var(--canvas); color: var(--ink); caret-color: var(--accent); }
+::selection { background: var(--primary); color: var(--action-ink); }
+h1, h2, h3, h4, h5 { overflow-wrap: break-word; min-width: 0; text-wrap: balance; }
+button, input, select, textarea { min-height: 44px; }
+input[type="checkbox"], input[type="radio"] { min-height: 0; }
+input:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: not-allowed; }
+button[aria-busy="true"] { cursor: progress; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

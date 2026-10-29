@@ -172,7 +172,7 @@ function renderPageOrder() {
       });
       node.addEventListener("dragend", () => { draggedPage = null; });
     }
-    node.querySelector(".page-order-label").textContent = `Position ${position + 1} · Physical page ${page + 1}`;
+    node.querySelector(".page-order-label").textContent = `Position ${position + 1}, Physical page ${page + 1}`;
     return node;
   });
   $("page-order-pages").replaceChildren(...nodes);
@@ -359,7 +359,7 @@ function showView(name) {
   if (name !== "settings" && !$("settings-view").hidden) resetServerSettings();
   if (name !== "metadata" && !$("metadata-view").hidden) resetMetadataEditor();
   for (const view of ["login", "library", "reader", "password", "settings", "metadata"]) $(view + "-view").hidden = view !== name;
-  document.title = `${{ login: "Sign in", password: "Change password", library: $("library-title").textContent, settings: "Server settings", metadata: $("metadata-title").textContent, reader: currentBook ? bookTitle(currentBook) : "Loading book" }[name]} · Panel Haven`;
+  document.title = `${{ login: "Sign in", password: "Change password", library: $("library-title").textContent, settings: "Server settings", metadata: $("metadata-title").textContent, reader: currentBook ? bookTitle(currentBook) : "Loading book" }[name]} — Panel Haven`;
   $("startup").hidden = true;
   renderScan();
 }
@@ -787,7 +787,7 @@ function updateReadingStatusControls() {
   const advancedCount = advancedFilter ? countRules(advancedFilter.rules) : 0;
   const count = advancedCount + [libraryQuery, $("reading-list").value, $("publisher").value,
     $("book-rating").value, $("book-status").value !== "all" && !series, $("book-availability").value !== "all"].filter(value => value !== "" && Boolean(value)).length;
-  $("active-filter-count").textContent = count ? `· ${count} active filter${count === 1 ? "" : "s"}` : "· No active filters";
+  $("active-filter-count").textContent = count ? `(${count} active filter${count === 1 ? "" : "s"})` : "(No active filters)";
   $("advanced-filter-summary").textContent = series ? "Advanced filters are unavailable in fixed series discovery views."
     : advancedCount ? `${advancedCount} advanced rule${advancedCount === 1 ? "" : "s"} applied (${advancedFilter.match === "all" ? "all" : "any"} must match), together with your basic filters.`
     : "No advanced rules applied.";
@@ -846,7 +846,7 @@ async function loadLibrary(focusResults = false) {
       for (let index = section.start; index < section.start + section.count; index++) sectionKeys[index] = section.key;
     const cards = result.items.map((book, index) => {
       const card = textElement("article", "", grouping ? "book-card group-card" : "book-card");
-      const title = grouping ? book.label : [book.series, book.number && `#${book.number}`].filter(Boolean).join(" · ") || "Unknown series";
+      const title = grouping ? book.label : [book.series, book.number && `#${book.number}`].filter(Boolean).join(" ") || "Unknown series";
       const coverId = grouping ? book.coverId : book.availability === "available" ? book.id : null;
       const cover = textElement("button", "", "cover-button");
       cover.type = "button";
@@ -965,7 +965,7 @@ async function loadLibrary(focusResults = false) {
         const card = textElement("article", "", "book-card missing-issue");
         const cover = textElement("div", "", "missing-issue-cover");
         cover.append(textElement("strong", label), textElement("span", range ? "Missing issues" : "Missing issue"));
-        card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel} · ${gap.volume === null ? "Volume unknown" : `Vol. ${gap.volume}`} ${label}`),
+        card.append(cover, textElement(sections.length ? "h3" : "h2", `${groupLabel}, ${gap.volume === null ? "Volume unknown" : `Vol. ${gap.volume}`} ${label}`),
           textElement("p", "Not in this location", "muted"), missingIssueLink(result.items[anchor].series, number));
         placeholders.push(card);
         if (range) break;
@@ -1075,7 +1075,7 @@ function renderScan() {
     running: "Scanning libraries…", cancelling: "Cancelling scan…", completed: "Scan completed",
     cancelled: "Scan cancelled", failed: "Scan failed"
   }[scanStatus?.state] || "Library scan";
-  $("scan-summary").textContent = `${summary}${scanStatus?.errorCount ? ` · ${scanStatus.errorCount} error(s)` : ""}`;
+  $("scan-summary").textContent = `${summary}${scanStatus?.errorCount ? `, ${scanStatus.errorCount} error(s)` : ""}`;
   if (!scanStatus) return;
   $("scan-panel").hidden = (scanStatus.state === "idle" && $("scan-error").hidden) ||
     (dismissible && dismissedScanResult === scanResultSignature());
@@ -1083,7 +1083,7 @@ function renderScan() {
     idle: "No scan has started.", running: "Scanning libraries…", cancelling: "Cancelling scan…",
     completed: "Scan completed.", cancelled: "Scan cancelled. Changes already scanned were kept.", failed: "Scan failed. Review the errors and try scanning again."
   }[scanStatus.state];
-  $("scan-result").textContent = `${label}\n${scanStatus.scanned} scanned · ${scanStatus.added} added · ${scanStatus.updated} updated · ${scanStatus.skipped} skipped · ${scanStatus.errorCount} error(s)`;
+  $("scan-result").textContent = `${label}\n${scanStatus.scanned} scanned, ${scanStatus.added} added, ${scanStatus.updated} updated, ${scanStatus.skipped} skipped, ${scanStatus.errorCount} error(s)`;
   $("scan-errors").hidden = scanStatus.errorCount === 0;
   $("scan-error-count").textContent = `${scanStatus.errorCount} scan error(s)${scanStatus.errorCount > scanStatus.errors.length ? ` (showing first ${scanStatus.errors.length})` : ""}`;
   $("scan-error-list").textContent = scanStatus.errors.join("\n");
@@ -1173,7 +1173,7 @@ async function loadMaintenance() {
         const row = textElement("article", "", "maintenance-row");
         const issues = book.first === book.last ? `Missing issue #${book.first}` : `Missing issues #${book.first}–#${book.last}`;
         const location = { library: "Library", archived: "Archived", unsorted: "Unsorted" }[book.location];
-        const runLabel = `${book.series} · ${book.volume === null ? "Volume unknown" : `Vol. ${book.volume}`}`;
+        const runLabel = `${book.series}, ${book.volume === null ? "Volume unknown" : `Vol. ${book.volume}`}`;
         row.append(textElement("h3", runLabel), textElement("p", issues), textElement("p", location, "muted"));
         const view = textElement("button", "View series");
         view.type = "button";
@@ -1261,7 +1261,7 @@ async function loadMaintenance() {
     }
     $("maintenance-items").replaceChildren(...rows);
     $("maintenance-status").textContent = result.total
-      ? `${result.total} ${kind === "missing-issues" ? ignored ? "ignored issue gaps" : "issue gaps" : "records"} · Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
+      ? `${result.total} ${kind === "missing-issues" ? ignored ? "ignored issue gaps" : "issue gaps" : "records"}. Showing ${(maintenancePage - 1) * result.pageSize + 1}–${(maintenancePage - 1) * result.pageSize + result.items.length}`
       : kind === "missing-issues" ? ignored ? "No ignored series currently have missing issue gaps." : "No missing issue gaps found. Use Ignored to view hidden series."
       : "No matching records. Scan the libraries to update availability and duplicate detection.";
     $("maintenance-page").textContent = `Page ${maintenancePage} of ${maintenancePages}`;
@@ -1416,7 +1416,7 @@ async function loadDuplicateComparison(page = duplicatePage) {
     $("duplicate-table").replaceChildren(textElement("caption", "Selected copy and up to three other copies; the selected copy stays in the first book column."), heading, body);
     $("duplicate-hash").textContent = `Last-scan SHA-256: ${result.duplicateKey}`;
     $("duplicate-page").textContent = `Page ${duplicatePage} of ${duplicatePages}`;
-    $("duplicate-status").textContent = `${result.total} other copies · Showing ${(duplicatePage - 1) * result.pageSize + 1}–${(duplicatePage - 1) * result.pageSize + result.items.length}. Highlighted cells differ from the selected copy.`;
+    $("duplicate-status").textContent = `${result.total} other copies. Showing ${(duplicatePage - 1) * result.pageSize + 1}–${(duplicatePage - 1) * result.pageSize + result.items.length}. Highlighted cells differ from the selected copy.`;
   } catch (error) {
     if (epoch === authEpoch && generation === duplicateGeneration)
       $("duplicate-status").textContent = `Comparison failed: ${error.message}. Any displayed comparison is unchanged. Refresh to retry; scan again if the group no longer exists.`;
@@ -1459,13 +1459,13 @@ async function refreshDetailAvailability() {
 function renderDetails(book, metadata = null, schema = []) {
   $("details-title").textContent = bookTitle(book);
   const content = $("details-content");
-  content.replaceChildren(textElement("p", [book.series, book.number && `#${book.number}`, book.publisher].filter(Boolean).join(" · "), "muted"));
+  content.replaceChildren(textElement("p", [book.series, book.number && `#${book.number}`, book.publisher].filter(Boolean).join(", "), "muted"));
   const availability = textElement("p", "", book.availability === "available" ? "muted" : "book-availability");
   availability.id = "details-availability";
   content.append(availability, textElement("p", book.location, "muted"));
   renderDetailAvailability(book);
   if (book.summary) content.append(textElement("p", book.summary, "summary"));
-  content.append(textElement("p", `${book.pageCount} pages · ${book.completed ? "Completed" : book.started ? `Continue on physical page ${book.currentPage + 1}` : "Unread"}`));
+  content.append(textElement("p", `${book.pageCount} pages. ${book.completed ? "Completed" : book.started ? `Continue on physical page ${book.currentPage + 1}` : "Unread"}`));
   if (metadata) {
     const details = document.createElement("details");
     details.append(textElement("summary", "Full metadata"));
@@ -2063,14 +2063,14 @@ function renderKavitaImportEntries() {
   const entries = filter ? state.preview.entries.filter(entry => entry.status === filter) : state.preview.entries;
   const pages = Math.max(1, Math.ceil(entries.length / 50));
   state.page = Math.max(1, Math.min(state.page, pages));
-  $("kavita-import-page").textContent = `Page ${state.page} of ${pages} · ${entries.length} files`;
+  $("kavita-import-page").textContent = `Page ${state.page} of ${pages}, ${entries.length} files`;
   $("previous-kavita-import").disabled = state.page === 1;
   $("next-kavita-import").disabled = state.page === pages;
   $("kavita-import-entries").replaceChildren(...entries.slice((state.page - 1) * 50, state.page * 50).map(entry => {
     const row = textElement("article", "", "maintenance-row");
     const source = textElement("p", "");
     source.append(textElement("strong", entry.source));
-    row.append(source, textElement("p", `${{ ready: "Ready", "already-read": "Already read", unmatched: "Unmatched", ambiguous: "Ambiguous" }[entry.status]}${entry.target ? ` · ${entry.target}` : ""}`));
+    row.append(source, textElement("p", `${{ ready: "Ready", "already-read": "Already read", unmatched: "Unmatched", ambiguous: "Ambiguous" }[entry.status]}${entry.target ? `: ${entry.target}` : ""}`));
     return row;
   }));
   if (!entries.length) $("kavita-import-entries").append(textElement("p", "No files in this result filter."));
@@ -2324,10 +2324,10 @@ function renderMetadataPreview(books, target) {
   for (const book of books) {
     const row = textElement("article", "", "maintenance-row");
     row.dataset.previewBook = book.id;
-    row.append(textElement("h4", bookTitle(book)));
+    row.append(textElement("h3", bookTitle(book)));
     if (!book.changes.length) row.append(textElement("p", "Unchanged — no actual changes.", "muted"));
     for (const change of book.changes) {
-      row.append(textElement("h5", `${change.custom ? "Custom: " : ""}${change.field}`));
+      row.append(textElement("h4", `${change.custom ? "Custom: " : ""}${change.field}`));
       const values = document.createElement("dl");
       values.append(
         textElement("dt", "Before"), textElement("dd", change.before == null ? "(absent)" : change.before === "" ? "(empty string)" : JSON.stringify(change.before)),
@@ -2373,7 +2373,7 @@ async function loadMetadataReport() {
       const row = textElement("article", "", "maintenance-row");
       row.append(textElement("h3", bookTitle(book)));
       const issues = document.createElement("ul");
-      for (const issue of book.issues) issues.append(textElement("li", `${issue.field}: ${issue.message} · Value: ${issue.value == null ? "(absent)" : issue.value === "" ? "(empty string)" : JSON.stringify(issue.value)}`));
+      for (const issue of book.issues) issues.append(textElement("li", `${issue.field}: ${issue.message}; Value: ${issue.value == null ? "(absent)" : issue.value === "" ? "(empty string)" : JSON.stringify(issue.value)}`));
       const actions = textElement("div", "", "actions list-actions");
       const inspect = textElement("button", "Book details");
       inspect.type = "button";
@@ -2390,7 +2390,7 @@ async function loadMetadataReport() {
       $("metadata-report-items").append(row);
     }
     $("metadata-report-status").textContent = result.total
-      ? `${result.total} affected books · Showing ${(result.page - 1) * result.pageSize + 1}–${(result.page - 1) * result.pageSize + result.items.length}`
+      ? `${result.total} affected books. Showing ${(result.page - 1) * result.pageSize + 1}–${(result.page - 1) * result.pageSize + result.items.length}`
       : "No matching metadata issues.";
     $("metadata-report-page").textContent = `Page ${metadataReportPage} of ${metadataReportPages}`;
     $("previous-metadata-report").disabled = metadataReportPage <= 1;
@@ -2611,7 +2611,7 @@ function updateIntakeControls() {
   $("intake-feedback").classList.toggle("processing", showProgress);
   if (showProgress) {
     $("intake-progress-label").textContent = intake.processingStage;
-    $("intake-progress-book").textContent = row.title + (intake.rows.length > 1 ? ` · Queue ${intake.rows.indexOf(row) + 1} of ${intake.rows.length}` : "");
+    $("intake-progress-book").textContent = row.title + (intake.rows.length > 1 ? `, Queue ${intake.rows.indexOf(row) + 1} of ${intake.rows.length}` : "");
   }
   const processing = row?.processing;
   const blocked = !intake?.metadataOnly && (intake?.historyOnly || !processing || processing.state === "pending" || row.completed || processing.canRecover);
@@ -2798,7 +2798,7 @@ function renderIntakeCandidates() {
     }
     const details = document.createElement("div");
     details.append(textElement("h3", `${candidate.series} #${candidate.number} — ${candidate.title || "Untitled"}`),
-      textElement("p", `${candidate.publisher || "Unknown publisher"} · Run ${candidate.startYear || "unknown"} · Cover ${candidate.coverDate || "unknown"}`),
+      textElement("p", `${candidate.publisher || "Unknown publisher"}, Run ${candidate.startYear || "unknown"}, Cover ${candidate.coverDate || "unknown"}`),
       textElement("p", `Rank score ${candidate.score}/100`));
     const accept = textElement("button", "Accept", "success");
     accept.type = "button";
@@ -3236,7 +3236,7 @@ $("write-archive").addEventListener("click", () => {
   if (session?.role !== "admin" || !detailBook || archiveBusy) return;
   resetArchiveWrite();
   archiveBookId = detailBook.id;
-  $("archive-book").textContent = `${bookTitle(detailBook)} · ${detailBook.location}`;
+  $("archive-book").textContent = `${bookTitle(detailBook)}: ${detailBook.location}`;
   updateArchiveControls();
   $("archive-dialog").showModal();
 });
@@ -3364,7 +3364,7 @@ async function refreshFileOperationRecovery() {
     if (epoch !== authEpoch || generation !== fileOperationGeneration) return;
     for (const operation of operations) {
       const row = textElement("article", "", "maintenance-row");
-      row.append(textElement("h4", `${operation.state} · ${new Date(operation.createdAt).toLocaleString()}`),
+      row.append(textElement("h4", `${operation.state}, ${new Date(operation.createdAt).toLocaleString()}`),
         textElement("p", `Operation ${operation.id}`),
         textElement("p", `From: ${operation.source}`), textElement("p", `To: ${operation.destination}`),
         textElement("p", `SHA-256: ${operation.hash}`, "duplicate-key"));
@@ -3669,7 +3669,7 @@ $("organization-apply-form").addEventListener("submit", async (event) => {
     const result = await api("/api/file-operations", { method: "POST", body: JSON.stringify({ items, expectedRevision: preview.revision, confirmed: true }) });
     if (epoch !== authEpoch || generation !== organizationGeneration) return;
     for (const [label, entries] of [
-      ["Completed", result.completed.map((item) => `${item.bookId} · operation ${item.operationId}`)],
+      ["Completed", result.completed.map((item) => `${item.bookId}, operation ${item.operationId}`)],
       ["Skipped (unchanged)", result.skipped],
       ["Failed", result.failedBookId ? [`${result.failedBookId}: ${result.error || "Execution failed"}`] : []],
       ["Not attempted", result.notAttempted]
@@ -3737,7 +3737,7 @@ async function openFileOperation(book) {
   fileOperationExtension = name.match(/\.[^.]+$/u)?.[0] || "";
   $("file-operation-name").value = name;
   $("file-operation-extension").textContent = `Keep the source extension${fileOperationExtension ? `: ${fileOperationExtension}` : ""}. This is a rename / move, not a comicbook conversion.`;
-  $("file-operation-book").textContent = `${bookTitle(book)} · ${location || "Check pending recovery below; source availability is not required."}`;
+  $("file-operation-book").textContent = `${bookTitle(book)}: ${location || "Check pending recovery below; source availability is not required."}`;
   $("file-operation-status").textContent = "Loading destinations…";
   fileOperationBusy = true;
   updateFileOperationControls();
@@ -3806,7 +3806,7 @@ $("file-operation-apply-form").addEventListener("submit", async (event) => {
         if (epoch !== authEpoch || generation !== fileOperationGeneration || detailsGeneration !== detailGeneration) return;
         detailBook = book;
         renderDetails(book, metadata, schema);
-        $("file-operation-book").textContent = `${bookTitle(book)} · ${book.location}`;
+        $("file-operation-book").textContent = `${bookTitle(book)}: ${book.location}`;
         if (currentBook?.id === id) currentBook.location = book.location;
       } catch (error) {
         if (epoch === authEpoch && detailsGeneration === detailGeneration)
@@ -4194,12 +4194,12 @@ async function previewList(page = 1) {
       details.setAttribute("aria-label", `Book details: ${bookTitle(book)}`);
       details.addEventListener("click", () => openDetails(book.id));
       row.append(textElement("h3", bookTitle(book)), textElement("p", book.location),
-        textElement("p", `${book.pageCount} pages · ${book.availability}`), details);
+        textElement("p", `${book.pageCount} pages, ${book.availability}`), details);
       return row;
     }));
     $("list-preview-page").textContent = `Page ${listPreviewPage} of ${listPreviewPages}`;
     $("list-preview-status").textContent = result.total
-      ? `${result.total} matching books · Showing ${(result.page - 1) * result.pageSize + 1}–${(result.page - 1) * result.pageSize + result.items.length}. Preview only; matches remain live.`
+      ? `${result.total} matching books. Showing ${(result.page - 1) * result.pageSize + 1}–${(result.page - 1) * result.pageSize + result.items.length}. Preview only; matches remain live.`
       : "0 matching books. These rules are valid; you can save this empty smart list.";
   } catch (error) {
     if (epoch === authEpoch && generation === listPreviewGeneration) {
@@ -4764,7 +4764,7 @@ function pageTypeLabel(type) {
 }
 
 function pageLabel(page) {
-  return `Position ${readingPositions[page] + 1} · Physical page ${page + 1} · ${pageTypeLabel(pages[page]?.type)}`;
+  return `Position ${readingPositions[page] + 1}, Physical page ${page + 1}, ${pageTypeLabel(pages[page]?.type)}`;
 }
 
 let bookmarkDirty = false;
@@ -4892,7 +4892,7 @@ function updatePageControls() {
   $("bookmark-draft").hidden = !bookmarkDirty;
   for (const button of $("personal-bookmarks").querySelectorAll("[data-delete-bookmark]")) button.disabled = unavailable || bookmarkBusy || Boolean(unsavedBookmark);
   if (!unavailable) {
-    $("current-page-type").textContent = empty ? "No visible pages" : (readerPreferences.mode === "continuous" ? [currentPage] : displayedPages.length ? displayedPages : [currentPage]).map(pageLabel).join(" · ");
+    $("current-page-type").textContent = empty ? "No visible pages" : (readerPreferences.mode === "continuous" ? [currentPage] : displayedPages.length ? displayedPages : [currentPage]).map(pageLabel).join("; ");
     if (!bookmarkDirty && !unsavedBookmark && bookmarkEditorPage !== currentPage) {
       bookmarkEditorPage = currentPage;
       $("bookmark-name").value = personalBookmarks.find((bookmark) => bookmark.page === currentPage)?.name || "";
@@ -4908,7 +4908,7 @@ function createReaderPage(page, info) {
   const node = textElement("div", "", "reader-page");
   node.dataset.page = String(page);
   node.setAttribute("role", "group");
-  node.setAttribute("aria-label", `Physical page ${page + 1} · ${pageTypeLabel(info?.type)}`);
+  node.setAttribute("aria-label", `Physical page ${page + 1}, ${pageTypeLabel(info?.type)}`);
   const message = textElement("div", "", "page-message");
   node.append(message);
   const entry = { page, type: info?.type || "", typeMask: info?.typeMask || 0, bookmark: info?.bookmark || "", node, message, width: 0, height: 0, state: "idle", url: null, image: null, controller: null };
@@ -5037,7 +5037,7 @@ function renderReader(anchor = { page: currentPage, offset: 0, x: readerPreferen
   if (activePages.length) nearPages = new Set(readerPreferences.mode === "spread" ? spreadCandidates() : [currentPage]);
   for (const entry of pages) {
     if (readerPreferences.mode === "continuous" ? !isPageIncluded(entry.page) : !nearPages.has(entry.page)) releasePage(entry);
-    entry.node.setAttribute("aria-label", `Physical page ${entry.page + 1} · ${pageTypeLabel(entry.type)}`);
+    entry.node.setAttribute("aria-label", `Physical page ${entry.page + 1}, ${pageTypeLabel(entry.type)}`);
     if (entry.image) entry.image.alt = `${bookTitle(currentBook)}, ${pageLabel(entry.page)} of ${currentBook.pageCount}`;
   }
   viewAnchor = activePages.length ? anchor : null;
@@ -5399,7 +5399,7 @@ async function route(hash, generation) {
     personalBookmarks = bookmarks;
     currentPage = book.started ? Math.max(0, Math.min(book.currentPage, book.pageCount - 1)) : readingOrder[0];
     $("reader-title").textContent = bookTitle(book);
-    document.title = `${bookTitle(book)} · Panel Haven`;
+    document.title = `${bookTitle(book)} — Panel Haven`;
     $("page-count").textContent = `/ ${book.pageCount}`;
     $("page-number").max = String(book.pageCount);
     $("page-stage").focus({ preventScroll: true });
@@ -5556,7 +5556,7 @@ $("library-location").addEventListener("change", () => {
   const hash = $("library-location").value === "unsorted" ? "#unsorted" : "#library";
   if (location.hash !== hash) { location.hash = hash; return; }
   setCatalogLocation($("library-location").value);
-  document.title = `${$("library-title").textContent} · Panel Haven`;
+  document.title = `${$("library-title").textContent} — Panel Haven`;
   loadPublishers();
   changeLibrary();
 });

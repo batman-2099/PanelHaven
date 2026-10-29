@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Panel Haven · Your library</title>
+  <meta name="description" content="A self-hosted comic library and browser reader with private progress for every reader.">
+  <title>Panel Haven: Your library</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" type="module"></script>
@@ -47,6 +48,7 @@
     </div>
   </header>
   <main id="main" tabindex="-1">
+    <noscript><p class="notice">Panel Haven requires JavaScript to sign in, browse your library, and read comicbooks. Enable JavaScript in your browser, then reload this page.</p></noscript>
     <div id="error" class="notice error" role="alert" hidden></div>
     <p id="startup" class="empty" role="status">Connecting to your library…</p>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
@@ -71,7 +73,7 @@
       </form>
     </section>
     <section id="library-view" aria-labelledby="library-title" hidden>
-      <h1 id="library-title" class="catalog-title" tabindex="-1">Your library</h1>
+      <h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1>
           <div class="library-controls">
       <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
       <div class="catalog-browse">
@@ -95,9 +97,9 @@
       </div></details>
       </div>
       <p id="reading-status-hint" class="muted" hidden>Series discovery uses fixed criteria and order instead of your browsing filters. <button id="return-to-browse" type="button" class="quiet" hidden>Return to previous browse view</button></p>
-      <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">· No active filters</span></summary><div class="library-filters">
+      <details id="advanced-filters" class="compact-disclosure"><summary>Filters &amp; display <span id="active-filter-count">(No active filters)</span></summary><div class="library-filters">
         <label>Direction<select id="sort-direction"><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
-        <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+        <label>My rating<select id="book-rating"><option value="">All ratings</option><option value="0">0 (Unrated)</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
         <label>Availability<select id="book-availability"><option value="all">All availability</option><option value="available">Available</option><option value="missing">Missing</option><option value="unavailable">Unavailable</option></select></label>
         <label>Publisher<select id="publisher"><option value="">All publishers</option></select></label>
         <label>Items per page<select id="page-size"><option value="24">24</option><option value="48" selected>48</option><option value="96">96</option></select></label>
@@ -128,11 +130,11 @@
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
       <nav class="library-pagination catalog-pagination" aria-label="Library pages">
         <div id="group-navigation" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
-        <div class="library-pagination"><button id="previous-books" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next →</button></div>
+        <div class="library-pagination"><button id="previous-books" type="button" aria-label="Previous library page" disabled>Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next</button></div>
       </nav>
           </div>
       <div id="books" class="book-grid" aria-label="Books"></div>
-      <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>← Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next →</button></nav>
+      <nav class="library-pagination library-pagination-bottom" aria-label="Library pages, bottom"><button id="previous-books-bottom" type="button" aria-label="Previous library page" disabled>Previous</button><span id="library-page-bottom">Page 1 of 1</span><button id="next-books-bottom" type="button" aria-label="Next library page" disabled>Next</button></nav>
     </section>
     <section id="reader-view" aria-labelledby="reader-title" hidden>
       <h1 id="reader-title" class="sr-only"></h1>
@@ -250,7 +252,7 @@
         <button id="apply-metadata" type="submit" class="success" hidden disabled>Apply reviewed changes</button>
       </div>
     <p id="metadata-status" role="status" tabindex="-1"></p>
-      <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h3 id="metadata-preview-title">Review exact changes</h3><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
+      <section id="metadata-preview" aria-labelledby="metadata-preview-title" tabindex="-1" hidden><h2 id="metadata-preview-title">Review exact changes</h2><p class="muted">Only actual changes are listed. Quoted values preserve whitespace; empty strings and removed values are shown explicitly. Applying changes updates only the library database.</p><div id="metadata-preview-books"></div></section>
       <fieldset id="metadata-controls"><legend class="sr-only">Metadata changes</legend><div id="metadata-fields"></div><section class="custom-values-group" aria-labelledby="custom-values-title"><h2 id="custom-values-title">Custom values</h2><div id="custom-values"></div><button id="add-custom-value" type="button">Add custom value</button></section></fieldset>
     </form>
   </section>
@@ -270,7 +272,7 @@
     <div class="actions details-primary">
       <button id="read-book" class="primary" type="button">Read book</button>
       <form id="rating-form" class="actions" hidden>
-        <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 · Unrated</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+        <label><span class="sr-only">Rating</span><select id="personal-rating"><option value="0">0 (Unrated)</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
         <button id="save-rating" type="submit" class="success">Save rating</button>
       </form>
     </div>

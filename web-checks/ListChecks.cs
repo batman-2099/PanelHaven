@@ -324,6 +324,12 @@ public static class ListChecks
                 && advanced.ListBooks("alice", null, listId: saved.Id, advancedFilter: sharedRules).Items.SequenceEqual(unsavedBooks)
                 && advanced.PreviewSmartList("alice", sharedRules).Items.SequenceEqual(unsavedBooks),
                 "Saved/preview/unsaved advanced semantics diverged or repeated series parameters collided.");
+            advanced.EditMetadata(byTitle["First"], new(new() { ["Series"] = "gap", ["Volume"] = "2" }));
+            Check(Matches("HasMissingIssues", "equals", "yes") == 4,
+                "A differently cased series filled another series' missing issue.");
+            Check(advanced.ListBooks("alice", "First",
+                advancedFilter: Rules(new ListRule("SeriesReadStatus", "equals", "completed"))).Items.Single().Id == byTitle["First"],
+                "A differently cased series changed another series' reading status.");
             Sql("UPDATE books SET series='' WHERE id=$id", ("$id", byTitle["First"]));
             Check(advanced.ListBooks("alice", "First", advancedFilter: Rules(new ListRule("HasMissingIssues", "equals", "no"))).Total == 1
                 && advanced.ListBooks("alice", "First", advancedFilter: Rules(new ListRule("SeriesReadStatus", "equals", "completed"))).Total == 0,

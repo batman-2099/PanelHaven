@@ -1,5 +1,8 @@
 // Run on an idle authenticated Library page as an administrator with at least one comicbook.
-// Reads real catalog data; comparison reads are held locally. No server data is changed.
+// Default checks only read real catalog data; comparison reads are held locally.
+// Optional Archive regression: DISPOSABLE admin server only, with a fresh Library fixture and configured Archived root.
+// window.panelHavenArchiveCheck = { disposable: true, bookId: "fixture-id" };
+// This really MOVES that fixture into Archived. Discard the fixture roots/database afterward.
 (async () => {
   const $ = id => document.getElementById(id);
   const assert = (ok, message) => { if (!ok) throw new Error(message); };
@@ -66,6 +69,57 @@
     console.log('Audit fixes checks passed: discovery return, details during selection, focus return, pending comparison dismissal.');
   } finally {
     releaseComparison?.();
+    window.fetch = originalFetch;
+  }
+  const config = window.panelHavenArchiveCheck;
+  if (!config) return;
+  assert(config.disposable === true && config.bookId, 'Explicit disposable-server opt-in and a fixture ID are required.');
+  let releaseArchive, moves = 0, logouts = 0, result;
+  window.fetch = async (input, options) => {
+    const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+    if (path === '/api/logout') {
+      logouts++;
+      return new Response(null, { status: 204 });
+    }
+    if (path !== '/api/file-operations' || options?.method !== 'POST') return originalFetch(input, options);
+    moves++;
+    const request = JSON.parse(options.body);
+    assert(request.items.length === 1 && request.items[0].bookId === config.bookId, 'Archive must submit only the disposable fixture.');
+    const response = await originalFetch(input, options);
+    assert(response.ok, 'Real Archive apply failed.');
+    result = await response.clone().json();
+    assert(result.completed.length === 1 && result.completed[0].bookId === config.bookId && !result.failedBookId,
+      'The real fixture move must complete before its response is held.');
+    await new Promise(resolve => { releaseArchive = resolve; });
+    releaseArchive = null;
+    return response;
+  };
+  try {
+    $('clear-selection').click();
+    $('clear-filters').click();
+    await waitFor(idle);
+    await change('library-location', 'library');
+    await change('group-by', 'none');
+    await change('stack-by', 'none');
+    const fixture = $('books').querySelector(`[data-book-id="${CSS.escape(config.bookId)}"]`);
+    assert(fixture && !$('archive-selected').hidden, 'The fresh disposable fixture must be on this Library page in an admin session.');
+    fixture.click();
+    $('archive-selected').click();
+    await waitFor(() => releaseArchive);
+    assert(!document.querySelector('dialog[open]'), 'Archive must remain inline while applying.');
+    $('logout').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert(logouts === 0 && $('login-view').hidden && !$('library-view').hidden,
+      'Deliberate logout must not discard a pending Archive outcome.');
+    releaseArchive();
+    await waitFor(() => !releaseArchive && idle() && !$('archive-selected').disabled);
+    assert(moves === 1 && $('management-status').textContent.includes(`${result.completed.length} archived`),
+      'The held Archive outcome must be shown without retrying the move.');
+    const archived = await originalFetch(`/api/books/${encodeURIComponent(config.bookId)}`).then(response => response.json());
+    assert(archived.location.startsWith('Archived/'), 'The real fixture must now be Archived.');
+    console.log('PASS: real applicable Archive move blocks deliberate logout and preserves its held outcome.');
+  } finally {
+    releaseArchive?.();
     window.fetch = originalFetch;
   }
 })();

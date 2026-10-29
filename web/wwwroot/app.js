@@ -4281,13 +4281,16 @@ async function changeListMembership(remove) {
   const listId = remove ? activeList()?.id : $("add-to-list").value;
   if (!listId) return;
   const epoch = authEpoch;
+  const bookIds = [...selectedBooks];
+  const generation = searchGeneration;
   managementBusy = true;
   updateSelection();
   $("management-status").textContent = remove ? "Removing selected books…" : "Adding selected books…";
   try {
-    await api(`/api/lists/${encodeURIComponent(listId)}/books`, { method: remove ? "DELETE" : "POST", body: JSON.stringify({ bookIds: [...selectedBooks] }) });
+    await api(`/api/lists/${encodeURIComponent(listId)}/books`, { method: remove ? "DELETE" : "POST", body: JSON.stringify({ bookIds }) });
     if (epoch !== authEpoch) return;
-    clearSelection();
+    if (generation === searchGeneration && bookIds.length === selectedBooks.size && bookIds.every(id => selectedBooks.has(id)))
+      clearSelection();
     $("management-status").textContent = remove ? "Selected books removed from the list." : "Selected books added to the list.";
     await loadLists();
     await loadLibrary();
@@ -4315,7 +4318,6 @@ async function moveListBook(bookId, direction) {
     const beforeId = direction < 0 ? list.bookIds[index - 1] : list.bookIds[index + 2] ?? null;
     await api(`/api/lists/${encodeURIComponent(listId)}/order`, { method: "PUT", body: JSON.stringify({ bookId, beforeId }) });
     if (epoch !== authEpoch) return;
-    clearSelection();
     $("management-status").textContent = "List order saved. Moves use the full list, including books on other pages or hidden by filters.";
     generation = await loadLibrary();
   } catch (error) { if (epoch === authEpoch) $("management-status").textContent = error.message; }
@@ -4599,7 +4601,6 @@ $("delete-list").addEventListener("click", async () => {
   try {
     await api(`/api/lists/${encodeURIComponent(list.id)}`, { method: "DELETE" });
     if (epoch !== authEpoch) return;
-    clearSelection();
     await loadLists();
     $("management-status").textContent = "Reading list deleted. Books and reading progress were kept.";
   } catch (error) { if (epoch === authEpoch) $("management-status").textContent = error.message; }
@@ -5505,7 +5506,7 @@ $("login-form").addEventListener("submit", async (event) => {
 });
 
 $("logout").addEventListener("click", async () => {
-  if (passwordBusy || kavitaImport?.applying || deletionBusy) return;
+  if (passwordBusy || kavitaImport?.applying || deletionBusy || organizationBusy) return;
   resetKavitaImport();
   if (!leavePassword() || !leaveServerSettings() || !leaveMetadata()) return;
   const epoch = authEpoch;

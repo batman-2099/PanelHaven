@@ -59,7 +59,7 @@ def configuration():
     parser.add_argument("--assembly")
     args = parser.parse_args()
     settings_path = absolute_path(args.settings)
-    with os.fdopen(os.open(settings_path, os.O_RDONLY | os.O_NOFOLLOW), "r") as stream:
+    with os.fdopen(os.open(settings_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "r") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 128 * 1024):

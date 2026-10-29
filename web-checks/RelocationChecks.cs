@@ -189,7 +189,7 @@ public static class RelocationChecks
                 && Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(to, "good.cbz")))) == sourceHash, "Relocation changed source bytes.");
             Sql("DELETE FROM ratings WHERE book_id=$id", ("$id", fresh["rating"]));
             var beforeRollback = Snapshot();
-            Sql($"CREATE TRIGGER relocation_abort BEFORE UPDATE ON books WHEN OLD.id='{old["rating"]}' BEGIN SELECT RAISE(ABORT,'forced relocation failure'); END");
+            Sql($"CREATE TRIGGER relocation_abort BEFORE UPDATE OF path ON books WHEN OLD.id='{old["rating"]}' BEGIN SELECT RAISE(ABORT,'forced relocation failure'); END");
             var failed = false;
             try { Run(true); }
             catch (SqliteException) { failed = true; }
@@ -198,6 +198,8 @@ public static class RelocationChecks
             store.SaveRating("alice", fresh["rating"], new(2));
             if (OperatingSystem.IsLinux())
             {
+                var destinationOrder = store.SavePageOrder(fresh["unhashed"],
+                    new(store.GetPageOrder(fresh["unhashed"]).Revision, [1, 0, 2]));
                 Directory.Move(from, from + "-retained");
                 Directory.CreateSymbolicLink(from, sibling);
                 Check(Run(false).Contains("No historical hash or verified old-root symlink"), "Wrong-target symlink established correspondence.");
@@ -207,6 +209,9 @@ public static class RelocationChecks
                 Check(aliasPreview.Contains("mapped=1 skipped=3 conflicts=5") && aliasPreview.Contains("historical byte match unavailable"),
                     "Real root symlink correspondence failed or falsely claimed a historical byte match: " + aliasPreview);
                 Check(Run(true).Contains("applied=1 merged=1") && Id(to, "unhashed") == old["unhashed"], "Symlink-root relocation lost the historical ID.");
+                var relocatedOrder = store.GetPageOrder(old["unhashed"]);
+                Check(relocatedOrder.BookId == old["unhashed"] && relocatedOrder.Custom && relocatedOrder.Pages.SequenceEqual(destinationOrder.Pages),
+                    "Symlink-root relocation cleared the destination custom page order while establishing the historical hash.");
                 Check(Run(true).Contains("mapped=0"), "Symlink-root relocation was not idempotent.");
             }
             // Offline maintenance must not require optional tables introduced after this catalog.

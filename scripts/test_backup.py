@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from unittest.mock import patch
 
@@ -149,6 +150,13 @@ def check():
                     pass
                 else:
                     raise AssertionError("Public settings were accepted")
+            fifo = base / "settings.fifo"
+            os.mkfifo(fifo, 0o600)
+            rejected = subprocess.run(
+                [sys.executable, str(Path(backup.__file__).resolve()),
+                 "--settings", str(fifo), "--runtime", str(dotnet)],
+                capture_output=True, text=True, timeout=5)
+            assert rejected.returncode == 1, "FIFO settings must be rejected without blocking"
     finally:
         os.umask(old_umask)
     print("Scheduled backup checks passed")

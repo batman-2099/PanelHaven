@@ -221,6 +221,10 @@ public sealed partial class LibraryStore
                                 : "ON CONFLICT DO NOTHING");
                         command.ExecuteNonQuery();
                     }
+                    // Bind the survivor before merging orders; the source-change trigger clears existing overrides.
+                    command.Parameters.AddWithValue("$hash", hash);
+                    command.CommandText = "UPDATE books SET content_hash=$hash,page_count=$pages WHERE id=$old";
+                    command.ExecuteNonQuery();
                     if (RelocationTableExists(db, "page_orders", transaction))
                     {
                         command.CommandText = """
@@ -242,15 +246,15 @@ public sealed partial class LibraryStore
                     command.CommandText = """
                         UPDATE books SET path=$path,title=$title,series=$series,number=$number,publisher=$publisher,summary=$summary,
                             writer=$writer,penciller=$penciller,genre=$genre,year=$year,info_xml=$xml,book_xml=$book,edited=$edited,
-                            page_count=$pages,file_size=$size,modified_ticks=$ticks,availability='available',
-                            location=$location,folder=$folder,content_hash=$hash WHERE id=$old
+                            file_size=$size,modified_ticks=$ticks,availability='available',
+                            location=$location,folder=$folder WHERE id=$old
                         """;
                     foreach (var (name, value) in new (string, object?)[]
                     {
                         ("$title", title), ("$series", Field("Series")), ("$number", Field("Number")), ("$publisher", Field("Publisher")),
                         ("$summary", Field("Summary")), ("$writer", Field("Writer")), ("$penciller", Field("Penciller")),
                         ("$genre", Field("Genre")), ("$year", MetadataYear(Field("Year"))), ("$xml", infoXml), ("$book", bookXml),
-                        ("$edited", edited), ("$size", version.Size), ("$ticks", version.Ticks), ("$location", location), ("$folder", folder), ("$hash", hash)
+                        ("$edited", edited), ("$size", version.Size), ("$ticks", version.Ticks), ("$location", location), ("$folder", folder)
                     }) command.Parameters.AddWithValue(name, value ?? DBNull.Value);
                     command.ExecuteNonQuery();
                 }

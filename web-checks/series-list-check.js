@@ -64,6 +64,30 @@
     assert(writes === 0 && selection() === initialSelection && view() === initialView, "Cancel must not write, clear selection or navigate.");
     assert(document.activeElement === $("add-series-to-list"), "Native dialog close must restore focus to its trigger.");
     console.log("PASS: manual-only grouped picker, empty state, cancel, focus and preserved selection.");
+    await open();
+    $("create-series-smart-list").click();
+    await waitFor(() => $("list-dialog").open && !$("smart-list-controls").disabled);
+    assert(!$("series-list-dialog").open && $("list-kind").value === "smart" && $("save-list").disabled,
+      "Creating a series smart list must open an unsaved smart draft that requires preview.");
+    if (config?.scope) {
+      const rules = [...$("list-rules").querySelectorAll(".list-rule")].map(row => ({
+        field: row.querySelector(".rule-field").value, operator: row.querySelector(".rule-operator").value,
+        value: row.querySelector(".rule-value").value
+      }));
+      const { series, publisher } = config.scope;
+      assert(rules[0]?.field === "Series" && rules[0].operator === "equals" && rules[0].value === series,
+        "The draft must match the whole series, not only existing issue IDs.");
+      assert(publisher === null ? rules.length === 1 : rules.length === 2 && rules[1].field === "Publisher"
+        && rules[1].operator === (publisher === "" ? "isEmpty" : "equals") && rules[1].value === publisher,
+        "The draft must preserve scoped, unscoped and blank-publisher matching.");
+    }
+    $("preview-list").click();
+    await waitFor(() => !$("save-list").disabled);
+    $("list-dialog").querySelector("[data-close]").click();
+    await waitFor(() => !$("list-dialog").open);
+    assert(document.activeElement === $("add-series-to-list") && selection() === initialSelection && view() === initialView,
+      "Cancelling the smart draft must restore series focus without changing selection or view.");
+    console.log("PASS: series smart draft, real preview, cancellation and focus restoration.");
     if (!config) return;
     assert(config.disposable === true && config.listId && config.scope && config.bookIds?.length > 100 && new Set(config.bookIds).size === config.bookIds.length,
       "Real writes require an explicit disposable fixture with >100 distinct expected book IDs.");
@@ -86,7 +110,7 @@
     const cancel = new Event("cancel", { cancelable: true });
     $("series-list-dialog").dispatchEvent(cancel);
     $("close-series-list").click();
-    assert(cancel.defaultPrevented && $("series-list-dialog").open && $("close-series-list").disabled && $("submit-series-list").disabled,
+    assert(cancel.defaultPrevented && $("series-list-dialog").open && $("close-series-list").disabled && $("submit-series-list").disabled && $("create-series-smart-list").disabled,
       "Pending mutations must prevent Escape, close and duplicate submit.");
     release();
     await waitFor(() => !release && $("series-list-form").getAttribute("aria-busy") === "false" && !$("submit-series-list").disabled);
@@ -108,6 +132,7 @@
     release?.();
     window.fetch = originalFetch;
     if ($("series-list-dialog").open && !$("close-series-list").disabled) await close();
+    if ($("list-dialog").open) $("list-dialog").querySelector("[data-close]").click();
     const current = $("books").querySelector(`[data-book-id="${CSS.escape(first.dataset.bookId)}"]`);
     if (!selectedFirst && current?.checked) current.click();
   }

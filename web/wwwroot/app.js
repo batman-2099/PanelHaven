@@ -4234,7 +4234,7 @@ function showListEditor(list = null, mode = "list") {
   ruleFields = [];
   listDirty = listBusy = false;
   listEditingId = list?.id ?? null;
-  $("list-title").textContent = list ? "Edit reading list" : "New reading list";
+  $("list-title").textContent = listEditingId ? "Edit reading list" : "New reading list";
   $("list-form").reset();
   $("list-controls").disabled = false;
   $("save-list").disabled = false;
@@ -4293,6 +4293,7 @@ function updateSeriesListControls() {
   const unavailable = !seriesList?.loaded || !readingLists.some(list => list.kind === "manual");
   $("series-list-target").disabled = $("submit-series-list").disabled = busy || unavailable;
   $("close-series-list").disabled = busy;
+  $("create-series-smart-list").disabled = busy;
   $("series-list-empty").hidden = !seriesList?.loaded || !unavailable;
   $("series-list-form").setAttribute("aria-busy", String(busy || seriesList?.loaded === null));
 }
@@ -4317,6 +4318,17 @@ $("add-series-to-list").addEventListener("click", async () => {
   (!$("series-list-target").disabled ? $("series-list-target") : $("close-series-list")).focus();
 });
 $("series-list-dialog").addEventListener("close", () => { if (!$("series-list-dialog").open) seriesList = null; });
+$("create-series-smart-list").addEventListener("click", () => {
+  const state = seriesList;
+  if (!state || state.epoch !== authEpoch || managementBusy || !$("series-list-dialog").open) return;
+  const { series, publisher } = state.scope;
+  const rules = [{ field: "Series", operator: "equals", value: series }];
+  if (publisher !== null)
+    rules.push({ field: "Publisher", operator: publisher === "" ? "isEmpty" : "equals", value: publisher });
+  $("series-list-dialog").close();
+  $("add-series-to-list").focus();
+  showListEditor({ name: series.slice(0, 200), kind: "smart", match: "all", rules });
+});
 $("series-list-form").addEventListener("submit", async event => {
   event.preventDefault();
   const state = seriesList;

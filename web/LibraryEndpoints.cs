@@ -10,7 +10,7 @@ namespace PanelHaven.Web;
 public sealed record ListBooksSelection([property: JsonRequired] string[] BookIds);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ListSeriesSelection([property: JsonRequired] string Series,
-    [property: JsonRequired] string Location, [property: JsonRequired] string? Publisher);
+    [property: JsonRequired] string? Publisher);
 public sealed record ListMove([property: JsonRequired] string BookId, [property: JsonRequired] string? BeforeId);
 
 

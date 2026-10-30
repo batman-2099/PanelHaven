@@ -584,29 +584,35 @@ public sealed partial class LibraryStore
         transaction.Commit();
     }
 
-    public int AddListSeries(string user, string id, ListSeriesSelection selection)
+    public bool AddListSeries(string user, string id, ListSeriesSelection selection)
     {
-        if (selection is null || string.IsNullOrWhiteSpace(selection.Series) || selection.Series.Length > 16384)
-            throw new ArgumentException("A series name of 1–16384 characters is required.");
+        if (selection is null || string.IsNullOrWhiteSpace(selection.Series) || selection.Series.Length > 2000)
+            throw new ArgumentException("A series name of 1–2000 characters is required.");
         if (selection.Publisher?.Length > 2000) throw new ArgumentException("Publisher is too long.");
         using var db = Open();
         using var transaction = db.BeginTransaction();
-        RequireManualList(db, transaction, user, id);
-        using var command = Command(db, "", ("$id", id), ("$series", selection.Series), ("$publisher", selection.Publisher));
+        var list = LoadList(db, transaction, user, id);
+        if (list.Kind != "smart") throw new ArgumentException("Choose a smart reading list.");
+        ListRule series = new("Series", "equals", selection.Series);
+        if (selection.Publisher is not null)
+            series = new(Match: "all", Rules: [series,
+                new("Publisher", selection.Publisher == "" ? "isEmpty" : "equals", selection.Publisher)]);
+        var existing = list.Rules.Length == 1 ? list.Rules[0] : new ListRule(Match: list.Match, Rules: list.Rules);
+        var serialized = JsonSerializer.Serialize(series);
+        if (JsonSerializer.Serialize(existing) == serialized
+            || list.Match == "any" && list.Rules.Any(rule => JsonSerializer.Serialize(rule) == serialized))
+        {
+            transaction.Commit();
+            return false;
+        }
+        ListRule[] rules = list.Match == "any" ? [.. list.Rules, series] : [existing, series];
+        ValidateSmartRules("any", rules);
+        using var command = Command(db, "UPDATE lists SET match='any',rules_json=$rules WHERE id=$id AND user_id=$user",
+            ("$rules", JsonSerializer.Serialize(rules)), ("$id", id), ("$user", user));
         command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO list_books(list_id,book_id,position)
-            SELECT $id,b.id,
-                (SELECT COALESCE(MAX(position),-1) FROM list_books WHERE list_id=$id)
-                + ROW_NUMBER() OVER (ORDER BY b.number COLLATE NATURAL_NUMBER,b.id)
-            FROM books b
-            WHERE b.series=$series AND ($publisher IS NULL OR b.publisher=$publisher)
-                AND NOT EXISTS(SELECT 1 FROM list_books WHERE list_id=$id AND book_id=b.id)
-                AND
-            """ + LocationFilter(command, selection.Location);
-        var added = command.ExecuteNonQuery();
+        command.ExecuteNonQuery();
         transaction.Commit();
-        return added;
+        return true;
     }
 
     public void RemoveListBooks(string user, string id, string[] bookIds)

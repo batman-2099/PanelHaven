@@ -1576,11 +1576,11 @@ async function loadLists() {
     const seriesTarget = $("series-list-target").value;
     readingLists = lists;
     listFolders = folders;
-    for (const [id, manualOnly, placeholder] of [["reading-list", false, "All books"], ["add-to-list", true, "Choose a list"], ["series-list-target", true, "Choose a list"]]) {
+    for (const [id, kind, placeholder] of [["reading-list", null, "All books"], ["add-to-list", "manual", "Choose a list"], ["series-list-target", "smart", "Choose a smart list"]]) {
       const select = $(id);
       select.replaceChildren(new Option(placeholder, ""));
       for (const folder of [{ id: null, name: "Unfiled" }, ...folders.slice().sort((a, b) => folderPath(a).localeCompare(folderPath(b)))]) {
-        const members = lists.filter((list) => (list.folderId ?? null) === folder.id && (!manualOnly || list.kind === "manual"));
+        const members = lists.filter((list) => (list.folderId ?? null) === folder.id && (!kind || list.kind === kind));
         if (!members.length) continue;
         const group = document.createElement("optgroup");
         group.label = folder.id ? folderPath(folder) : folder.name;
@@ -1590,7 +1590,7 @@ async function loadLists() {
     }
     $("reading-list").value = lists.some((list) => list.id === selected) ? selected : "";
     $("add-to-list").value = lists.some((list) => list.id === target && list.kind === "manual") ? target : "";
-    $("series-list-target").value = lists.some((list) => list.id === seriesTarget && list.kind === "manual") ? seriesTarget : "";
+    $("series-list-target").value = lists.some((list) => list.id === seriesTarget && list.kind === "smart") ? seriesTarget : "";
     if (selected !== $("reading-list").value) changeLibrary();
     updateSelection();
     return true;
@@ -4290,7 +4290,7 @@ async function loadListRuleFields(rules) {
 
 function updateSeriesListControls() {
   const busy = !!seriesList?.busy;
-  const unavailable = !seriesList?.loaded || !readingLists.some(list => list.kind === "manual");
+  const unavailable = !seriesList?.loaded || !readingLists.some(list => list.kind === "smart");
   $("series-list-target").disabled = $("submit-series-list").disabled = busy || unavailable;
   $("close-series-list").disabled = busy;
   $("create-series-smart-list").disabled = busy;
@@ -4303,11 +4303,11 @@ $("add-series-to-list").addEventListener("click", async () => {
       (!seriesView() && $("stack-by").value !== "series") || $("series-list-dialog").open) return;
   const publisher = seriesView() ? null : $("group-by").value === "publisher" && sectionKey !== null
     ? sectionKey : $("publisher").value || null;
-  const state = seriesList = { epoch: authEpoch, scope: { series: groupKey, location: catalogLocation, publisher }, loaded: null, busy: false };
+  const state = seriesList = { epoch: authEpoch, scope: { series: groupKey, publisher }, loaded: null, busy: false };
   $("series-list-form").reset();
   $("close-series-list").textContent = "Cancel";
-  $("series-list-scope").textContent = `${groupKey} — ${catalogLocation === "library" ? "Library" : catalogLocation === "archived" ? "Archived" : "Unsorted"}; ${publisher === null ? "all publishers" : publisher === "" ? "no publisher" : publisher}.`;
-  $("series-list-status").textContent = "Loading manual reading lists…";
+  $("series-list-scope").textContent = `${groupKey} — ${publisher === null ? "all publishers" : publisher === "" ? "no publisher" : publisher}.`;
+  $("series-list-status").textContent = "Loading smart reading lists…";
   updateSeriesListControls();
   $("series-list-dialog").showModal();
   const loaded = await loadLists();
@@ -4332,7 +4332,7 @@ $("create-series-smart-list").addEventListener("click", () => {
 $("series-list-form").addEventListener("submit", async event => {
   event.preventDefault();
   const state = seriesList;
-  const list = readingLists.find(list => list.id === $("series-list-target").value && list.kind === "manual");
+  const list = readingLists.find(list => list.id === $("series-list-target").value && list.kind === "smart");
   if (!state?.loaded || state.epoch !== authEpoch || managementBusy || !list || !$("series-list-dialog").open) return;
   const generation = searchGeneration;
   state.busy = managementBusy = true;
@@ -4342,17 +4342,17 @@ $("series-list-form").addEventListener("submit", async event => {
   try {
     const result = await api(`/api/lists/${encodeURIComponent(list.id)}/series`, { method: "POST", body: JSON.stringify(state.scope) });
     if (state.epoch !== authEpoch || seriesList !== state) return;
-    const message = result.added ? `Added ${result.added} comicbook${result.added === 1 ? "" : "s"} to “${list.name}”.` : `No new comicbooks to add to “${list.name}”. Existing entries were kept.`;
+    const message = result.added ? `Added “${state.scope.series}” to “${list.name}”. Current and future matching issues are included alongside its existing matches.` : `“${list.name}” already includes this series rule.`;
     $("series-list-status").textContent = $("management-status").textContent = message;
     $("close-series-list").textContent = "Close";
     const refreshed = await loadLists();
     if (state.epoch !== authEpoch || seriesList !== state) return;
-    if (!refreshed) $("series-list-status").textContent += " Added entries are saved, but lists could not refresh. Close and refresh the library.";
+    if (!refreshed) $("series-list-status").textContent += " Rules are saved, but lists could not refresh. Close and refresh the library.";
     if (generation === searchGeneration && $("reading-list").value && !$("library-view").hidden) await loadLibrary();
   } catch (error) {
     if (state.epoch === authEpoch && seriesList === state)
       $("series-list-status").textContent = !error.status || error.status >= 500
-        ? `Add outcome unknown: ${error.message} Entries may have been added. No automatic retry was made. You can explicitly retry Add series; existing entries will not be duplicated.`
+        ? `Add outcome unknown: ${error.message} Rules may have been saved. No automatic retry was made. You can explicitly retry; the same series rule will not be duplicated.`
         : `Series not added: ${error.message} Review the message, then retry or cancel.`;
   } finally {
     if (state.epoch === authEpoch) {

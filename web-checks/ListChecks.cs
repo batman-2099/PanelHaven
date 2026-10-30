@@ -330,99 +330,81 @@ public static class ListChecks
             Check(advanced.ListBooks("alice", "First",
                 advancedFilter: Rules(new ListRule("SeriesReadStatus", "equals", "completed"))).Items.Single().Id == byTitle["First"],
                 "A differently cased series changed another series' reading status.");
-            var seriesList = advanced.CreateList("alice", new("Whole series", "manual", "all", []));
-            Check(advanced.AddListSeries("alice", seriesList.Id, new("Gap", "library", "a")) == 0
-                && advanced.AddListSeries("alice", seriesList.Id, new("Gap", "library", "A")) == 2
-                && advanced.GetList("alice", seriesList.Id).BookIds!.SequenceEqual([byTitle["Zero"], byTitle["Two"]]),
-                "Series addition lost exact publisher scope.");
-            Check(advanced.AddListSeries("alice", seriesList.Id, new("Gap", "library", null)) == 2
-                && advanced.GetList("alice", seriesList.Id).BookIds!.SequenceEqual(
-                    [byTitle["Zero"], byTitle["Two"], byTitle["Variant"], byTitle["Annual"]]),
-                "Series addition changed existing order, omitted unavailable books, or merged case-only series.");
-            Check(advanced.AddListSeries("alice", seriesList.Id, new("gap", "library", null)) == 1
-                && advanced.GetList("alice", seriesList.Id).BookIds!.Last() == byTitle["First"],
-                "Series addition did not preserve case-only stack identity.");
-            Check(advanced.AddListSeries("alice", seriesList.Id, new("Gap", "archived", null)) == 2
-                && advanced.AddListSeries("alice", seriesList.Id, new("Gap", "unsorted", null)) == 1
-                && advanced.GetList("alice", seriesList.Id).BookIds!.Length == 8,
-                "Series addition mixed catalog areas.");
-            var blankPublisherList = advanced.CreateList("alice", new("Blank publisher", "manual", "all", []));
+            var seriesList = advanced.CreateList("alice", new("Series union", "smart", "all",
+                [new("Title", "equals", "Second"), new("Publisher", "equals", "B")]));
+            Check(advanced.AddListSeries("alice", seriesList.Id, new("Gap", "A"))
+                && advanced.ListBooks("alice", null, listId: seriesList.Id).Items.Select(book => book.Id).ToHashSet()
+                    .SetEquals(new[] { byTitle["Zero"], byTitle["Two"], byTitle["First"], byTitle["Second"] }),
+                "Adding a series lost existing AND matches or broadened publisher scope.");
+            var originalRules = JsonSerializer.Serialize(advanced.GetList("alice", seriesList.Id));
+            Check(!advanced.AddListSeries("alice", seriesList.Id, new("Gap", "A"))
+                && JsonSerializer.Serialize(advanced.GetList("alice", seriesList.Id)) == originalRules,
+                "Retrying series addition duplicated rules.");
+            Check(advanced.ListBooks("alice", null, listId: seriesList.Id, location: "archived").Total == 2
+                && advanced.ListBooks("alice", null, listId: seriesList.Id, location: "unsorted").Total == 1,
+                "Smart series rules were limited to the current area.");
+            Check(advanced.AddListSeries("alice", seriesList.Id, new("Gap", null))
+                && advanced.ListBooks("alice", null, listId: seriesList.Id).Total == 6,
+                "Adding an unscoped series to an OR list lost matches.");
+            var blankPublisherList = advanced.CreateList("alice", new("Blank publisher", "smart", "all", [new("Title", "equals", "Absent")]));
             Sql("UPDATE books SET publisher='' WHERE id=$id", ("$id", byTitle["Annual"]));
-            Check(advanced.AddListSeries("alice", blankPublisherList.Id, new("Gap", "library", "")) == 1
-                && advanced.GetList("alice", blankPublisherList.Id).BookIds!.Single() == byTitle["Annual"],
+            Check(advanced.AddListSeries("alice", blankPublisherList.Id, new("Gap", ""))
+                && advanced.ListBooks("alice", null, listId: blankPublisherList.Id).Items.Single().Id == byTitle["Annual"],
                 "Blank publisher scope was treated as all publishers.");
             Sql("UPDATE books SET series='' WHERE id=$id", ("$id", byTitle["First"]));
             Check(advanced.ListBooks("alice", "First", advancedFilter: Rules(new ListRule("HasMissingIssues", "equals", "no"))).Total == 1
                 && advanced.ListBooks("alice", "First", advancedFilter: Rules(new ListRule("SeriesReadStatus", "equals", "completed"))).Total == 0,
                 "Unnamed series invented completion or missing issues.");
 
-            for (var issue = 1; issue <= 120; issue++)
-            {
-                using var archive = ZipFile.Open(Path.Combine(libraryRoot, $"Long-{issue}.cbz"), ZipArchiveMode.Create);
-                using (var stream = archive.CreateEntry("1.png").Open()) stream.Write(png);
-                using var writer = new StreamWriter(archive.CreateEntry("ComicInfo.xml").Open());
-                writer.Write($"<ComicInfo><Series>Long</Series><Number>{issue}</Number>"
-                    + $"<Volume>{(issue <= 60 ? 1 : 2)}</Volume><Publisher>Press</Publisher></ComicInfo>");
-            }
-            Check(advanced.ScanAsync(default).GetAwaiter().GetResult().Added == 120, "Large series fixtures failed to import.");
-            var longIds = Enumerable.Range(1, 2)
-                .SelectMany(page => advanced.ListBooks("alice", null, page: page, pageSize: 100,
-                    groupBy: "series", groupKey: "Long").Items)
-                .OrderBy(book => int.Parse(book.Number)).Select(book => book.Id).ToArray();
-            Check(longIds.Length == 120, "Large series fixture pagination lost books.");
-            var whole = advanced.CreateList("alice", new("Long series", "manual", "all", []));
-            advanced.AddListBooks("alice", whole.Id, [byTitle["First"], longIds[9]]);
-            Sql("UPDATE books SET availability='missing' WHERE id=$id", ("$id", longIds[119]));
-            Check(advanced.AddListSeries("alice", whole.Id, new("Long", "library", null)) == 119
-                && advanced.GetList("alice", whole.Id).BookIds!.SequenceEqual(
-                    new[] { byTitle["First"], longIds[9] }.Concat(longIds.Where(id => id != longIds[9]))),
-                "Whole-series addition capped issues, changed existing order, lost natural order/volumes, or skipped missing books.");
-            Check(advanced.AddListSeries("alice", whole.Id, new("Long", "library", null)) == 0
-                && advanced.GetList("alice", whole.Id).BookIds!.Length == 121, "Repeated series addition was not idempotent.");
-            advanced.EditMetadata(byTitle["Second"], new(new() { ["Series"] = "Long" }));
-            Check(advanced.GetList("alice", whole.Id).BookIds!.Length == 121
-                && advanced.AddListSeries("alice", whole.Id, new("Long", "library", null)) == 1
-                && advanced.GetList("alice", whole.Id).BookIds!.Last() == byTitle["Second"],
-                "Series addition was not a snapshot, or did not append a newly cataloged member.");
-
-            Reject<KeyNotFoundException>(() => advanced.AddListSeries("bob", whole.Id, new("Long", "library", null)));
-            Reject<KeyNotFoundException>(() => advanced.AddListSeries("alice", "missing", new("Long", "library", null)));
-            Reject<ArgumentException>(() => advanced.AddListSeries("alice", saved.Id, new("Long", "library", null)));
+            var future = advanced.CreateList("alice", new("Future series", "smart", "all", [new("Title", "equals", "Absent")]));
+            Check(advanced.AddListSeries("alice", future.Id, new("Future", "B"))
+                && advanced.ListBooks("alice", null, listId: future.Id).Total == 0, "Future series matched unrelated books.");
+            advanced.EditMetadata(byTitle["Variant"], new(new() { ["Series"] = "Future" }));
+            Check(advanced.ListBooks("alice", null, listId: future.Id).Items.Single().Id == byTitle["Variant"],
+                "A new matching issue was not included automatically.");
+            var already = advanced.CreateList("alice", new("Already follows", "smart", "all",
+                [new("Series", "equals", "Gap"), new("Publisher", "equals", "A")]));
+            Check(!advanced.AddListSeries("alice", already.Id, new("Gap", "A")), "An identical root was unnecessarily wrapped.");
+            Reject<KeyNotFoundException>(() => advanced.AddListSeries("bob", future.Id, new("Gap", null)));
+            Reject<KeyNotFoundException>(() => advanced.AddListSeries("alice", "missing", new("Gap", null)));
+            Reject<ArgumentException>(() => advanced.AddListSeries("alice", own.Id, new("Gap", null)));
             foreach (var invalid in new ListSeriesSelection[]
             {
-                null!, new(null!, "library", null), new(" ", "library", null), new(new string('x', 16385), "library", null),
-                new("Long", null!, null), new("Long", "", null), new("Long", "all", null),
-                new("Long", "library", new string('x', 2001))
-            }) Reject<ArgumentException>(() => advanced.AddListSeries("alice", whole.Id, invalid));
-            Check(advanced.AddListSeries("alice", whole.Id, new("' OR 1=1 --", "library", null)) == 0
-                && advanced.AddListSeries("alice", whole.Id, new("Gap", "library", "' OR 1=1 --")) == 0
-                && advanced.GetList("alice", whole.Id).BookIds!.Length == 122,
-                "Invalid or SQL-like series selections changed membership.");
+                null!, new(null!, null), new(" ", null), new(new string('x', 2001), null), new("Gap", new string('x', 2001))
+            }) Reject<ArgumentException>(() => advanced.AddListSeries("alice", future.Id, invalid));
+            var full = advanced.CreateList("alice", new("Rule limit", "smart", "all",
+                Enumerable.Repeat(new ListRule("Title", "equals", "Absent"), 20).ToArray()));
+            var fullBefore = JsonSerializer.Serialize(advanced.GetList("alice", full.Id));
+            Reject<ArgumentException>(() => advanced.AddListSeries("alice", full.Id, new("Gap", null)));
+            Check(JsonSerializer.Serialize(advanced.GetList("alice", full.Id)) == fullBefore, "Rule-limit rejection changed the list.");
+            ListRule deep = new("Title", "equals", "Absent");
+            for (var level = 0; level < 3; level++) deep = new(Match: "all", Rules: [deep]);
+            var depth = advanced.CreateList("alice", new("Depth limit", "smart", "all", [deep, new("Publisher", "equals", "A")]));
+            Reject<ArgumentException>(() => advanced.AddListSeries("alice", depth.Id, new("Gap", null)));
             var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
             foreach (var invalid in new[]
             {
-                "{}", "{\"series\":\"Long\",\"location\":\"library\"}",
-                "{\"series\":1,\"location\":\"library\",\"publisher\":null}",
-                "{\"series\":\"Long\",\"location\":\"library\",\"publisher\":[]}",
-                "{\"series\":\"Long\",\"location\":\"library\",\"publisher\":null,\"userId\":\"bob\"}"
+                "{}", "{\"series\":\"Gap\"}", "{\"series\":1,\"publisher\":null}",
+                "{\"series\":\"Gap\",\"publisher\":[]}", "{\"series\":\"Gap\",\"publisher\":null,\"location\":\"library\"}"
             }) Reject<JsonException>(() => JsonSerializer.Deserialize<ListSeriesSelection>(invalid, jsonOptions));
-
-            var rollback = advanced.CreateList("alice", new("Atomic series", "manual", "all", []));
-            advanced.AddListBooks("alice", rollback.Id, [byTitle["First"]]);
+            var rollback = advanced.CreateList("alice", new("Atomic series", "smart", "all", [new("Title", "equals", "Second")]));
+            var rollbackBefore = JsonSerializer.Serialize(advanced.GetList("alice", rollback.Id));
             Sql("""
-                CREATE TRIGGER fail_series_add BEFORE INSERT ON list_books
-                WHEN NEW.book_id=(SELECT id FROM books WHERE series='Long' AND number='80')
-                BEGIN SELECT RAISE(FAIL,'Injected series insertion failure'); END;
+                CREATE TRIGGER fail_series_add BEFORE UPDATE OF rules_json ON lists
+                BEGIN SELECT RAISE(FAIL,'Injected series update failure'); END;
                 """);
             try
             {
-                Reject<SqliteException>(() => advanced.AddListSeries("alice", rollback.Id, new("Long", "library", null)));
-                Check(advanced.GetList("alice", rollback.Id).BookIds!.SequenceEqual([byTitle["First"]]),
-                    "A failed whole-series insertion left partial membership.");
+                Reject<SqliteException>(() => advanced.AddListSeries("alice", rollback.Id, new("Gap", null)));
+                Check(JsonSerializer.Serialize(advanced.GetList("alice", rollback.Id)) == rollbackBefore,
+                    "A failed series update changed saved rules.");
             }
             finally { Sql("DROP TRIGGER fail_series_add"); }
-            Check(advanced.AddListSeries("alice", rollback.Id, new("Long", "library", null)) == 121,
-                "Series addition could not recover after rollback.");
+            Task.WhenAll(
+                Task.Run(() => advanced.AddListSeries("alice", rollback.Id, new("Gap", null))),
+                Task.Run(() => advanced.AddListSeries("alice", rollback.Id, new("Future", null)))).GetAwaiter().GetResult();
+            Check(advanced.ListBooks("alice", null, listId: rollback.Id).Total == 5,
+                "Concurrent series additions lost an existing or new branch.");
         }
         finally
         {

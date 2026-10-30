@@ -1,10 +1,10 @@
 // Run in the browser console in an opened, named series stack with at least one visible book.
 // Default: read-only API calls; checks picker, cancellation, focus and selection preservation.
-// Real writes require a DISPOSABLE server, an empty manual list, and >100 matching catalog books:
-// window.panelHavenSeriesListCheck = { disposable: true, listId: "empty-manual-list-id",
-//   scope: { series: "Fixture Series", location: "library", publisher: null },
-//   bookIds: [/* every expected matching book ID, including issues beyond the current page */] };
-// Open that exact series/area/publisher scope first. The check leaves the populated list intact.
+// Real writes require a DISPOSABLE server and a smart list that does not yet include this series:
+// window.panelHavenSeriesListCheck = { disposable: true, listId: "smart-list-id",
+//   scope: { series: "Fixture Series", publisher: null },
+//   bookIds: [/* expected Library matches after addition, including prior matches; at most 100 */] };
+// Open that series/publisher scope first. The check leaves the updated smart list intact.
 (async () => {
   const $ = id => document.getElementById(id);
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -57,13 +57,13 @@
   try {
     await open();
     const options = [...$("series-list-target").options].filter(option => option.value);
-    assert(JSON.stringify(options.map(option => option.value).sort()) === JSON.stringify(lists.filter(list => list.kind === "manual").map(list => list.id).sort()),
-      "Picker must contain all and only manual lists.");
-    assert($("series-list-empty").hidden === !!options.length, "No-list guidance must appear only when no manual lists exist.");
+    assert(JSON.stringify(options.map(option => option.value).sort()) === JSON.stringify(lists.filter(list => list.kind === "smart").map(list => list.id).sort()),
+      "Picker must contain all and only smart lists.");
+    assert($("series-list-empty").hidden === !!options.length, "No-list guidance must appear only when no smart lists exist.");
     await close();
     assert(writes === 0 && selection() === initialSelection && view() === initialView, "Cancel must not write, clear selection or navigate.");
     assert(document.activeElement === $("add-series-to-list"), "Native dialog close must restore focus to its trigger.");
-    console.log("PASS: manual-only grouped picker, empty state, cancel, focus and preserved selection.");
+    console.log("PASS: smart-only grouped picker, empty state, cancel, focus and preserved selection.");
     await open();
     $("create-series-smart-list").click();
     await waitFor(() => $("list-dialog").open && !$("smart-list-controls").disabled);
@@ -89,8 +89,8 @@
       "Cancelling the smart draft must restore series focus without changing selection or view.");
     console.log("PASS: series smart draft, real preview, cancellation and focus restoration.");
     if (!config) return;
-    assert(config.disposable === true && config.listId && config.scope && config.bookIds?.length > 100 && new Set(config.bookIds).size === config.bookIds.length,
-      "Real writes require an explicit disposable fixture with >100 distinct expected book IDs.");
+    assert(config.disposable === true && config.listId && config.scope && config.bookIds?.length > 0 && config.bookIds.length <= 100 && new Set(config.bookIds).size === config.bookIds.length,
+      "Real writes require an explicit disposable fixture with 1–100 distinct expected matches.");
     const listPath = `/api/lists/${encodeURIComponent(config.listId)}`;
     const getList = async () => {
       const response = await originalFetch(listPath);
@@ -98,15 +98,15 @@
       return response.json();
     };
     const before = await getList();
-    assert(before.kind === "manual" && before.bookIds.length === 0, "Use an empty disposable manual list.");
+    assert(before.kind === "smart", "Use a disposable smart list.");
     await open();
     $("series-list-target").value = config.listId;
     assert($("series-list-target").value === config.listId, "Fixture list must be available in the picker.");
     hold = true;
     $("submit-series-list").click();
     await waitFor(() => release);
-    assert(["series", "location", "publisher"].every(key => submitted[key] === config.scope[key]), "Submitted scope must exactly match series, area and nullable/exact publisher.");
-    assert(result.added === config.bookIds.length, "The server must add the entire >100-issue series, not the current page.");
+    assert(["series", "publisher"].every(key => submitted[key] === config.scope[key]), "Submitted scope must match the series and publisher.");
+    assert(result.added === true, "The server must add the new series rule.");
     const cancel = new Event("cancel", { cancelable: true });
     $("series-list-dialog").dispatchEvent(cancel);
     $("close-series-list").click();
@@ -115,19 +115,23 @@
     release();
     await waitFor(() => !release && $("series-list-form").getAttribute("aria-busy") === "false" && !$("submit-series-list").disabled);
     const added = await getList();
-    assert(JSON.stringify([...added.bookIds].sort()) === JSON.stringify([...config.bookIds].sort()), "Real list membership must match the full expected scope.");
+    const matchesResponse = await originalFetch(`/api/books?listId=${encodeURIComponent(config.listId)}&pageSize=100`);
+    assert(matchesResponse.ok, "Updated smart-list matches must load.");
+    const matches = await matchesResponse.json();
+    assert(matches.total === config.bookIds.length && JSON.stringify(matches.items.map(book => book.id).sort()) === JSON.stringify([...config.bookIds].sort()),
+      "The list must preserve prior matches and include the new series without broadening its publisher scope.");
     assert(selection() === initialSelection && view() === initialView, "Successful addition must preserve selection and view.");
     loseResponse = true;
     $("submit-series-list").click();
     await waitFor(() => !$("submit-series-list").disabled && $("series-list-status").textContent.includes("outcome unknown"));
-    assert(writes === 2 && result.added === 0, "Unknown outcome must not trigger automatic retries or duplicate entries.");
+    assert(writes === 2 && result.added === false, "Unknown outcome must not trigger automatic retries or duplicate rules.");
     $("submit-series-list").click();
     await waitFor(() => $("series-list-form").getAttribute("aria-busy") === "false" && !$("submit-series-list").disabled);
-    assert(writes === 3 && result.added === 0 && JSON.stringify((await getList()).bookIds) === JSON.stringify(added.bookIds),
-      "Explicit retry must be idempotent and preserve issue order.");
+    assert(writes === 3 && result.added === false && JSON.stringify(await getList()) === JSON.stringify(added),
+      "Explicit retry must be idempotent and preserve saved rules.");
     assert(selection() === initialSelection && view() === initialView, "Errors and explicit retry must preserve selection and view.");
     await close();
-    console.log("PASS: real >100-issue addition, exact scope, pending guards, lost-response feedback and idempotent explicit retry.");
+    console.log("PASS: real smart-list union, publisher scope, pending guards, lost-response feedback and idempotent retry.");
   } finally {
     release?.();
     window.fetch = originalFetch;

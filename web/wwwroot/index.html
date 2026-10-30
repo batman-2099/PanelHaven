@@ -260,14 +260,13 @@
   <dialog id="series-list-dialog" class="dialog-compact" aria-labelledby="series-list-title" aria-describedby="series-list-scope series-list-help">
     <div class="dialog-heading"><h2 id="series-list-title">Add series to list</h2><button id="close-series-list" type="button" data-close="series-list-dialog" class="quiet">Cancel</button></div>
     <p id="series-list-scope"></p>
-    <p id="series-list-help" class="muted">Add current issues to a manual list, or create a smart list to include future issues automatically.</p>
+    <p id="series-list-help" class="muted">Include current and future issues across volumes and areas. Create a new smart list, or add this series alongside an existing smart list's matches without replacing its rules.</p>
     <form id="series-list-form" class="form-stack">
-      <p class="muted">Manual lists add current issues across volumes in this area and publisher scope, including unavailable comicbooks. Other filters and pagination do not apply. Existing entries stay in place; new entries append in issue order.</p>
-      <label>Manual reading list (required)<select id="series-list-target" required aria-describedby="series-list-status" autofocus><option value="">Choose a list</option></select></label>
-      <p id="series-list-empty" class="muted" hidden>No manual reading lists yet. Create a smart list below, or use Manage lists → New list to create a manual list.</p>
+      <button id="create-series-smart-list" type="button" class="primary" aria-haspopup="dialog">Create new smart list…</button>
+      <label>Existing smart list (required to add)<select id="series-list-target" required aria-describedby="series-list-status" autofocus><option value="">Choose a smart list</option></select></label>
+      <p id="series-list-empty" class="muted" hidden>No smart reading lists yet. Create a new smart list above.</p>
       <p id="series-list-status" role="status" tabindex="-1"></p>
-      <p class="muted">Smart lists match this series and publisher across areas. You can preview or edit the rules before saving.</p>
-      <div class="actions"><button id="submit-series-list" type="submit" class="primary">Add series</button><button id="create-series-smart-list" type="button" aria-haspopup="dialog">Create smart list…</button></div>
+      <div class="actions"><button id="submit-series-list" type="submit">Add to smart list</button></div>
     </form>
   </dialog>
   <dialog id="delete-dialog" class="dialog-compact" aria-labelledby="delete-title" aria-describedby="delete-warning">

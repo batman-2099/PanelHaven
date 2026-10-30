@@ -129,7 +129,7 @@
       <p id="management-status" role="status" tabindex="-1"></p>
       <p id="library-status" class="muted" role="status" tabindex="-1"></p>
       <nav class="library-pagination catalog-pagination" aria-label="Library pages">
-        <div id="group-navigation" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span></div>
+        <div id="group-navigation" hidden><button id="back-to-groups" type="button" class="quiet">Back to stacks</button><span id="group-label"></span><button id="add-series-to-list" type="button" aria-haspopup="dialog" hidden>Add series to list…</button></div>
         <div class="library-pagination"><button id="previous-books" type="button" aria-label="Previous library page" disabled>Previous</button><span id="library-page" role="status" tabindex="-1">Page 1 of 1</span><button id="next-books" type="button" aria-label="Next library page" disabled>Next</button></div>
       </nav>
           </div>
@@ -257,6 +257,17 @@
     </form>
   </section>
   </main>
+  <dialog id="series-list-dialog" class="dialog-compact" aria-labelledby="series-list-title" aria-describedby="series-list-scope series-list-help">
+    <div class="dialog-heading"><h2 id="series-list-title">Add series to list</h2><button id="close-series-list" type="button" data-close="series-list-dialog" class="quiet">Cancel</button></div>
+    <p id="series-list-scope"></p>
+    <p id="series-list-help" class="muted">Adds all currently cataloged issues across volumes in this area and publisher scope, including unavailable comicbooks, not just this page or selection. Other search, reading-status and list filters do not apply. Existing entries stay in place; new entries append in issue order. Future issues are not added automatically.</p>
+    <form id="series-list-form" class="form-stack">
+      <label>Manual reading list (required)<select id="series-list-target" required aria-describedby="series-list-status" autofocus><option value="">Choose a list</option></select></label>
+      <p id="series-list-empty" class="muted" hidden>No manual reading lists yet. Cancel, then use Manage lists → New list to create a manual reading list.</p>
+      <p id="series-list-status" role="status" tabindex="-1"></p>
+      <div class="actions"><button id="submit-series-list" type="submit" class="primary">Add series</button></div>
+    </form>
+  </dialog>
   <dialog id="delete-dialog" class="dialog-compact" aria-labelledby="delete-title" aria-describedby="delete-warning">
     <h2 id="delete-title">Review permanent deletion</h2>
     <p id="delete-warning">This permanently deletes the selected comicbook files and their catalog records for all users, including reading progress, ratings, bookmarks, and list memberships. There is no trash or undo.</p>

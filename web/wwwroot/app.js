@@ -294,6 +294,7 @@ let listPreviewKey = null;
 let listPreviewPage = 1;
 let listPreviewPages = 1;
 let managementBusy = false;
+let seriesList = null;
 let metadataSchema = null;
 let metadataBookIds = [];
 let metadataGeneration = 0;
@@ -496,6 +497,10 @@ function showLogin() {
   $("sort-direction").value = "asc";
   $("sort-direction").disabled = false;
   managementBusy = false;
+  seriesList = null;
+  $("series-list-form").reset();
+  $("series-list-target").replaceChildren(new Option("Choose a list", ""));
+  $("series-list-status").textContent = $("series-list-scope").textContent = "";
   $("book-status").value = "all";
   $("book-rating").value = "";
   $("book-availability").value = "all";
@@ -804,6 +809,7 @@ async function loadLibrary(focusResults = false) {
   const grouping = seriesRoot || ($("stack-by").value !== "none" && groupKey === null);
   $("group-navigation").hidden = groupKey === null;
   $("group-label").textContent = groupLabel;
+  $("add-series-to-list").hidden = !groupKey?.trim() || (!series && $("stack-by").value !== "series");
   $("books").setAttribute("aria-label", grouping ? "Book stacks" : "Books");
   libraryItems = [];
   updateSelection();
@@ -1517,6 +1523,7 @@ function updateSelection() {
     $("organization-status").textContent = "Selection changed. Close and reopen Organize selected to use the current selection.";
   }
   $("add-list-books").disabled = managementBusy || !count || !$("add-to-list").value;
+  $("add-series-to-list").disabled = managementBusy || !session || session.mustChangePassword;
   $("remove-list-books").hidden = activeList()?.kind !== "manual";
   $("remove-list-books").disabled = managementBusy || !count;
   $("edit-list").disabled = managementBusy || !activeList();
@@ -1566,9 +1573,10 @@ async function loadLists() {
     if (generation !== listsGeneration || !session) return;
     const selected = $("reading-list").value;
     const target = $("add-to-list").value;
+    const seriesTarget = $("series-list-target").value;
     readingLists = lists;
     listFolders = folders;
-    for (const [id, manualOnly, placeholder] of [["reading-list", false, "All books"], ["add-to-list", true, "Choose a list"]]) {
+    for (const [id, manualOnly, placeholder] of [["reading-list", false, "All books"], ["add-to-list", true, "Choose a list"], ["series-list-target", true, "Choose a list"]]) {
       const select = $(id);
       select.replaceChildren(new Option(placeholder, ""));
       for (const folder of [{ id: null, name: "Unfiled" }, ...folders.slice().sort((a, b) => folderPath(a).localeCompare(folderPath(b)))]) {
@@ -1582,9 +1590,12 @@ async function loadLists() {
     }
     $("reading-list").value = lists.some((list) => list.id === selected) ? selected : "";
     $("add-to-list").value = lists.some((list) => list.id === target && list.kind === "manual") ? target : "";
+    $("series-list-target").value = lists.some((list) => list.id === seriesTarget && list.kind === "manual") ? seriesTarget : "";
     if (selected !== $("reading-list").value) changeLibrary();
     updateSelection();
+    return true;
   } catch (error) { if (generation === listsGeneration) $("management-status").textContent = `Could not load reading lists: ${error.message}`; }
+  return false;
 }
 
 function showFolderEditor(id = "") {
@@ -1996,6 +2007,7 @@ $("delete-selected").addEventListener("click", async () => {
 });
 
 function canCloseDialog(id) {
+  if (id === "series-list-dialog") return !seriesList?.busy;
   if (id === "kavita-import-dialog") return !kavitaImport?.applying;
   if (id === "maintenance-dialog") return !maintenanceBusy;
   if (id === "details-dialog" && intake?.replacement && intake.saving) return false;
@@ -2014,7 +2026,7 @@ function canCloseDialog(id) {
   return !((rating && ratingDirty) || (folder && folderDirty)) || confirm(`Discard unsaved ${rating ? "rating" : "folder"} changes?`);
 }
 
-for (const id of ["maintenance-dialog", "kavita-import-dialog", "user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
+for (const id of ["series-list-dialog", "maintenance-dialog", "kavita-import-dialog", "user-dialog", "data-relocation-dialog", "details-dialog", "folder-dialog", "page-metadata-dialog", "list-dialog", "duplicate-dialog", "archive-dialog", "file-operation-dialog", "organization-dialog"]) $(id).addEventListener("cancel", (event) => {
   if (!canCloseDialog(id)) event.preventDefault();
 });
 
@@ -4275,6 +4287,73 @@ async function loadListRuleFields(rules) {
     }
   }
 }
+
+function updateSeriesListControls() {
+  const busy = !!seriesList?.busy;
+  const unavailable = !seriesList?.loaded || !readingLists.some(list => list.kind === "manual");
+  $("series-list-target").disabled = $("submit-series-list").disabled = busy || unavailable;
+  $("close-series-list").disabled = busy;
+  $("series-list-empty").hidden = !seriesList?.loaded || !unavailable;
+  $("series-list-form").setAttribute("aria-busy", String(busy || seriesList?.loaded === null));
+}
+
+$("add-series-to-list").addEventListener("click", async () => {
+  if (managementBusy || !session || session.mustChangePassword || !groupKey?.trim() ||
+      (!seriesView() && $("stack-by").value !== "series") || $("series-list-dialog").open) return;
+  const publisher = seriesView() ? null : $("group-by").value === "publisher" && sectionKey !== null
+    ? sectionKey : $("publisher").value || null;
+  const state = seriesList = { epoch: authEpoch, scope: { series: groupKey, location: catalogLocation, publisher }, loaded: null, busy: false };
+  $("series-list-form").reset();
+  $("close-series-list").textContent = "Cancel";
+  $("series-list-scope").textContent = `${groupKey} — ${catalogLocation === "library" ? "Library" : catalogLocation === "archived" ? "Archived" : "Unsorted"}; ${publisher === null ? "all publishers" : publisher === "" ? "no publisher" : publisher}.`;
+  $("series-list-status").textContent = "Loading manual reading lists…";
+  updateSeriesListControls();
+  $("series-list-dialog").showModal();
+  const loaded = await loadLists();
+  if (seriesList !== state || state.epoch !== authEpoch || !$("series-list-dialog").open) return;
+  state.loaded = !!loaded;
+  $("series-list-status").textContent = loaded ? "" : "Could not load reading lists. Cancel and reopen to retry.";
+  updateSeriesListControls();
+  (!$("series-list-target").disabled ? $("series-list-target") : $("close-series-list")).focus();
+});
+$("series-list-dialog").addEventListener("close", () => { if (!$("series-list-dialog").open) seriesList = null; });
+$("series-list-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const state = seriesList;
+  const list = readingLists.find(list => list.id === $("series-list-target").value && list.kind === "manual");
+  if (!state?.loaded || state.epoch !== authEpoch || managementBusy || !list || !$("series-list-dialog").open) return;
+  const generation = searchGeneration;
+  state.busy = managementBusy = true;
+  updateSelection();
+  updateSeriesListControls();
+  $("series-list-status").textContent = "Adding series…";
+  try {
+    const result = await api(`/api/lists/${encodeURIComponent(list.id)}/series`, { method: "POST", body: JSON.stringify(state.scope) });
+    if (state.epoch !== authEpoch || seriesList !== state) return;
+    const message = result.added ? `Added ${result.added} comicbook${result.added === 1 ? "" : "s"} to “${list.name}”.` : `No new comicbooks to add to “${list.name}”. Existing entries were kept.`;
+    $("series-list-status").textContent = $("management-status").textContent = message;
+    $("close-series-list").textContent = "Close";
+    const refreshed = await loadLists();
+    if (state.epoch !== authEpoch || seriesList !== state) return;
+    if (!refreshed) $("series-list-status").textContent += " Added entries are saved, but lists could not refresh. Close and refresh the library.";
+    if (generation === searchGeneration && $("reading-list").value && !$("library-view").hidden) await loadLibrary();
+  } catch (error) {
+    if (state.epoch === authEpoch && seriesList === state)
+      $("series-list-status").textContent = !error.status || error.status >= 500
+        ? `Add outcome unknown: ${error.message} Entries may have been added. No automatic retry was made. You can explicitly retry Add series; existing entries will not be duplicated.`
+        : `Series not added: ${error.message} Review the message, then retry or cancel.`;
+  } finally {
+    if (state.epoch === authEpoch) {
+      managementBusy = false;
+      updateSelection();
+      if (seriesList === state) {
+        state.busy = false;
+        updateSeriesListControls();
+        if ($("series-list-dialog").open) $("series-list-status").focus();
+      }
+    }
+  }
+});
 
 async function changeListMembership(remove) {
   if (managementBusy || !selectedBooks.size) return;

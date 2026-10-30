@@ -8,6 +8,9 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace PanelHaven.Web;
 public sealed record ListBooksSelection([property: JsonRequired] string[] BookIds);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ListSeriesSelection([property: JsonRequired] string Series,
+    [property: JsonRequired] string Location, [property: JsonRequired] string? Publisher);
 public sealed record ListMove([property: JsonRequired] string BookId, [property: JsonRequired] string? BeforeId);
 
 
@@ -415,6 +418,11 @@ public static class LibraryEndpoints
         {
             store.AddListBooks(UserId(user), id, selection.BookIds);
             return Results.NoContent();
+        });
+        api.MapPost("/lists/{id}/series", (LibraryStore store, ClaimsPrincipal user, string id, ListSeriesSelection selection) =>
+        {
+            try { return Results.Ok(new { added = store.AddListSeries(UserId(user), id, selection) }); }
+            catch (ArgumentException exception) { return Error(400, exception.Message); }
         });
         api.MapDelete("/lists/{id}/books", (LibraryStore store, ClaimsPrincipal user, string id, [FromBody] ListBooksSelection selection) =>
         {

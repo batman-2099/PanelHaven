@@ -584,6 +584,31 @@ public sealed partial class LibraryStore
         transaction.Commit();
     }
 
+    public int AddListSeries(string user, string id, ListSeriesSelection selection)
+    {
+        if (selection is null || string.IsNullOrWhiteSpace(selection.Series) || selection.Series.Length > 16384)
+            throw new ArgumentException("A series name of 1–16384 characters is required.");
+        if (selection.Publisher?.Length > 2000) throw new ArgumentException("Publisher is too long.");
+        using var db = Open();
+        using var transaction = db.BeginTransaction();
+        RequireManualList(db, transaction, user, id);
+        using var command = Command(db, "", ("$id", id), ("$series", selection.Series), ("$publisher", selection.Publisher));
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO list_books(list_id,book_id,position)
+            SELECT $id,b.id,
+                (SELECT COALESCE(MAX(position),-1) FROM list_books WHERE list_id=$id)
+                + ROW_NUMBER() OVER (ORDER BY b.number COLLATE NATURAL_NUMBER,b.id)
+            FROM books b
+            WHERE b.series=$series AND ($publisher IS NULL OR b.publisher=$publisher)
+                AND NOT EXISTS(SELECT 1 FROM list_books WHERE list_id=$id AND book_id=b.id)
+                AND
+            """ + LocationFilter(command, selection.Location);
+        var added = command.ExecuteNonQuery();
+        transaction.Commit();
+        return added;
+    }
+
     public void RemoveListBooks(string user, string id, string[] bookIds)
     {
         using var db = Open();

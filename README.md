@@ -5,6 +5,8 @@
 
 **A self-hosted comic library and browser reader with private progress for every reader.**
 
+**[Support Panel Haven on Patreon](https://www.patreon.com/cw/Batman2099)**
+
 Panel Haven is a standalone comicbook library and browser reader, built with ASP.NET Core, SQLite, and native JavaScript/CSS. Keep your comics on your server, browse a shared library, and read from a browser without installing a desktop application.
 
 ## Highlights
@@ -177,8 +179,6 @@ Read a two-page spread with page navigation and display settings.
 ## Help and contributing
 
 Panel Haven is maintained in [batman-2099/PanelHaven](https://github.com/batman-2099/PanelHaven).
-
-Support Panel Haven's development on [Patreon](https://www.patreon.com/cw/Batman2099).
 
 - For questions, bugs, or feature requests, search [existing issues](https://github.com/batman-2099/PanelHaven/issues) before [opening an issue](https://github.com/batman-2099/PanelHaven/issues/new).
 - Include your commit/version, operating system, browser, reproduction steps, expected behavior, and relevant sanitized logs. Never attach passwords, signing keys, a private database, or copyrighted comic files.

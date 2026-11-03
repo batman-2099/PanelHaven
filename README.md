@@ -23,6 +23,7 @@ Panel Haven is a standalone comicbook library and browser reader, built with ASP
 
 | Task | Start here |
 | --- | --- |
+| Preview the interface | [Screenshots](#screenshots) |
 | Install and configure | [Quick start](#quick-start), [Configuration](#configuration) |
 | Browse and read | [Working behavior](docs/reference.md#working-behavior), [Reader controls](docs/reference.md#reader-controls), [Reading lists](docs/reference.md#reading-lists) |
 | Filter and discover | [Advanced filters](docs/reference.md#advanced-filters), [Catalog views](docs/reference.md#catalog-views), [Grouping and sorting](docs/reference.md#grouping-and-sorting) |
@@ -113,6 +114,22 @@ node web-checks/reader-check.mjs
 The retained checks exercise real temporary archives/databases: pagination boundaries and stable ordering, natural number sorting, per-user status/publisher filters, unchanged-file skipping without archive reopening, changed-file preservation, cancellation/resumption, bounded errors, thumbnail dimensions/colors/orientation/first frame, cache reuse/invalidation, unsafe images/archives, metadata preservation, account validation and persisted/validated per-user reader preferences. The dependency-free JavaScript check covers spread grouping, forward/back boundaries, landscape splitting and swipe decisions. Node.js is needed only for that check, not to run the application. These checks do not change your configured library.
 
 See the [browser-check instructions](docs/reference.md#checks) for fixture requirements and mutation warnings, and [verification history](docs/reference.md#verification-history) for past results and platform limitations.
+
+## Screenshots
+
+Captured from a running Panel Haven instance with original demonstration artwork and fictional comicbooks. No private library data is shown; demo content is not included with the application.
+
+### Library
+
+Browse series stacks with search, reading lists, filters, and per-user completion indicators.
+
+![Panel Haven library showing eight demonstration series stacks, browse controls, and reading-progress bars](docs/screenshots/library.webp)
+
+### Reader
+
+Read a two-page spread with page navigation and display settings.
+
+![Panel Haven reader displaying two illustrated demonstration pages side by side with navigation and display controls](docs/screenshots/reader.webp)
 
 ## Help and contributing
 

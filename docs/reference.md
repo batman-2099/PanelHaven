@@ -666,3 +666,9 @@ This inventory is based on the upstream engine, database, provider, display and 
 | Accounts/operations | Admin/reader roles; account lifecycle and private data; web-managed server configuration and secrets; verified whole-state data relocation; Linux user-service startup/restart; state backups/restore and web-managed backup timer; HTTPS-required mode and explicit proxy/host trust | Self-service recovery, library permissions, public-deployment review and encrypted/off-host automation |
 
 Legacy ComicRack database/list migration and PDF support are out of scope by request; embedded comic metadata support remains. Both recommended reader batches are implemented, including rotation/color adjustment, bookmarks and embedded page-type handling. No legacy plugin or Android-client protocol compatibility is required.
+
+## Source provenance
+
+Panel Haven references [maforget/ComicRackCE](https://github.com/maforget/ComicRackCE), whose [README](https://github.com/maforget/ComicRackCE/blob/master/README.md) describes its decompiled origins and whose [license file](https://github.com/maforget/ComicRackCE/blob/master/LICENSE.txt) contains GPL-2.0 terms. The reference checkout is not included here; this application does not load its Windows assemblies or native DLLs.
+
+See [License and attribution](../README.md#license-and-attribution) for the project's unresolved licensing status and dependency-notice requirements.

@@ -5,10 +5,10 @@
 
 **A self-hosted comic library and browser reader with private progress for every reader.**
 
-Panel Haven is a standalone web replacement for ComicRack, built with ASP.NET Core, SQLite, and native JavaScript/CSS. Keep your comics on your server, browse a shared library, and read from a browser without installing the desktop application.
+Panel Haven is a standalone comicbook library and browser reader, built with ASP.NET Core, SQLite, and native JavaScript/CSS. Keep your comics on your server, browse a shared library, and read from a browser without installing a desktop application.
 
 > [!IMPORTANT]
-> Panel Haven is a working port in development, **not full ComicRack feature parity**. Linux has been verified; Windows is a target but has not been verified. Do not replace your desktop database with this application. See the [parity inventory](docs/reference.md#full-port-parity-inventory) for remaining work and exclusions.
+> Panel Haven is in active development and has been verified on Linux. Do not replace your existing desktop database with this application. See the [feature inventory](docs/reference.md#full-port-parity-inventory) for remaining work and exclusions.
 
 ## Highlights
 
@@ -68,16 +68,6 @@ Open <http://127.0.0.1:5178> and sign in with the credentials you supplied. Conf
 
 The sign-in page uses a visible **Sign in** heading above the username and password form; the Panel Haven logo remains in the header.
 
-### Windows (PowerShell; not yet verified)
-
-```powershell
-$env:PANELHAVEN_ADMIN_USERNAME = 'admin'
-$password = Read-Host 'Initial administrator password (12–256 characters)' -AsSecureString
-$env:PANELHAVEN_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $password).Password
-$env:Libraries__0 = 'D:\Comics'
-dotnet run --project web/PanelHaven.Web.csproj --urls http://127.0.0.1:5178
-```
-
 > [!WARNING]
 > These commands start a **local-only** server. Before enabling remote access, configure [HTTPS and trusted proxies](docs/reference.md#https-and-trusted-proxies) and review the [operating limits](#safety-and-operating-limits). Every authenticated user can read the entire configured library.
 
@@ -105,7 +95,7 @@ Source replacement and permanent deletion cannot be undone. Application-state ba
 
 - [`web/`](web/) — ASP.NET Core application, SQLite storage, and browser assets in [`web/wwwroot/`](web/wwwroot/).
 - [`web-checks/`](web-checks/) — console-based behavioral checks, synthetic archive fixtures, and the JavaScript reader check.
-- `upstream/` — optional local ComicRackCE reference checkout; ignored by Git, not included in this repository, and not a build or runtime dependency.
+- `upstream/` — optional local reference checkout; ignored by Git, not included in this repository, and not a build or runtime dependency.
 
 Build from the repository root:
 
@@ -135,7 +125,7 @@ Panel Haven is maintained in [batman-2099/PanelHaven](https://github.com/batman-
 
 ## License and attribution
 
-Panel Haven references [maforget/ComicRackCE](https://github.com/maforget/ComicRackCE), whose [README](https://github.com/maforget/ComicRackCE/blob/master/README.md) describes its decompiled origins and whose [license file](https://github.com/maforget/ComicRackCE/blob/master/LICENSE.txt) contains GPL-2.0 terms. The reference checkout is not included here; this application does not load its Windows assemblies or native DLLs.
+See [source provenance](docs/reference.md#source-provenance) for upstream attribution and licensing context.
 
 **This repository does not currently include a project-level license file.** Do not assume that public source availability grants permission to redistribute it. Project licensing and upstream provenance must be resolved before distributing a derivative; dependency licenses do not license Panel Haven itself.
 

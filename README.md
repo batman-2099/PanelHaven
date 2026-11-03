@@ -178,6 +178,8 @@ Read a two-page spread with page navigation and display settings.
 
 Panel Haven is maintained in [batman-2099/PanelHaven](https://github.com/batman-2099/PanelHaven).
 
+Support Panel Haven's development on [Patreon](https://www.patreon.com/cw/Batman2099).
+
 - For questions, bugs, or feature requests, search [existing issues](https://github.com/batman-2099/PanelHaven/issues) before [opening an issue](https://github.com/batman-2099/PanelHaven/issues/new).
 - Include your commit/version, operating system, browser, reproduction steps, expected behavior, and relevant sanitized logs. Never attach passwords, signing keys, a private database, or copyrighted comic files.
 - For substantial changes, open an issue first to agree on scope. Keep pull requests focused, run the [checks](#checks), and update documentation when behavior changes. UI changes should include desktop/mobile verification.

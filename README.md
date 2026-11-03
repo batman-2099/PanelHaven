@@ -7,9 +7,6 @@
 
 Panel Haven is a standalone comicbook library and browser reader, built with ASP.NET Core, SQLite, and native JavaScript/CSS. Keep your comics on your server, browse a shared library, and read from a browser without installing a desktop application.
 
-> [!IMPORTANT]
-> Panel Haven is in active development and has been verified on Linux. Do not replace your existing desktop database with this application. See the [feature inventory](docs/reference.md#full-port-parity-inventory) for remaining work and exclusions.
-
 ## Highlights
 
 - Read **CBZ/ZIP, CBR/RAR, CB7/7z, and CBT/TAR** archives with single-page, continuous, and two-page views.

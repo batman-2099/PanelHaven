@@ -24,7 +24,7 @@ Panel Haven is a standalone comicbook library and browser reader, built with ASP
 | Task | Start here |
 | --- | --- |
 | Preview the interface | [Screenshots](#screenshots) |
-| Install and configure | [Quick start](#quick-start), [Configuration](#configuration) |
+| Install and configure | [Docker installation](#docker-installation), [Quick start](#quick-start), [Configuration](#configuration) |
 | Browse and read | [Working behavior](docs/reference.md#working-behavior), [Reader controls](docs/reference.md#reader-controls), [Reading lists](docs/reference.md#reading-lists) |
 | Filter and discover | [Advanced filters](docs/reference.md#advanced-filters), [Catalog views](docs/reference.md#catalog-views), [Grouping and sorting](docs/reference.md#grouping-and-sorting) |
 | Manage comicbooks | [Metadata and reading lists](docs/reference.md#metadata-and-reading-lists), [Process comicbooks](docs/reference.md#process-comicbooks), [Rename, move and recovery](docs/reference.md#rename-move-and-recovery), [Library maintenance](docs/reference.md#library-maintenance) |
@@ -37,7 +37,7 @@ Panel Haven is a standalone comicbook library and browser reader, built with ASP
 
 ### Requirements
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) for a source installation, or Docker Engine with the Compose plugin for the container installation.
 - Git to clone the repository.
 - A server-accessible folder containing supported comic archives and writable storage for application state.
 - A modern browser. Node.js is only needed for the JavaScript development check.
@@ -50,6 +50,52 @@ The application uses one ASP.NET Core process and SQLite; no separate database s
 git clone https://github.com/batman-2099/PanelHaven.git
 cd PanelHaven
 ```
+
+### Docker installation
+
+On Linux, the included [Dockerfile](Dockerfile) builds the application locally; [compose.yaml](compose.yaml) runs it as a non-root user with persistent state and library mounts. No host .NET SDK is needed.
+
+1. Create a private state directory, separate from your comicbooks:
+
+   ```bash
+   install -d -m 700 "$HOME/.local/share/panelhaven-docker"
+   id -u
+   id -g
+   ```
+
+2. Create or edit `.env` in the repository root. Replace these examples with the UID/GID printed above and your actual absolute paths. Both directories must exist, and the selected non-root user must be able to access them.
+
+   ```dotenv
+   PANELHAVEN_UID=1000
+   PANELHAVEN_GID=1000
+   PANELHAVEN_STATE_DIR=/home/your-user/.local/share/panelhaven-docker
+   PANELHAVEN_LIBRARY_DIR=/absolute/path/to/comics
+   ```
+
+3. Start the application with initial administrator credentials:
+
+   ```bash
+   chmod 600 .env
+   export PANELHAVEN_ADMIN_USERNAME=admin
+   read -rsp 'Initial administrator password (12–256 characters): ' PANELHAVEN_ADMIN_PASSWORD; echo
+   export PANELHAVEN_ADMIN_PASSWORD
+   docker compose config --quiet
+   docker compose up -d --build
+   docker compose logs --tail=100 panelhaven
+   ```
+
+Open <http://127.0.0.1:5178> on the Docker host and sign in. After confirming the account works, remove bootstrap credentials from the shell and recreate the container without them:
+
+```bash
+unset PANELHAVEN_ADMIN_USERNAME PANELHAVEN_ADMIN_PASSWORD
+docker compose up -d --force-recreate
+```
+
+Accounts, signing keys, reading progress and saved settings remain in the state mount. The library mount is writable for explicit administrator file operations; protect your comicbooks separately. `.env` is ignored by Git and excluded from the image.
+
+The default installation uses Linux host networking and listens only on loopback; remote access still requires HTTPS. Use `docker compose restart panelhaven` to restart, or `docker compose down` to stop and remove the container without deleting bind-mounted data. In-app systemd controls and scheduled-backup timers are unavailable in the container.
+
+See the [Docker reference](docs/reference.md#docker-installation) for read-only libraries, permissions, HTTPS, backups, updates and verification limits. Back up before updating; then run `docker compose build --pull` followed by `docker compose up -d`.
 
 ### Linux (Bash)
 

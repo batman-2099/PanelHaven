@@ -1,0 +1,11 @@
+# Only application source, browser assets and the published backup helper belong in the image.
+**
+!web/
+web/**
+!web/*.cs
+!web/*.csproj
+!web/wwwroot/
+!web/wwwroot/**
+!scripts/
+scripts/**
+!scripts/backup.py

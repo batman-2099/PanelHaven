@@ -4,6 +4,100 @@
 
 Commands and source paths in this guide are relative to the repository root unless stated otherwise. Verification records describe past runs, not current CI status.
 
+## Docker installation
+
+Use Docker Engine on a Linux host with the Docker Compose plugin. Clone the repository first and run commands from its root. This builds a local image; no published registry image is required. The host needs no .NET SDK. Rootless Docker has different host-network and UID-mapping behavior; the installation below assumes a standard Docker Engine daemon.
+
+### Paths and permissions
+
+Choose an existing comicbook directory and a separate private state directory outside the checkout and library. Run the container as the non-root host user who owns the state directory and can read the comicbooks. For source write-back, conversion, organization and deletion, that user also needs appropriate file and directory write permissions. Do not recursively change ownership of an existing library or strip its ACLs to make it work.
+
+Create the state directory as that user:
+
+```bash
+install -d -m 700 "$HOME/.local/share/panelhaven-docker"
+id -u
+id -g
+```
+
+Create a `.env` file in the repository root with your actual numeric UID/GID and absolute paths. The values below are examples; replace them. If `.env` already exists, edit it rather than overwriting it.
+
+```dotenv
+PANELHAVEN_UID=1000
+PANELHAVEN_GID=1000
+PANELHAVEN_STATE_DIR=/home/your-user/.local/share/panelhaven-docker
+PANELHAVEN_LIBRARY_DIR=/absolute/path/to/comics
+```
+
+Keep `.env` private (`chmod 600 .env`); Git and the Docker build context exclude it. Do not set the UID to `0`. Both bind sources must already exist; Compose refuses to silently create a mistyped path. On SELinux-enforcing hosts, arrange an appropriate container-access label for the selected directories without relabeling unrelated data.
+
+The state bind contains `data/panelhaven.sqlite`, `data/keys/`, thumbnails, sibling lock files, and `settings.json` plus its recovery copy. The settings file stays outside the movable data directory. Recreating the container does not remove these files. Back up state and settings; comicbook files need their own backups.
+
+The library bind is writable so explicit administrator file operations can work. For a read-only collection, add `read_only: true` to the `/library` volume in `compose.yaml`; source-changing operations will then be refused, while catalog edits and private reading data still use the state mount. Add other libraries, Archived or Unsorted as separate non-overlapping binds and configure their **container paths** in Server settings. Mounts expose only the directories you choose.
+
+### First start
+
+```bash
+export PANELHAVEN_ADMIN_USERNAME=admin
+read -rsp 'Initial administrator password (12–256 characters): ' PANELHAVEN_ADMIN_PASSWORD; echo
+export PANELHAVEN_ADMIN_PASSWORD
+docker compose config --quiet
+docker compose up -d --build
+docker compose logs --tail=100 panelhaven
+```
+
+Open <http://127.0.0.1:5178> on the Docker host and sign in. The configured `/library` scans automatically. After confirming that your account works, remove the bootstrap credentials from both the shell and the container:
+
+```bash
+unset PANELHAVEN_ADMIN_USERNAME PANELHAVEN_ADMIN_PASSWORD
+docker compose up -d --force-recreate
+```
+
+The existing account remains in SQLite; empty bootstrap variables do not reset it. Credentials are passed only at runtime, never as build arguments. Users with access to the Docker daemon can inspect container environments and mounted data, so treat Docker access as privileged.
+
+### Networking and host controls
+
+The service uses host networking and listens on `127.0.0.1:5178`. There is no Compose `ports` mapping: bridged connections do not retain a loopback peer and the application's local-only security check would reject them. Port 5178 must be free. Host networking shares the host network namespace; it does not expose the listener beyond loopback by itself.
+
+For remote use, configure a certificate-backed HTTPS listener or a TLS-terminating proxy on the same host using [HTTPS and trusted proxies](#https-and-trusted-proxies). Mount certificates read-only if needed, allow the exact hostname, and trust only the proxy's actual IP. Do not disable HTTPS enforcement or broaden proxy trust to work around a 403. A proxy in another container cannot reach this service through its own loopback unless it also shares the host network.
+
+Saved Server settings override the initial environment. Keep data, settings and any relocation destination inside persistent mounts; moving state into the container's writable layer loses it when the container is replaced. Keep libraries separate from state. Existing non-container installations require a backup and a reviewed path migration; do not mount their state blindly under different library paths or run both instances against it.
+
+Use Docker for lifecycle management. In-app systemd startup/restart controls and the systemd scheduled-backup timer are unavailable inside this image; it deliberately contains no systemd, Docker socket or privileged host integration. Ordinary server settings and the backup CLI remain available. Arrange scheduled backups with the host scheduler if required.
+
+### Restart, update and backup
+
+```bash
+docker compose restart panelhaven
+docker compose logs --tail=100 panelhaven
+```
+
+Before updating, create a new live snapshot using the running container. The destination must not already exist:
+
+```bash
+docker compose exec panelhaven mkdir -p /var/lib/panelhaven/backups
+docker compose exec panelhaven dotnet PanelHaven.Web.dll --backup-live /var/lib/panelhaven/backups/before-update
+```
+
+This backs up the database and signing keys, not comicbooks or `settings.json`. Preserve the settings and its `.previous` recovery file separately, keep protected off-host copies, and follow the [restore instructions](#backup-restore-and-root-relocation) before replacing active state. Never copy only the live SQLite main file.
+
+After updating the checkout to the desired revision:
+
+```bash
+docker compose build --pull
+docker compose up -d
+```
+
+To stop and remove the container, run `docker compose down`. Bind-mounted data stays on disk.
+
+The image runs the published Release application using the ASP.NET runtime, not the SDK. `.dockerignore` restricts build inputs to application source, browser assets and the existing backup helper; local state, credentials, build outputs and the optional reference checkout are excluded. Native thumbnail/archive libraries come from the application's existing packages.
+
+Image distribution remains subject to the [unresolved project licensing and provenance](../README.md#license-and-attribution). These instructions do not grant redistribution rights.
+
+### Docker verification
+
+Verified on Linux x64 with a disposable Docker daemon: Release image build, Compose startup as UID/GID 1000 with dropped capabilities, loopback-only listening, anonymous catalog denial, authenticated scanning, native JPEG thumbnail generation, PNG page delivery and live backup. Recreating the container after removing bootstrap credentials retained the existing session, book ID, completed reading progress and saved server settings. State/settings permissions were checked, and the exported build context contained only the 42 intended source/asset files. The test daemon used an isolated rootless network with explicit test forwarding; a standard rootful daemon, other architectures, remote TLS and container-specific source-changing workflows were not independently exercised.
+
 ## Configuration
 
 See [initial configuration](../README.md#configuration) before using server administration.

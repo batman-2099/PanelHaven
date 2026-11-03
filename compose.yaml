@@ -1,0 +1,27 @@
+services:
+  panelhaven:
+    build: .
+    image: panelhaven:local
+    # Local HTTP requires a loopback peer; bridge port mapping does not preserve it.
+    network_mode: host
+    user: "${PANELHAVEN_UID:?Set PANELHAVEN_UID}:${PANELHAVEN_GID:?Set PANELHAVEN_GID}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PANELHAVEN_ADMIN_USERNAME: "${PANELHAVEN_ADMIN_USERNAME:-}"
+      PANELHAVEN_ADMIN_PASSWORD: "${PANELHAVEN_ADMIN_PASSWORD:-}"
+    volumes:
+      - type: bind
+        source: "${PANELHAVEN_STATE_DIR:?Set PANELHAVEN_STATE_DIR to an existing private directory}"
+        target: /var/lib/panelhaven
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${PANELHAVEN_LIBRARY_DIR:?Set PANELHAVEN_LIBRARY_DIR to an existing comicbook directory}"
+        target: /library
+        bind:
+          create_host_path: false

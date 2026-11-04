@@ -79,6 +79,32 @@ internal static class IntakeMatchingChecks
             await Error(() => provider.MatchIntakeAsync(hints with { Number = "1?2" }), 400);
             Check(handler.Calls == 4, "Invalid matching hints reached the provider.");
         }
+        var recent = new Handler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/search/")
+                return Json(new { status_code = 1, number_of_total_results = 5,
+                    results = new[] { "", "1990", "2020", "2025", "2026" }.Select((year, index) => new {
+                        id = index + 1, name = index == 4 ? "Unrelated" : "Example", start_year = year,
+                        publisher = new { name = "Marvel" },
+                        site_detail_url = $"https://comicvine.gamespot.com/volume/4050-{index + 1}/" }) });
+            var query = Uri.UnescapeDataString(request.RequestUri.Query);
+            var id = Enumerable.Range(1, 5).Single(id => query.Contains($"volume:{id},"));
+            return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                new { id = 100 + id, name = "Issue", issue_number = "1", cover_date = "2025-01-01",
+                    site_detail_url = $"https://comicvine.gamespot.com/issue/4000-{100 + id}/" } } });
+        });
+        using (var provider = new ComicVine("key", recent))
+        {
+            var noYear = hints with { Year = null };
+            var result = await provider.MatchIntakeAsync(noYear);
+            Check(result.Candidates.Select(candidate => candidate.VolumeId).SequenceEqual([4, 3, 2]),
+                "Newer equally matching runs must enter the shortlist and lead results, ahead of unknown years but not better series matches.");
+            result = await provider.MatchIntakeAsync(noYear with { Volume = 1990 });
+            Check(result.Candidates[0].VolumeId == 2, "Recency overrode an explicit volume match.");
+            result = await provider.MatchIntakeAsync(noYear with { Year = 1995 });
+            Check(result.Candidates.Any(candidate => candidate.VolumeId == 2),
+                "Newer runs displaced the run matching the historical year hint.");
+        }
         var exact = new Handler(request =>
         {
             var path = request.RequestUri!.AbsolutePath;

@@ -97,7 +97,8 @@ public sealed class ComicVine : IDisposable
             .OrderByDescending(volume => IntakeMatching.SeriesScore(hints.Series, volume.Name)
                 + (hints.Publisher.Length != 0 && IntakeMatching.SamePublisher(hints.Publisher, volume.Publisher) ? 10 : 0)
                 + (hints.Volume is { } volumeHint && IntakeMatching.VolumeNumber(volume, volumeHint) == volumeHint ? 5 : 0))
-            .ThenByDescending(volume => hints.Year is { } year && int.TryParse(volume.StartYear, out var start) && start <= year ? start : 0)
+            .ThenByDescending(volume => int.TryParse(volume.StartYear, out var start) && start is >= 1 and <= 9999
+                && (hints.Year is null || start <= hints.Year) ? start : 0)
             .ThenBy(volume => volume.Id).Take(3).ToArray();
         if (volumes.Total > selected.Length)
             warnings.Add("Search is bounded to the first 10 volumes and the three closest series/publisher/volume matches. Refine the series and publisher hints for other volumes.");
@@ -115,6 +116,7 @@ public sealed class ComicVine : IDisposable
             candidates.AddRange(issues.Results.Select(issue => IntakeMatching.Rank(hints, volume, issue)));
         }
         var ranked = candidates.DistinctBy(candidate => candidate.IssueId).OrderByDescending(candidate => candidate.Score)
+            .ThenByDescending(candidate => int.TryParse(candidate.StartYear, out var start) && start is >= 1 and <= 9999 ? start : 0)
             .ThenBy(candidate => candidate.VolumeId).ThenBy(candidate => candidate.IssueId).ToArray();
         if (ranked.Length == 0) warnings.Add("No candidates found. Refine the editable hints and retry; no metadata was changed.");
         else

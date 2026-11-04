@@ -16,14 +16,14 @@ button, input, select, textarea { font: inherit; }
 input, select, textarea { font-size: 1rem; }
 button, select, summary { cursor: pointer; }
 button, .button-link, input, select, textarea { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-medium) var(--space); background: var(--surface-control); color: inherit; }
-button, .button-link { font-size: var(--text-small); font-weight: 600; min-height: 44px; background: var(--surface); border-color: var(--line); box-shadow: none; }
+button, .button-link { font-size: var(--text-small); font-weight: 500; min-height: 44px; background: var(--surface); border-color: var(--divider); box-shadow: none; }
 button:hover:not(:disabled), .button-link:hover { background: var(--surface-control); border-color: var(--accent); }
 .button-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary, button[type="submit"]:not(.quiet, .danger, .success) { background: var(--primary); border-color: var(--accent); color: var(--action-ink); }
 button.primary:hover:not(:disabled), button[type="submit"]:not(.quiet, .danger, .success):hover:not(:disabled) { background: var(--primary-hover); border-color: var(--accent); }
 button.primary:active:not(:disabled), button[type="submit"]:not(.quiet, .danger, .success):active:not(:disabled) { background: var(--primary-active); }
-button.quiet { background: transparent; box-shadow: none; }
+button.quiet { background: transparent; border-color: transparent; box-shadow: none; }
 button.success { background: var(--success); border-color: var(--success-ink); color: var(--action-ink); }
 button.success:hover:not(:disabled) { background: var(--success-hover); border-color: var(--success-ink); }
 button.success:active:not(:disabled) { background: var(--success-active); }
@@ -73,7 +73,7 @@ main { width: 100%; min-height: calc(100dvh - 80px); padding: var(--space-wide) 
 .form-stack select { width: 100%; min-width: 0; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space); margin-bottom: var(--space-wide); }
 .compact-disclosure { margin: 0 0 var(--space-medium); padding: 0; border: 0; }
-.compact-disclosure > summary { min-height: 44px; padding: var(--space-small) var(--space-medium); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-inset); }
+.compact-disclosure > summary { min-height: 44px; padding: var(--space-small) var(--space-medium); border: 1px solid var(--divider); border-radius: var(--radius); background: var(--surface-inset); }
 .compact-disclosure[open] > summary { margin-bottom: var(--space-small); }
 .library-controls { padding-bottom: var(--space); }
 .selection-hint { font-size: var(--text-small); margin-bottom: var(--space-small); }
@@ -115,20 +115,20 @@ main { width: 100%; min-height: calc(100dvh - 80px); padding: var(--space-wide) 
 .cover-button { display: block; width: 100%; padding: 0; overflow: hidden; position: relative; aspect-ratio: 2 / 3; border-radius: var(--radius); background: var(--surface-control); border-color: var(--divider); box-shadow: var(--shadow-raised); }
 .cover-button img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cover-fallback { display: grid; place-items: center; width: 100%; height: 100%; padding: var(--space); color: var(--muted); }
-.book-card h2, .book-card h3 { font-size: 1rem; line-height: 1.35; margin: var(--space-medium) 0 var(--space-tiny); overflow-wrap: anywhere; }
+.book-card h2, .book-card h3 { font-size: 1rem; font-weight: 500; line-height: 1.35; margin: var(--space-medium) 0 var(--space-tiny); overflow-wrap: anywhere; }
 .book-card p { font-size: .875rem; margin-bottom: var(--space-tiny); overflow-wrap: anywhere; }
 .missing-issue-cover { aspect-ratio: 2 / 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-small); padding: var(--space-medium); border: 2px dashed var(--warning); border-radius: 10px; background: var(--warning-surface); color: var(--warning); text-align: center; overflow-wrap: anywhere; }
 .missing-issue-cover strong { color: var(--warning); font-size: 1.5rem; }
-.book-status { color: var(--accent); }
+.book-status { color: var(--muted); }
 .group-card { display: flex; flex-direction: column; }
-.group-card .cover-button { box-shadow: 3px -3px 0 var(--cover-edge), 6px -6px 0 var(--cover-back); margin-top: var(--space-small); width: calc(100% - 6px); }
+.group-card .cover-button { box-shadow: 4px -4px 0 var(--cover-edge), 8px -8px 0 var(--cover-back); margin-top: var(--space-small); width: calc(100% - 8px); }
 .series-progress { display: grid; margin-top: auto; }
 .series-progress > * { grid-area: 1 / 1; }
-.series-progress progress { appearance: none; width: 100%; height: 1.5rem; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--surface-inset); }
+.series-progress progress { appearance: none; width: 100%; height: 1.5rem; border: 0; border-radius: 4px; overflow: hidden; background: var(--surface-inset); }
 .series-progress progress::-webkit-progress-bar { background: var(--surface-inset); }
 .series-progress progress::-webkit-progress-value { background: var(--success); }
 .series-progress progress::-moz-progress-bar { background: var(--success); }
-.series-progress span { align-self: center; justify-self: center; font-size: .875rem; font-weight: 600; color: var(--action-ink); pointer-events: none; }
+.series-progress span { align-self: center; justify-self: center; font-size: .875rem; font-weight: 400; color: var(--action-ink); pointer-events: none; }
 .book-availability { color: var(--warning); }
 #library-status { font-size: .875rem; margin-bottom: var(--space-small); scroll-margin-block: var(--space); }
 #library-status, #duplicate-table, #selection-count, #mark-selected-label, #save-status, #preferences-status, .series-progress { font-variant-numeric: tabular-nums; }
@@ -198,7 +198,7 @@ dl { display: grid; grid-template-columns: minmax(80px, 1fr) 3fr; gap: var(--spa
 dt { color: var(--muted); }
 dd { margin: 0; white-space: pre-wrap; }
 details { border-top: 1px solid var(--divider); margin-top: var(--space-section); padding-top: var(--space); }
-summary { min-height: 44px; padding: var(--space-small) 0; font-weight: 600; }
+summary { min-height: 44px; padding: var(--space-small) 0; font-weight: 500; }
 .details-primary { margin-block: var(--space); flex-wrap: wrap; }
 .details-primary > button { min-width: min(100%, 12rem); }
 .details-secondary { gap: var(--space-small); }

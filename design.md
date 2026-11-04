@@ -19,6 +19,8 @@ Shared system for the existing application screens. Preserve routes, controls, p
 - Typography: `--font-body`, native system sans; 16px body, 14px labels, 1.2rem section heads, 1.728rem page heads.
 - Spacing: quarter-rem through 2.5rem shared tokens. Controls retain 44px minimum targets.
 - Radius: 6px controls and covers; flat sections use dividers instead of nested cards.
+- Secondary buttons and disclosures use divider borders; quiet actions use text without a resting outline. Inputs retain stronger boundaries and all controls retain visible keyboard focus.
+- Library titles and shared buttons/disclosures use weight 500; book metadata uses muted text. Series stacks step by 4px and 8px, with unframed completion bars and regular-weight percentages.
 
 ## Layout
 - Full-width application pages with responsive edge gutters; reader retains its full-window canvas.

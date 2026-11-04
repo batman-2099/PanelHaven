@@ -75,7 +75,7 @@
     <section id="library-view" aria-labelledby="library-title" hidden>
       <h1 id="library-title" class="sr-only" tabindex="-1">Your library</h1>
           <div class="library-controls">
-      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search title, series, publisher…"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
+      <form id="search-form" class="search-bar" role="search"><label class="sr-only" for="search">Search comicbooks in this area</label><input id="search" name="q" type="search" placeholder="Search comicbooks"><button type="submit">Search</button><button id="clear-search" type="button" class="quiet">Clear</button><button id="refresh-library" type="button" class="quiet">Refresh</button></form>
       <div class="catalog-browse">
       <div class="library-filters" role="group" aria-label="Browse comicbooks">
         <label>Reading lists<select id="reading-list"><option value="">All books</option></select></label>
@@ -88,7 +88,7 @@
             </div>
           </details>
         <label id="library-location-filter">Location<select id="library-location"><option value="library" selected>Library</option><option value="archived">Archived</option><option value="unsorted">Unsorted</option></select></label>
-        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In Progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery"><option value="on-deck" data-series-view>Next Issue</option><option value="recently-updated" data-series-view>Recently Updated Series</option><option value="newly-added" data-series-view>Newly Added Series</option></optgroup></select></label>
+        <label id="reading-status-filter">View<select id="book-status" aria-describedby="reading-status-hint"><optgroup label="Reading status"><option value="all">All books</option><option value="unread">Unread</option><option value="in-progress">In progress</option><option value="completed">Completed</option></optgroup><optgroup label="Series discovery"><option value="on-deck" data-series-view>Next issue</option><option value="recently-updated" data-series-view>Recently updated series</option><option value="newly-added" data-series-view>Newly added series</option></optgroup></select></label>
       </div>
       <details id="catalog-arrangement" class="compact-disclosure" open><summary>Arrange</summary><div class="library-filters">
         <label>Group by<select id="group-by" title="Divide results into labeled sections"><option value="none">None</option><option value="series">Series</option><option value="publisher" selected>Publisher</option><option value="folder">Folder</option></select></label>

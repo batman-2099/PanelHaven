@@ -15,6 +15,7 @@ Panel Haven is a standalone comicbook library and browser reader, built with ASP
 - Resume with private per-user progress, bookmarks, ratings, and reader preferences.
 - Organize a shared collection with search, filters, series/folder browsing, manual lists, and smart lists.
 - Import embedded ComicInfo/ComicBook metadata, edit catalog metadata independently, write saved changes to CBZ/ZIP, or explicitly convert a non-ZIP source to CBZ with saved metadata. Source replacements cannot be undone.
+- Find and apply comic metadata from **Comic Vine** or **Metron**, choosing the provider for each search.
 - Watch library folders automatically, report exact duplicates, and retain catalog history when files go missing.
 - Manage administrator/reader accounts and perform live or offline backups, offline restores, and verified root relocation.
 
@@ -27,6 +28,7 @@ Panel Haven is a standalone comicbook library and browser reader, built with ASP
 | Browse and read | [Working behavior](docs/reference.md#working-behavior), [Reader controls](docs/reference.md#reader-controls), [Reading lists](docs/reference.md#reading-lists) |
 | Filter and discover | [Advanced filters](docs/reference.md#advanced-filters), [Catalog views](docs/reference.md#catalog-views), [Grouping and sorting](docs/reference.md#grouping-and-sorting) |
 | Manage comicbooks | [Metadata and reading lists](docs/reference.md#metadata-and-reading-lists), [Process comicbooks](docs/reference.md#process-comicbooks), [Rename, move and recovery](docs/reference.md#rename-move-and-recovery), [Library maintenance](docs/reference.md#library-maintenance) |
+| Match comic metadata | [Comic Vine and Metron support](#comic-vine-and-metron-support) |
 | Manage access | [Account management](docs/reference.md#account-management), [Remote access](docs/reference.md#https-and-trusted-proxies) |
 | Protect an installation | [Backup and restore](docs/reference.md#backup-restore-and-root-relocation), [Upgrade an existing installation](docs/reference.md#upgrading-an-existing-installation-to-panel-haven), [Safety](#safety-and-operating-limits) |
 | Develop and contribute | [Development](#development), [Checks](#checks), [Verification history](docs/reference.md#verification-history), [Parity inventory](docs/reference.md#full-port-parity-inventory) |
@@ -126,6 +128,36 @@ Administrator credentials are required only when the accounts database is empty.
 Initial configuration uses ASP.NET Core's environment-variable/command-line providers. `Libraries__0`, `Libraries__1`, etc. are server-side paths. Relative bootstrap roots and `DataPath` resolve from the application's content root (`web/` when using the commands above). Default state is `web/data/`, with the database at `DataPath/panelhaven.sqlite` and persistent signing keys in `DataPath/keys`. Administrators can subsequently manage configuration through **Server settings**.
 
 For managed settings, secrets, startup and data relocation, see [Web-based server administration](docs/reference.md#web-based-server-administration).
+
+## Comic Vine and Metron support
+
+Administrators can use **Comicvine Match** or **Metron Match** in **Find metadata** (Book details) and **Process comicbooks**. Configure either provider or both; each button searches only its named provider, with no automatic fallback or server-wide provider switch.
+
+### Configure credentials
+
+1. Obtain a [Comic Vine API key](https://comicvine.gamespot.com/api/) or generate an API token in your [Metron account](https://metron.cloud/).
+2. Open **Server settings → Metadata providers**, enter the corresponding credentials, and save with your administrator password.
+3. Restart Panel Haven to apply credential changes. Switching between the two Match buttons does **not** require a restart.
+
+For initial environment-based configuration, use `ComicVine__ApiKey` and `Metron__ApiToken`; saved server settings take precedence. Credentials are stored independently and are never interchangeable. A provider without credentials has its Match button disabled; the other remains usable. Keep credentials out of browser code, shared URLs and source control.
+
+### Search and accept a match
+
+Check the editable series, issue number, year, volume and publisher hints, then choose a Match button. Candidates include cover previews and ranked suggestions; nothing is accepted automatically. The **Year** hint refers to the issue's release year, falling back to its cover year—not the series start year.
+
+- **Comic Vine** searches the first 10 volumes, selects the three closest matches, and considers up to 20 matching issues per selected volume.
+- **Metron** uses one issue-search request, ranks the first 100 returned issues, and returns only the **top five matches**. Name searches rank using the returned series, issue number, dates and volume information—not publisher. **Accept** fetches full issue metadata, including publisher, in one additional request: **two API requests total** without cached responses. An exact series URL needs one additional series-detail request.
+
+If a name search misses the intended run, paste its exact series URL and use the corresponding button:
+
+- Comic Vine: `https://comicvine.gamespot.com/series-name/4050-{id}/`
+- Metron: `https://metron.cloud/series/{id}/`
+
+In **Find metadata**, **Accept** updates catalog metadata only; it does not write to, convert or move the comicbook. In **Process comicbooks**, acceptance also organizes the comicbook in the selected destination and removes the source after verified success. Review the candidate and destination before accepting.
+
+Each provider has independent caching, request pacing and rate-limit cooldowns. Broad searches can take time; a rate-limited request does not silently switch providers. Searches send hints and provider IDs, not comicbook files or filesystem paths.
+
+See the [metadata workflow reference](docs/reference.md#metadata-and-reading-lists) for field preservation, matching rules and limits. Review each provider's terms before reusing metadata; Comic Vine requires non-commercial use and attribution.
 
 ## Safety and operating limits
 

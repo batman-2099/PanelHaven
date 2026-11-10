@@ -92,18 +92,6 @@ public sealed class Metron : IMetadataProvider
         var number = hints.Number.Contains('/') || hints.Number == "½" ? hints.Number : IntakeMatching.NormalizeNumber(hints.Number);
         var root = await IssuePageAsync(filter, number, 0, cancellationToken);
         var items = Items(root);
-        var series = new List<MetadataVolume>();
-        if (exactId is null && items.GetArrayLength() != 0)
-        {
-            var missing = items.EnumerateArray().Select(item => ReadId(Property(item, "series"))).ToHashSet();
-            for (var offset = 0; offset <= 10000 && missing.Count != 0; offset += PageSize)
-            {
-                var page = await VolumesAsync(hints.Series, offset, cancellationToken);
-                foreach (var volume in page.Results)
-                    if (missing.Remove(volume.Id)) series.Add(volume);
-                if (page.Results.Count == 0 || offset + PageSize >= page.Total) break;
-            }
-        }
         var warnings = new List<string>();
         // ponytail: one 100-issue page bounds discovery; filter issues directly, never shortlist series first.
         if (Integer(root, "count") > items.GetArrayLength())
@@ -118,16 +106,14 @@ public sealed class Metron : IMetadataProvider
             if (exactId is { } selected && volumeId != selected) throw InvalidResponse();
             if (!volumes.TryGetValue(volumeId, out var volume))
             {
-                var listed = series.FirstOrDefault(candidate => candidate.Id == volumeId);
-                volume = listed is null ? await VolumeAsync(volumeId, cancellationToken)
-                    : Volume(Property(item, "series")) with { Publisher = listed.Publisher };
+                volume = Volume(Property(item, "series"));
                 volumes.Add(volumeId, volume);
             }
             candidates.Add(IntakeMatching.Rank(hints, volume, Issue(item)) with { Provider = Id });
         }
         var ranked = candidates.DistinctBy(candidate => candidate.IssueId).OrderByDescending(candidate => candidate.Score)
             .ThenByDescending(candidate => int.TryParse(candidate.StartYear, out var start) && start is >= 1 and <= 9999 ? start : 0)
-            .ThenBy(candidate => candidate.VolumeId).ThenBy(candidate => candidate.IssueId).ToArray();
+            .ThenBy(candidate => candidate.VolumeId).ThenBy(candidate => candidate.IssueId).Take(5).ToArray();
         if (ranked.Length == 0) warnings.Add("No candidates found. Refine the editable hints and retry; no metadata was changed.");
         else
         {

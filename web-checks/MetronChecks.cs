@@ -99,22 +99,31 @@ internal static class MetronChecks
             await Error(() => provider.MetadataAsync(-1, 12), 400);
             Check(handler.Calls == 3, "Invalid input or mismatched selection reached Metron.");
         }
-        var paged = new Handler(request => request.RequestUri!.AbsolutePath switch
+        var matching = new Handler(request => request.RequestUri!.AbsolutePath switch
         {
-            "/api/issue/" => Json(new { count = 2, results = new[] {
-                new { id = 34, series = new { id = 12, name = "Example", volume = 1, year_began = 2025 }, number = "15", cover_date = "2026-11-04" },
-                new { id = 35, series = new { id = 13, name = "Example", volume = 2, year_began = 2026 }, number = "15", cover_date = "2026-11-04" } } }),
-            "/api/series/" => Json(new { count = 101, results = new[] {
-                new { id = request.RequestUri.Query.Contains("page=2") ? 13 : 12, series = "Example",
-                    year_began = 2025, publisher = new { name = "Publisher" } } } }),
-            _ => throw new Exception("Matching fetched per-series details instead of the next series page.")
+            "/api/issue/" => Json(new { count = 7, results = Enumerable.Range(1, 7).Select(id => new {
+                id, series = new { id, name = "Example", volume = 1, year_began = 2020 + id },
+                number = "15", cover_date = "2026-11-04" }) }),
+            "/api/issue/7/" => Json(new { id = 7, series = new { id = 7, name = "Example", year_began = 2027 },
+                number = "15", publisher = new { name = "Publisher" }, cover_date = "2026-11-04" }),
+            _ => throw new Exception("Name matching must not fetch series pages or series details.")
         });
-        using (var provider = new Metron(token, paged))
+        using (var provider = new Metron(token, matching))
         {
-            var matches = await provider.MatchIntakeAsync(new("Example", "015", 2026, null, "Publisher"));
-            Check(matches.Candidates.Select(candidate => candidate.IssueId).Order().SequenceEqual(new[] { 34, 35 })
-                && matches.Candidates.All(candidate => candidate.Publisher == "Publisher") && paged.Calls == 3,
-                "Paged series enrichment dropped candidates, publishers, or fanned out into detail requests.");
+            var hints = new IntakeHints("Example", "015", 2026, null, "Publisher");
+            var matches = await provider.MatchIntakeAsync(hints);
+            Check(matches.Candidates.Select(candidate => candidate.IssueId).SequenceEqual(new[] { 7, 6, 5, 4, 3 })
+                && matches.Candidates.All(candidate => candidate.Publisher == "") && matching.Calls == 1,
+                "One issue search must rank all candidates and return only the best five without publisher enrichment.");
+            var otherPublisher = await provider.MatchIntakeAsync(hints with { Publisher = "Other publisher" });
+            Check(matches.Candidates.SequenceEqual(otherPublisher.Candidates) && matching.Calls == 1,
+                "An unavailable publisher influenced ranking or repeated matching bypassed the cache.");
+            var metadata = await provider.MetadataAsync(7, 7);
+            Check(metadata.Fields["Publisher"] == "Publisher" && metadata.Fields["Series"] == "Example"
+                && metadata.Fields["Number"] == "15" && matching.Calls == 2,
+                "Acceptance must fetch full issue metadata, including publisher, in the second API request.");
+            await provider.MetadataAsync(7, 7, intake: true);
+            Check(matching.Calls == 2, "Processing fetched issue details again instead of using the acceptance cache.");
         }
         foreach (var image in new[] { "http://static.metron.cloud/media/a.jpg", "https://evil.example/media/a.jpg", "https://static.metron.cloud.evil.example/media/a.jpg",
             "https://user@static.metron.cloud/media/a.jpg", "https://static.metron.cloud:444/media/a.jpg", "https://metron.cloud/api/issue/34/",

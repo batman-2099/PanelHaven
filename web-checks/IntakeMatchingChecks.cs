@@ -52,9 +52,6 @@ internal static class IntakeMatchingChecks
         {
             var query = Uri.UnescapeDataString(request.RequestUri!.Query);
             Check(!query.Contains("/private") && request.RequestUri.Host == "metron.cloud", "Private path or foreign origin used.");
-            if (request.RequestUri.AbsolutePath == "/api/series/")
-                return Json(new { count = 200, next = "https://metron.cloud/api/series/?page=2", previous = (string?)null,
-                    results = new[] { Volume(1, "Example", "Marvel"), Volume(2, "Example", "Marvel"), Volume(3, "Example", "Marvel Comics") } });
             Check(request.RequestUri.AbsolutePath == "/api/issue/" && query.Contains("series_name=Example")
                 && query.Contains("number=1") && query.Contains("page=1") && !query.Contains("cover_year") && !query.Contains("series_year_began"),
                 "Matching must filter issues directly without confusing issue year with series year.");
@@ -68,24 +65,20 @@ internal static class IntakeMatchingChecks
         using (var provider = new Metron("check-secret-never-return", handler))
         {
             var result = await provider.MatchIntakeAsync(hints);
-            Check(result.Candidates.Select(candidate => candidate.IssueId).SequenceEqual([102, 103, 101]), "Ranking ignored release year/publisher or deterministic ties.");
-            Check(result.Candidates[0].Score == 95 && result.Candidates[0].Reason.Contains("release year 2025 matches")
-                && result.Candidates.All(candidate => candidate.Score is >= 0 and <= 100 && candidate.Provider == "metron"), "Score/reason or provider identity is incorrect.");
+            Check(result.Candidates.Select(candidate => candidate.IssueId).SequenceEqual([102, 103, 101]), "Ranking ignored release year or deterministic ties.");
+            Check(result.Candidates.All(candidate => candidate.Score is >= 0 and <= 100 && candidate.Provider == "metron"),
+                "Score range or provider identity is incorrect.");
             Check(result.Candidates.Single(candidate => candidate.IssueId == 101).CoverUrl == "https://static.metron.cloud/media/issue/cover.jpg"
                 && result.Candidates.Where(candidate => candidate.IssueId != 101).All(candidate => candidate.CoverUrl == ""), "Cover allowlist failed.");
             Check(result.Warnings.Any(warning => warning.Contains("Ambiguous")) && result.Warnings.Any(warning => warning.Contains("first 100")), "Search-limit disclosure missing.");
             await provider.MatchIntakeAsync(hints);
-            Check(handler.Calls == 2, "Matching cache or shared series enrichment failed.");
+            Check(handler.Calls == 1, "Name matching fetched more than one issue page or bypassed the cache.");
             await Error(() => provider.MatchIntakeAsync(hints with { Number = "1?2" }), 400);
-            Check(handler.Calls == 2, "Invalid hints reached the provider.");
+            Check(handler.Calls == 1, "Invalid hints reached the provider.");
         }
         var recent = new Handler(request =>
         {
-            if (request.RequestUri!.AbsolutePath == "/api/series/")
-                return Json(new { count = 11, results = Enumerable.Range(1, 11).Select(id => Volume(id, "Example", "Marvel")) });
-            if (request.RequestUri.AbsolutePath == "/api/series/12/")
-                return Json(new { id = 12, name = "Example", year_began = 2025, volume = 3, publisher = new { id = 1, name = "Marvel" } });
-            Check(request.RequestUri.AbsolutePath == "/api/issue/", "Unexpected recent-series request.");
+            Check(request.RequestUri!.AbsolutePath == "/api/issue/", "Unexpected recent-series request.");
             return Json(new { count = 4, results = new[] { (Id: 1, Year: 1990), (Id: 2, Year: 2020), (Id: 11, Year: 2024), (Id: 12, Year: 2025) }
                 .Select(item => new { id = 100 + item.Id, series = new { id = item.Id, name = "Example", volume = item.Id == 12 ? 3 : 1, year_began = item.Year },
                     number = "1", issue = "Example #1", cover_date = "2025-01-01", store_date = (string?)null }) });
@@ -240,8 +233,6 @@ internal static class IntakeMatchingChecks
         }
     }
 
-    private static object Volume(int id, string name, string publisher) => new { id, series = name + " (2020)", year_began = 2020,
-        volume = 2, publisher = new { id = 1, name = publisher } };
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
     private static async Task Error(Func<Task> action, int status)
     {

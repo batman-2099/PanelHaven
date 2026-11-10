@@ -50,10 +50,10 @@ internal static class ComicVineChecks
         });
         using (var provider = new ComicVine(key, handler))
         {
-            Check(provider.Configured, "Configured key was not recognized.");
+            Check(provider.Configured && provider.Id == "comicvine", "Configured provider identity was not recognized.");
             var volumes = await provider.VolumesAsync(" Example & Friends ", 10);
             Check(volumes.Limit == 10 && volumes.Offset == 10 && volumes.Total == 11 && volumes.Results.Single() ==
-                new ComicVineVolume(12, "Example & Friends", "1999", "Publisher", volumeUrl), "Volume results changed or lost fields.");
+                new MetadataVolume(12, "Example & Friends", "1999", "Publisher", volumeUrl), "Volume results changed or lost fields.");
             await provider.VolumesAsync("Example & Friends", 10);
             Check(handler.Calls == 1, "Repeated search missed the cache.");
             var issues = await provider.IssuesAsync(12, "1/2", 20);
@@ -167,13 +167,31 @@ internal static class ComicVineChecks
             var metadata = await provider.MetadataAsync(34, 12);
             Check(metadata.Fields.Count == 1 && metadata.Fields["Web"] == issueUrl, "Absent metadata became empty replacements or invented dates.");
         }
+        using (var provider = new ComicVine(key, new Handler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/search/" => Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                new { id = 12, name = "Example Vol. 2", start_year = "2020", publisher = new { name = "Publisher" }, site_detail_url = volumeUrl } } }),
+            "/api/volume/4050-12/" => Json(new { status_code = 1, results = new {
+                id = 12, name = "Example Vol. 2", start_year = "2020", publisher = new { name = "Publisher" } } }),
+            "/api/issues/" => Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                new { id = 34, name = "Title", issue_number = "1", cover_date = "2025-01-01", site_detail_url = issueUrl } } }),
+            _ => throw new Exception("Unexpected ordinal mapping request.")
+        })))
+        {
+            var volumes = await provider.VolumesAsync("Example", 0);
+            Check(volumes.Results.Single().Ordinal == 2, "Explicit Comic Vine name ordinal was not mapped.");
+            var result = await provider.MatchIntakeAsync(new IntakeHints(volumeUrl, "1", 2025, 2, "Publisher"));
+            Check(result.Candidates.Single().Score == 100 && result.Candidates[0].Reason.Contains("volume matches")
+                && result.Candidates[0].Provider == "comicvine", "Exact URL lost explicit ordinal ranking or provider identity.");
+        }
+        await ComicVineIntakeMatchingChecks.RunAsync();
     }
 
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
     private static async Task Error(Func<Task> action, int status)
     {
         try { await action(); }
-        catch (ComicVineException exception)
+        catch (MetadataProviderException exception)
         {
             Check(exception.StatusCode == status && exception.InnerException is null && !exception.ToString().Contains("check-secret-never-return")
                 && !exception.Message.Contains("https://"), "Wrong error status or upstream credential/URL leak.");
@@ -192,6 +210,176 @@ internal static class ComicVineChecks
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
             Times.Add(elapsed.Elapsed);
+            return Task.FromResult(respond(request));
+        }
+    }
+}
+
+internal static class ComicVineIntakeMatchingChecks
+{
+    public static async Task RunAsync()
+    {
+        var hints = new IntakeHints("Example", "001", 2025, null, "Marvel");
+        using (var missing = new ComicVine(null)) await Error(() => missing.MatchIntakeAsync(hints), 503);
+        var handler = new Handler(request =>
+        {
+            var query = Uri.UnescapeDataString(request.RequestUri!.Query);
+            Check(!query.Contains("/private") && request.RequestUri.Host == "comicvine.gamespot.com", "Private path or foreign provider origin used.");
+            if (request.RequestUri.AbsolutePath == "/api/search/")
+            {
+                Check(query.Contains("limit=10") && query.Contains("offset=0"), "Initial volume search exceeded the first-ten bound.");
+                return Json(new { status_code = 1, number_of_total_results = 15, results = new[] {
+                    Volume(4, "Unrelated", "Other"), Volume(3, "Example", "Marvel Comics"), Volume(2, "Example", "Marvel"), Volume(1, "Example", "Marvel") } });
+            }
+            Check(query.Contains("limit=20") && query.Contains("offset=0"), "Matching exceeded one twenty-issue page per volume.");
+            Check(query.Contains("issue_number:1") && query.Contains("store_date"), "Issue padding or release-date request was lost.");
+            var id = query.Contains("volume:1,") ? 1 : query.Contains("volume:2,") ? 2 : query.Contains("volume:3,") ? 3 : throw new Exception("Unbounded/unranked volume request.");
+            return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                new { id = 100 + id, name = "Issue title", issue_number = "1", cover_date = "2026-01-01",
+                    image = new { small_url = id == 1 ? "https://comicvine.gamespot.com/a/uploads/scale_small/cover.jpg"
+                        : id == 2 ? "https://untrusted.example/cover.jpg" : "https://comicvine.gamespot.com/a/uploads/cover.jpg?api_key=private" },
+                    store_date = id == 1 ? "2024-12-01" : "2025-12-01", site_detail_url = $"https://comicvine.gamespot.com/issue/4000-{100 + id}/" } } });
+        });
+        using (var provider = new ComicVine("check-secret-never-return", handler))
+        {
+            var result = await provider.MatchIntakeAsync(hints);
+            Check(result.Candidates.Select(candidate => candidate.IssueId).SequenceEqual([102, 103, 101]), "Ranking ignored release year/publisher or deterministic ties.");
+            Check(result.Candidates[0].Score == 95 && result.Candidates[0].Reason.Contains("release year 2025 matches")
+                && result.Candidates.All(candidate => candidate.Score is >= 0 and <= 100 && candidate.Provider == "comicvine"), "Score/reason is incorrect.");
+            Check(result.Candidates.Single(candidate => candidate.IssueId == 101).CoverUrl == "https://comicvine.gamespot.com/a/uploads/scale_small/cover.jpg"
+                && result.Candidates.Where(candidate => candidate.IssueId != 101).All(candidate => candidate.CoverUrl == ""),
+                "Trusted cover was lost or an untrusted/credential-bearing image URL escaped.");
+            Check(result.Warnings.Any(warning => warning.Contains("Ambiguous")) && result.Warnings.Any(warning => warning.Contains("bounded")),
+                "Ambiguity or bounded-search disclosure was omitted.");
+            await provider.MatchIntakeAsync(hints);
+            Check(handler.Calls == 4, "Matching bypassed the existing cache or fetched excessive pages.");
+            await Error(() => provider.MatchIntakeAsync(hints with { Number = "1?2" }), 400);
+            Check(handler.Calls == 4, "Invalid matching hints reached the provider.");
+        }
+        var recent = new Handler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/search/")
+                return Json(new { status_code = 1, number_of_total_results = 5,
+                    results = new[] { "", "1990", "2020", "2025", "2026" }.Select((year, index) => new {
+                        id = index + 1, name = index == 4 ? "Unrelated" : "Example", start_year = year,
+                        publisher = new { name = "Marvel" },
+                        site_detail_url = $"https://comicvine.gamespot.com/volume/4050-{index + 1}/" }) });
+            var query = Uri.UnescapeDataString(request.RequestUri.Query);
+            var id = Enumerable.Range(1, 5).Single(id => query.Contains($"volume:{id},"));
+            return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                new { id = 100 + id, name = "Issue", issue_number = "1", cover_date = "2025-01-01",
+                    site_detail_url = $"https://comicvine.gamespot.com/issue/4000-{100 + id}/" } } });
+        });
+        using (var provider = new ComicVine("key", recent))
+        {
+            var noYear = hints with { Year = null };
+            var result = await provider.MatchIntakeAsync(noYear);
+            Check(result.Candidates.Select(candidate => candidate.VolumeId).SequenceEqual([4, 3, 2]),
+                "Newer equally matching runs must enter the shortlist and lead results, ahead of unknown years but not better series matches.");
+            result = await provider.MatchIntakeAsync(noYear with { Volume = 1990 });
+            Check(result.Candidates[0].VolumeId == 2, "Recency overrode an explicit volume match.");
+            result = await provider.MatchIntakeAsync(noYear with { Year = 1995 });
+            Check(result.Candidates.Any(candidate => candidate.VolumeId == 2),
+                "Newer runs displaced the run matching the historical year hint.");
+        }
+        var exact = new Handler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/volume/4050-166619/")
+                return Json(new { status_code = 1, results = new { id = 166619, name = "Batman",
+                    start_year = "2025", publisher = new { name = "DC Comics" } } });
+            if (path == "/api/issues/")
+            {
+                Check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("filter=volume:166619,issue_number:1"),
+                    "Exact series matching searched a different run or lost issue normalization.");
+                return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
+                    new { id = 34, name = "Batman #1", issue_number = "1", cover_date = "2025-09-01",
+                        site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } } });
+            }
+            if (path == "/api/issue/4000-34/")
+                return Json(new { status_code = 1, results = new { id = 34, volume = new { id = 166619 },
+                    name = "Batman #1", issue_number = "1", site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } });
+            throw new Exception("Exact series matching made a broad search or unrelated provider request.");
+        });
+        using (var provider = new ComicVine("key", exact))
+        {
+            var exactHints = hints with { Series = "https://comicvine.gamespot.com/batman/4050-166619/", Volume = 1940 };
+            var result = await provider.MatchIntakeAsync(exactHints);
+            Check(result.Candidates.Single().VolumeId == 166619 && result.Candidates[0].Series == "Batman"
+                && result.Candidates[0].Number == "1" && exact.Calls == 2,
+                "Explicit series URL failed to override an older run hint.");
+            await provider.MatchIntakeAsync(exactHints);
+            var metadata = await provider.MetadataAsync(34, 166619, intake: true);
+            await provider.MetadataAsync(34, 166619, intake: true);
+            Check(metadata.Fields["Series"] == "Batman" && metadata.Fields["Volume"] == "2025"
+                && metadata.Fields["Publisher"] == "DC Comics" && exact.Calls == 3,
+                "Acceptance lost exact-run metadata or repeated the volume lookup.");
+            foreach (var url in new[] { "http://comicvine.gamespot.com/batman/4050-166619/",
+                "https://evil.example/batman/4050-166619/", "https://comicvine.gamespot.com.evil.example/batman/4050-166619/",
+                "https://user@comicvine.gamespot.com/batman/4050-166619/", "https://comicvine.gamespot.com:444/batman/4050-166619/",
+                "https://comicvine.gamespot.com/batman/4000-34/", "https://comicvine.gamespot.com/batman/4050-0/",
+                "https://comicvine.gamespot.com/batman/4050-99999999999999999/" })
+                await Error(() => provider.MatchIntakeAsync(exactHints with { Series = url }), 400);
+            Check(exact.Calls == 3, "Invalid series URLs reached the provider.");
+        }
+        var volume = new MetadataVolume(1, "Example", "2020", "Marvel Comics", "https://comicvine.gamespot.com/volume/4050-1/");
+        var issue = new ProviderIssue(1, "Title", "1", "2025-01-01", "https://comicvine.gamespot.com/issue/4000-1/");
+        Check(IntakeMatching.Rank(hints with { Volume = 2020 }, volume, issue).Score == 100
+            && IntakeMatching.Rank(hints, volume, issue).Reason.Contains("cover year 2025 matches"), "Cover-date fallback or year-style volume ranking failed.");
+        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume, issue).Reason.Contains("ordinal unavailable"), "Provider volume ID was mistaken for an ordinal.");
+        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume with { Name = "Example Vol. 2", Ordinal = 2 }, issue).Score == 100,
+            "An explicit matching volume suffix penalized the base series name or failed to rank.");
+        foreach (var status in new[] { HttpStatusCode.TooManyRequests, HttpStatusCode.ServiceUnavailable })
+        {
+            var failing = new Handler(_ => new(status) { Content = new StringContent("check-secret-never-return") });
+            using var provider = new ComicVine("check-secret-never-return", failing);
+            await Error(() => provider.MatchIntakeAsync(hints), status == HttpStatusCode.TooManyRequests ? 429 : 502);
+            if (status == HttpStatusCode.TooManyRequests)
+            {
+                await Error(() => provider.MatchIntakeAsync(hints), 429);
+                Check(failing.Calls == 1, "Matching bypassed provider rate-limit cooldown.");
+            }
+        }
+        using (var provider = new ComicVine("check-secret-never-return", new Handler(request => request.RequestUri!.AbsolutePath == "/api/search/"
+            ? Json(new { status_code = 1, number_of_total_results = 1, results = new[] { Volume(1, "Example", "Marvel") } })
+            : new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("check-secret-never-return") })))
+            await Error(() => provider.MatchIntakeAsync(hints), 502);
+        using (var provider = new ComicVine("key", new Handler(_ => Json(new { status_code = 1, number_of_total_results = 0, results = Array.Empty<object>() }))))
+        {
+            var result = await provider.MatchIntakeAsync(hints);
+            Check(result.Candidates.Count == 0 && result.Warnings.Any(warning => warning.Contains("No candidates")), "Empty search lacks actionable explanation.");
+        }
+        using (var provider = new ComicVine("key", new Handler(_ => throw new Exception("Cancelled matching reached provider."))))
+        {
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            try { await provider.MatchIntakeAsync(hints, cancelled.Token); throw new Exception("Matching ignored cancellation."); }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private static object Volume(int id, string name, string publisher) => new { id, name, start_year = "2020", publisher = new { name = publisher },
+        site_detail_url = $"https://comicvine.gamespot.com/volume/4050-{id}/" };
+    private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
+    private static async Task Error(Func<Task> action, int status)
+    {
+        try { await action(); }
+        catch (MetadataProviderException exception)
+        {
+            Check(exception.StatusCode == status && !exception.ToString().Contains("check-secret-never-return") && exception.InnerException is null,
+                "Intake error status or secret sanitization failed.");
+            return;
+        }
+        throw new Exception("Expected intake failure was not raised.");
+    }
+    private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+    private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
             return Task.FromResult(respond(request));
         }
     }

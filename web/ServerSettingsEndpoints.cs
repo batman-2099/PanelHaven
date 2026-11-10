@@ -12,6 +12,8 @@ public record ServerSettingsMutation
 public sealed record SaveServerSettingsRequest : ServerSettingsMutation
 {
     [JsonRequired] public ServerSettingsValues Settings { get; init; } = null!;
+    public string? MetronApiToken { get; init; }
+    public bool ClearMetronApiToken { get; init; }
     public string? ComicVineApiKey { get; init; }
     public bool ClearComicVineApiKey { get; init; }
     public string? CertificatePassword { get; init; }
@@ -68,8 +70,8 @@ public static class ServerSettingsEndpoints
         api.MapGet("", async (ServerSettings store, ServerHost host) => Results.Ok(await Snapshot(store, host)));
         api.MapPut("", async (SaveServerSettingsRequest request, ServerSettings store, ServerHost host) =>
         {
-            store.Update(request.ExpectedRevision, request.Settings, request.ComicVineApiKey, request.ClearComicVineApiKey,
-                request.CertificatePassword, request.ClearCertificatePassword);
+            store.Update(request.ExpectedRevision, request.Settings, request.MetronApiToken, request.ClearMetronApiToken,
+                request.CertificatePassword, request.ClearCertificatePassword, request.ComicVineApiKey, request.ClearComicVineApiKey);
             await host.ApplyBackupAsync(store.Document.Settings.Backup);
             return Results.Ok(await Snapshot(store, host));
         }).RequireRateLimiting("password");
@@ -113,7 +115,8 @@ public static class ServerSettingsEndpoints
         return new
         {
             document.Revision, document.Settings, activeSettings = store.Active.Settings,
-            secrets = new { comicVineApiKey = !string.IsNullOrEmpty(document.ComicVineApiKey), certificatePassword = !string.IsNullOrEmpty(document.CertificatePassword) },
+            secrets = new { metronApiToken = !string.IsNullOrEmpty(document.MetronApiToken),
+                comicVineApiKey = !string.IsNullOrEmpty(document.ComicVineApiKey), certificatePassword = !string.IsNullOrEmpty(document.CertificatePassword) },
             store.RestartRequired, settingsPath = store.Path, recoveryPath = store.RecoveryPath,
             document.PendingDataPath, document.RelocationError, service = await host.GetStatusAsync()
         };

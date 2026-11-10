@@ -6,20 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace PanelHaven.Web;
 
-public sealed record ComicVineVolume(int Id, string Name, string StartYear, string Publisher, string Url);
-public sealed record ComicVineIssue(int Id, string Name, string Number, string CoverDate, string Url)
-{
-    public string StoreDate { get; init; } = "";
-    public string CoverUrl { get; init; } = "";
-}
-public sealed record ComicVinePage<T>(IReadOnlyList<T> Results, int Offset, int Total, int Limit = 20);
-public sealed record ComicVineMetadata(Dictionary<string, string> Fields, string Url);
-public sealed class ComicVineException(int statusCode, string message) : Exception(message)
-{
-    public int StatusCode { get; } = statusCode;
-}
-
-public sealed class ComicVine : IDisposable
+public sealed class ComicVine : IMetadataProvider
 {
     private const int MaxBody = 1024 * 1024;
     private readonly string apiKey;
@@ -28,6 +15,7 @@ public sealed class ComicVine : IDisposable
     private readonly Dictionary<string, (JsonElement Value, DateTimeOffset Expires)> cache = new(StringComparer.Ordinal);
     private DateTimeOffset nextRequest;
     private DateTimeOffset blockedUntil;
+    public string Id => "comicvine";
     public bool Configured => apiKey.Length != 0;
 
     public ComicVine(string? apiKey, HttpMessageHandler? handler = null)
@@ -43,49 +31,47 @@ public sealed class ComicVine : IDisposable
         client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 
-    public async Task<ComicVinePage<ComicVineVolume>> VolumesAsync(string? query, int offset, CancellationToken cancellationToken = default)
+    public async Task<MetadataPage<MetadataVolume>> VolumesAsync(string? query, int offset, CancellationToken cancellationToken = default)
     {
         query = query?.Trim();
         if (string.IsNullOrEmpty(query) || query.Length > 200 || query.Any(char.IsControl))
-            throw new ComicVineException(400, "Enter a series name of 1–200 characters.");
+            throw new MetadataProviderException(400, "Enter a series name of 1–200 characters.");
         ValidateOffset(offset, 10);
         var root = await GetAsync($"search/?resources=volume&query={Uri.EscapeDataString(query)}&limit=10&offset={offset}&field_list=id,name,start_year,publisher,site_detail_url", cancellationToken);
-        var results = Items(root, 10).EnumerateArray().Select(item => new ComicVineVolume(Id(item), Text(item, "name"),
-            Text(item, "start_year"), Text(Property(item, "publisher"), "name"), Url(item))).ToArray();
+        var results = Items(root, 10).EnumerateArray().Select(item => Volume(item, Url(item))).ToArray();
         return new(results, offset, Integer(root, "number_of_total_results"), 10);
     }
 
-    public async Task<ComicVinePage<ComicVineIssue>> IssuesAsync(int volumeId, string? number, int offset, CancellationToken cancellationToken = default)
+    public async Task<MetadataPage<ProviderIssue>> IssuesAsync(int volumeId, string? number, int offset, CancellationToken cancellationToken = default)
     {
         ValidateId(volumeId);
         ValidateOffset(offset, 20);
         number = number?.Trim();
         if (number is { Length: > 40 } || number?.Any(c => char.IsControl(c) || c is ',' or ':' or '|' or '%' or '&' or '=' or '?' or '#') == true)
-            throw new ComicVineException(400, "Issue number must be at most 40 characters and cannot contain filter separators.");
+            throw new MetadataProviderException(400, "Issue number must be at most 40 characters and cannot contain filter separators.");
         var filter = $"volume:{volumeId}" + (string.IsNullOrEmpty(number) ? "" : $",issue_number:{number}");
         var root = await GetAsync($"issues/?filter={Uri.EscapeDataString(filter)}&limit=20&offset={offset}&field_list=id,name,issue_number,cover_date,store_date,image,site_detail_url", cancellationToken);
-        var results = Items(root, 20).EnumerateArray().Select(item => new ComicVineIssue(Id(item), Text(item, "name"),
+        var results = Items(root, 20).EnumerateArray().Select(item => new ProviderIssue(ReadId(item), Text(item, "name"),
             Text(item, "issue_number"), Text(item, "cover_date"), Url(item)) { StoreDate = Text(item, "store_date"), CoverUrl = CoverUrl(item) }).ToArray();
-        return new(results, offset, Integer(root, "number_of_total_results"));
+        return new(results, offset, Integer(root, "number_of_total_results"), 20);
     }
 
     public async Task<IntakeMatches> MatchIntakeAsync(IntakeHints? hints, CancellationToken cancellationToken = default)
     {
         hints = IntakeMatching.Validate(hints);
-        ComicVinePage<ComicVineVolume> volumes;
+        MetadataPage<MetadataVolume> volumes;
         if (hints.Series.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
             || hints.Series.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {
             if (!Uri.TryCreate(hints.Series, UriKind.Absolute, out var uri) || uri.Scheme != "https"
                 || uri.Host != "comicvine.gamespot.com" || uri.Port != 443 || uri.UserInfo.Length != 0)
-                throw new ComicVineException(400, "Enter an HTTPS Comic Vine series URL containing /4050-series-id/.");
+                throw new MetadataProviderException(400, "Enter an HTTPS Comic Vine series URL containing /4050-series-id/.");
             var match = Regex.Match(uri.AbsolutePath, @"/4050-([1-9][0-9]*)/?$", RegexOptions.CultureInvariant);
             if (!match.Success || !int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id))
-                throw new ComicVineException(400, "Enter a Comic Vine series URL, not an issue URL.");
+                throw new MetadataProviderException(400, "Enter a Comic Vine series URL, not an issue URL.");
             var item = Property(await GetAsync($"volume/4050-{id}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
-            if (Id(item) != id) throw InvalidResponse();
-            var volume = new ComicVineVolume(id, Text(item, "name"), Text(item, "start_year"),
-                Text(Property(item, "publisher"), "name"), uri.GetLeftPart(UriPartial.Path));
+            if (ReadId(item) != id) throw InvalidResponse();
+            var volume = Volume(item, uri.GetLeftPart(UriPartial.Path));
             volumes = new([volume], 0, 1, 10);
             hints = hints with { Series = volume.Name };
         }
@@ -113,7 +99,7 @@ public sealed class ComicVine : IDisposable
             var issues = await IssuesAsync(volume.Id, number, 0, cancellationToken);
             if (issues.Total > issues.Results.Count)
                 warnings.Add($"Only the first 20 matching issues in volume {volume.Id} were considered.");
-            candidates.AddRange(issues.Results.Select(issue => IntakeMatching.Rank(hints, volume, issue)));
+            candidates.AddRange(issues.Results.Select(issue => IntakeMatching.Rank(hints, volume, issue) with { Provider = Id }));
         }
         var ranked = candidates.DistinctBy(candidate => candidate.IssueId).OrderByDescending(candidate => candidate.Score)
             .ThenByDescending(candidate => int.TryParse(candidate.StartYear, out var start) && start is >= 1 and <= 9999 ? start : 0)
@@ -128,13 +114,13 @@ public sealed class ComicVine : IDisposable
         return new(hints, ranked, warnings);
     }
 
-    public async Task<ComicVineMetadata> MetadataAsync(int issueId, int volumeId, CancellationToken cancellationToken = default, bool intake = false)
+    public async Task<MetadataProposal> MetadataAsync(int issueId, int volumeId, CancellationToken cancellationToken = default, bool intake = false)
     {
         ValidateId(issueId);
         ValidateId(volumeId);
         var issue = Property(await GetAsync($"issue/4000-{issueId}/?field_list=id,name,issue_number,volume,cover_date,store_date,description,deck,person_credits,character_credits,team_credits,location_credits,story_arc_credits,site_detail_url", cancellationToken), "results");
-        if (Id(issue) != issueId || Id(Property(issue, "volume")) != volumeId)
-            throw new ComicVineException(409, "The selected issue does not belong to this volume. Select the volume and issue again.");
+        if (ReadId(issue) != issueId || ReadId(Property(issue, "volume")) != volumeId)
+            throw new MetadataProviderException(409, "The selected issue does not belong to this volume. Select the volume and issue again.");
         var url = Url(issue);
         JsonElement volume = default;
         await gate.WaitAsync(cancellationToken);
@@ -163,7 +149,7 @@ public sealed class ComicVine : IDisposable
         finally { gate.Release(); }
         if (volume.ValueKind == JsonValueKind.Undefined)
             volume = Property(await GetAsync($"volume/4050-{volumeId}/?field_list=id,name,publisher,start_year", cancellationToken), "results");
-        if (Id(volume) != volumeId) throw InvalidResponse();
+        if (ReadId(volume) != volumeId) throw InvalidResponse();
         var fields = new Dictionary<string, string>(StringComparer.Ordinal);
         void Add(string field, string value) { if (!string.IsNullOrWhiteSpace(value) && value.Length <= 16384) fields[field] = value; }
         Add("Series", Text(volume, "name"));
@@ -217,7 +203,7 @@ public sealed class ComicVine : IDisposable
 
     private async Task<JsonElement> GetAsync(string path, CancellationToken cancellationToken)
     {
-        if (!Configured) throw new ComicVineException(503, "Comic Vine is not configured. Add your API key in Server settings, then restart the server.");
+        if (!Configured) throw new MetadataProviderException(503, "Comic Vine is not configured. Add your API key in Server settings, then restart the server.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
         var entered = false;
@@ -227,7 +213,7 @@ public sealed class ComicVine : IDisposable
             entered = true;
             var now = DateTimeOffset.UtcNow;
             if (cache.TryGetValue(path, out var cached) && cached.Expires > now) return cached.Value;
-            if (blockedUntil > now) throw new ComicVineException(429, "Comic Vine is rate limited. Wait before trying again.");
+            if (blockedUntil > now) throw new MetadataProviderException(429, "Comic Vine is rate limited. Wait before trying again.");
             if (nextRequest > now) await Task.Delay(nextRequest - now, timeout.Token);
             now = DateTimeOffset.UtcNow;
             nextRequest = now.AddSeconds(1);
@@ -238,26 +224,26 @@ public sealed class ComicVine : IDisposable
                 var retry = response.Headers.RetryAfter;
                 var retryAt = retry?.Date ?? (retry?.Delta is { } delta ? now.Add(delta) : blockedUntil);
                 if (retryAt > blockedUntil) blockedUntil = retryAt;
-                throw new ComicVineException(429, "Comic Vine is rate limited. Wait before trying again.");
+                throw new MetadataProviderException(429, "Comic Vine is rate limited. Wait before trying again.");
             }
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                throw new ComicVineException(502, "Comic Vine rejected access. Check the server API key and provider account.");
+                throw new MetadataProviderException(502, "Comic Vine rejected access. Check the server API key and provider account.");
             if (response.StatusCode == HttpStatusCode.NotFound)
-                throw new ComicVineException(404, "The Comic Vine entry was not found.");
+                throw new MetadataProviderException(404, "The Comic Vine entry was not found.");
             if (!response.IsSuccessStatusCode)
-                throw new ComicVineException(502, "Comic Vine is unavailable. Try again later.");
+                throw new MetadataProviderException(502, "Comic Vine is unavailable. Try again later.");
             await response.Content.LoadIntoBufferAsync(MaxBody, timeout.Token);
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token), cancellationToken: timeout.Token);
             var root = document.RootElement;
             switch (Integer(root, "status_code"))
             {
                 case 1: break;
-                case 100: throw new ComicVineException(502, "Comic Vine rejected the API key. Check the key in Server settings and restart after changing it.");
-                case 101: throw new ComicVineException(404, "The Comic Vine entry was not found.");
+                case 100: throw new MetadataProviderException(502, "Comic Vine rejected the API key. Check the key in Server settings and restart after changing it.");
+                case 101: throw new MetadataProviderException(404, "The Comic Vine entry was not found.");
                 case 107:
                     blockedUntil = now.AddMinutes(1);
-                    throw new ComicVineException(429, "Comic Vine is rate limited. Wait before trying again.");
-                default: throw new ComicVineException(502, "Comic Vine could not process the request. Try again later.");
+                    throw new MetadataProviderException(429, "Comic Vine is rate limited. Wait before trying again.");
+                default: throw new MetadataProviderException(502, "Comic Vine could not process the request. Try again later.");
             }
             if (Property(root, "results").ValueKind is not (JsonValueKind.Array or JsonValueKind.Object)) throw InvalidResponse();
             var value = root.Clone();
@@ -268,28 +254,28 @@ public sealed class ComicVine : IDisposable
         catch (OperationCanceledException)
         {
             if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException(cancellationToken);
-            throw new ComicVineException(504, "Comic Vine took too long to respond. Try again.");
+            throw new MetadataProviderException(504, "Comic Vine took too long to respond. Try again.");
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
         {
             // Never propagate upstream exception messages, URLs, bodies, or an inner exception containing the key.
-            throw new ComicVineException(502, "Comic Vine returned an unavailable, oversized, or invalid response. Try again later.");
+            throw new MetadataProviderException(502, "Comic Vine returned an unavailable, oversized, or invalid response. Try again later.");
         }
         finally { if (entered) gate.Release(); }
     }
 
     private static void ValidateId(int id)
     {
-        if (id <= 0) throw new ComicVineException(400, "Select a valid Comic Vine volume and issue.");
+        if (id <= 0) throw new MetadataProviderException(400, "Select a valid Comic Vine volume and issue.");
     }
 
     private static void ValidateOffset(int offset, int limit)
     {
         if (offset is < 0 or > 10000 || offset % limit != 0)
-            throw new ComicVineException(400, $"Search offset must be a multiple of {limit} from 0 to 10000.");
+            throw new MetadataProviderException(400, $"Search offset must be a multiple of {limit} from 0 to 10000.");
     }
 
-    private static ComicVineException InvalidResponse() => new(502, "Comic Vine returned an invalid response.");
+    private static MetadataProviderException InvalidResponse() => new(502, "Comic Vine returned an invalid response.");
     private static JsonElement Property(JsonElement item, string name) =>
         item.ValueKind == JsonValueKind.Object && item.TryGetProperty(name, out var value) ? value : default;
     private static int Integer(JsonElement item, string name)
@@ -297,13 +283,25 @@ public sealed class ComicVine : IDisposable
         var value = Property(item, name);
         return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number) && number >= 0 ? number : throw InvalidResponse();
     }
-    private static int Id(JsonElement item) => Integer(item, "id") is > 0 and var id ? id : throw InvalidResponse();
+    private static int ReadId(JsonElement item) => Integer(item, "id") is > 0 and var id ? id : throw InvalidResponse();
     private static JsonElement Items(JsonElement root, int limit)
     {
         var items = Property(root, "results");
         if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() > limit) throw InvalidResponse();
         return items;
     }
+    private static MetadataVolume Volume(JsonElement item, string url)
+    {
+        var name = Text(item, "name");
+        var match = Regex.Match(name, @"\b(?:v(?:ol(?:ume)?)?\.?)[ ]*(\d{1,4})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+        return new(ReadId(item), name, Text(item, "start_year"), Text(Property(item, "publisher"), "name"), url)
+        {
+            Ordinal = match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal)
+                && ordinal > 0 ? ordinal : null
+        };
+    }
+
     private static string Url(JsonElement item)
     {
         var value = Property(item, "site_detail_url");

@@ -47,132 +47,126 @@ internal static class IntakeMatchingChecks
             try { JsonSerializer.Deserialize<IntakeHints>(json, jsonOptions); throw new Exception("Malformed hints JSON was accepted."); }
             catch (JsonException) { }
         }
-        using (var missing = new ComicVine(null)) await Error(() => missing.MatchIntakeAsync(hints), 503);
+        using (var missing = new Metron(null)) await Error(() => missing.MatchIntakeAsync(hints), 503);
         var handler = new Handler(request =>
         {
             var query = Uri.UnescapeDataString(request.RequestUri!.Query);
-            Check(!query.Contains("/private") && request.RequestUri.Host == "comicvine.gamespot.com", "Private path or foreign provider origin used.");
-            if (request.RequestUri.AbsolutePath == "/api/search/")
-                return Json(new { status_code = 1, number_of_total_results = 15, results = new[] {
-                    Volume(4, "Unrelated", "Other"), Volume(3, "Example", "Marvel Comics"), Volume(2, "Example", "Marvel"), Volume(1, "Example", "Marvel") } });
-            Check(query.Contains("issue_number:1") && query.Contains("store_date"), "Issue padding or release-date request was lost.");
-            var id = query.Contains("volume:1,") ? 1 : query.Contains("volume:2,") ? 2 : query.Contains("volume:3,") ? 3 : throw new Exception("Unbounded/unranked volume request.");
-            return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
-                new { id = 100 + id, name = "Issue title", issue_number = "1", cover_date = "2026-01-01",
-                    image = new { small_url = id == 1 ? "https://comicvine.gamespot.com/a/uploads/scale_small/cover.jpg"
-                        : id == 2 ? "https://untrusted.example/cover.jpg" : "https://comicvine.gamespot.com/a/uploads/cover.jpg?api_key=private" },
-                    store_date = id == 1 ? "2024-12-01" : "2025-12-01", site_detail_url = $"https://comicvine.gamespot.com/issue/4000-{100 + id}/" } } });
+            Check(!query.Contains("/private") && request.RequestUri.Host == "metron.cloud", "Private path or foreign origin used.");
+            if (request.RequestUri.AbsolutePath == "/api/series/")
+                return Json(new { count = 200, next = "https://metron.cloud/api/series/?page=2", previous = (string?)null,
+                    results = new[] { Volume(1, "Example", "Marvel"), Volume(2, "Example", "Marvel"), Volume(3, "Example", "Marvel Comics") } });
+            Check(request.RequestUri.AbsolutePath == "/api/issue/" && query.Contains("series_name=Example")
+                && query.Contains("number=1") && query.Contains("page=1") && !query.Contains("cover_year") && !query.Contains("series_year_began"),
+                "Matching must filter issues directly without confusing issue year with series year.");
+            return Json(new { count = 101, next = "https://evil.example/?page=2", previous = (string?)null,
+                results = Enumerable.Range(1, 3).Select(id => new {
+                    id = 100 + id, series = new { id, name = "Example", volume = 2, year_began = 2020 }, number = "1",
+                    issue = "Example (2020) #1", cover_date = "2026-01-01", store_date = id == 1 ? "2024-12-01" : "2025-12-01",
+                    image = id == 1 ? "https://static.metron.cloud/media/issue/cover.jpg"
+                        : id == 2 ? "https://untrusted.example/cover.jpg" : "https://metron.cloud/media/cover.jpg?token=private" }) });
         });
-        using (var provider = new ComicVine("check-secret-never-return", handler))
+        using (var provider = new Metron("check-secret-never-return", handler))
         {
             var result = await provider.MatchIntakeAsync(hints);
             Check(result.Candidates.Select(candidate => candidate.IssueId).SequenceEqual([102, 103, 101]), "Ranking ignored release year/publisher or deterministic ties.");
             Check(result.Candidates[0].Score == 95 && result.Candidates[0].Reason.Contains("release year 2025 matches")
-                && result.Candidates.All(candidate => candidate.Score is >= 0 and <= 100), "Score/reason is incorrect.");
-            Check(result.Candidates.Single(candidate => candidate.IssueId == 101).CoverUrl == "https://comicvine.gamespot.com/a/uploads/scale_small/cover.jpg"
-                && result.Candidates.Where(candidate => candidate.IssueId != 101).All(candidate => candidate.CoverUrl == ""),
-                "Trusted cover was lost or an untrusted/credential-bearing image URL escaped.");
-            Check(result.Warnings.Any(warning => warning.Contains("Ambiguous")) && result.Warnings.Any(warning => warning.Contains("bounded")),
-                "Ambiguity or bounded-search disclosure was omitted.");
+                && result.Candidates.All(candidate => candidate.Score is >= 0 and <= 100 && candidate.Provider == "metron"), "Score/reason or provider identity is incorrect.");
+            Check(result.Candidates.Single(candidate => candidate.IssueId == 101).CoverUrl == "https://static.metron.cloud/media/issue/cover.jpg"
+                && result.Candidates.Where(candidate => candidate.IssueId != 101).All(candidate => candidate.CoverUrl == ""), "Cover allowlist failed.");
+            Check(result.Warnings.Any(warning => warning.Contains("Ambiguous")) && result.Warnings.Any(warning => warning.Contains("first 100")), "Search-limit disclosure missing.");
             await provider.MatchIntakeAsync(hints);
-            Check(handler.Calls == 4, "Matching bypassed the existing cache or fetched excessive pages.");
+            Check(handler.Calls == 2, "Matching cache or shared series enrichment failed.");
             await Error(() => provider.MatchIntakeAsync(hints with { Number = "1?2" }), 400);
-            Check(handler.Calls == 4, "Invalid matching hints reached the provider.");
+            Check(handler.Calls == 2, "Invalid hints reached the provider.");
         }
         var recent = new Handler(request =>
         {
-            if (request.RequestUri!.AbsolutePath == "/api/search/")
-                return Json(new { status_code = 1, number_of_total_results = 5,
-                    results = new[] { "", "1990", "2020", "2025", "2026" }.Select((year, index) => new {
-                        id = index + 1, name = index == 4 ? "Unrelated" : "Example", start_year = year,
-                        publisher = new { name = "Marvel" },
-                        site_detail_url = $"https://comicvine.gamespot.com/volume/4050-{index + 1}/" }) });
-            var query = Uri.UnescapeDataString(request.RequestUri.Query);
-            var id = Enumerable.Range(1, 5).Single(id => query.Contains($"volume:{id},"));
-            return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
-                new { id = 100 + id, name = "Issue", issue_number = "1", cover_date = "2025-01-01",
-                    site_detail_url = $"https://comicvine.gamespot.com/issue/4000-{100 + id}/" } } });
+            if (request.RequestUri!.AbsolutePath == "/api/series/")
+                return Json(new { count = 1000, results = Enumerable.Range(1, 11).Select(id => Volume(id, "Example", "Marvel")) });
+            if (request.RequestUri.AbsolutePath == "/api/series/12/")
+                return Json(new { id = 12, name = "Example", year_began = 2025, volume = 3, publisher = new { id = 1, name = "Marvel" } });
+            Check(request.RequestUri.AbsolutePath == "/api/issue/", "Unexpected recent-series request.");
+            return Json(new { count = 4, results = new[] { (Id: 1, Year: 1990), (Id: 2, Year: 2020), (Id: 11, Year: 2024), (Id: 12, Year: 2025) }
+                .Select(item => new { id = 100 + item.Id, series = new { id = item.Id, name = "Example", volume = item.Id == 12 ? 3 : 1, year_began = item.Year },
+                    number = "1", issue = "Example #1", cover_date = "2025-01-01", store_date = (string?)null }) });
         });
-        using (var provider = new ComicVine("key", recent))
+        using (var provider = new Metron("token", recent))
         {
             var noYear = hints with { Year = null };
             var result = await provider.MatchIntakeAsync(noYear);
-            Check(result.Candidates.Select(candidate => candidate.VolumeId).SequenceEqual([4, 3, 2]),
-                "Newer equally matching runs must enter the shortlist and lead results, ahead of unknown years but not better series matches.");
+            Check(result.Candidates.Select(candidate => candidate.VolumeId).SequenceEqual([12, 11, 2, 1]),
+                "Matching retained a first-ten-series ceiling, dropped an unlisted run, or lost recency tie-breaking.");
             result = await provider.MatchIntakeAsync(noYear with { Volume = 1990 });
-            Check(result.Candidates[0].VolumeId == 2, "Recency overrode an explicit volume match.");
+            Check(result.Candidates[0].VolumeId == 1, "Recency overrode an explicit series-year match.");
+            result = await provider.MatchIntakeAsync(noYear with { Volume = 3 });
+            Check(result.Candidates[0].VolumeId == 12 && result.Candidates[0].Reason.Contains("volume matches"), "Native Metron ordinal was not ranked.");
             result = await provider.MatchIntakeAsync(noYear with { Year = 1995 });
-            Check(result.Candidates.Any(candidate => candidate.VolumeId == 2),
-                "Newer runs displaced the run matching the historical year hint.");
+            Check(result.Candidates.Any(candidate => candidate.VolumeId == 1) && recent.Calls == 3, "Year hint filtered out a run or cache was bypassed.");
         }
         var exact = new Handler(request =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (path == "/api/volume/4050-166619/")
-                return Json(new { status_code = 1, results = new { id = 166619, name = "Batman",
-                    start_year = "2025", publisher = new { name = "DC Comics" } } });
-            if (path == "/api/issues/")
+            if (path == "/api/series/166619/")
+                return Json(new { id = 166619, name = "Batman", year_began = 2025, volume = 4, publisher = new { id = 2, name = "DC Comics" } });
+            if (path == "/api/issue/")
             {
-                Check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("filter=volume:166619,issue_number:1"),
-                    "Exact series matching searched a different run or lost issue normalization.");
-                return Json(new { status_code = 1, number_of_total_results = 1, results = new[] {
-                    new { id = 34, name = "Batman #1", issue_number = "1", cover_date = "2025-09-01",
-                        site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } } });
+                Check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("series_id=166619&number=1&page=1"), "Exact series filter failed.");
+                return Json(new { count = 1, results = new[] {
+                    new { id = 34, series = new { id = 166619, name = "Batman", volume = 4, year_began = 2025 },
+                        number = "1", issue = "Batman (2025) #1", cover_date = "2025-09-01", store_date = "2025-08-20" } } });
             }
-            if (path == "/api/issue/4000-34/")
-                return Json(new { status_code = 1, results = new { id = 34, volume = new { id = 166619 },
-                    name = "Batman #1", issue_number = "1", site_detail_url = "https://comicvine.gamespot.com/batman-1/4000-34/" } });
-            throw new Exception("Exact series matching made a broad search or unrelated provider request.");
+            if (path == "/api/issue/34/")
+                return Json(new { id = 34, series = new { id = 166619, name = "Batman", volume = 4, year_began = 2025 },
+                    publisher = new { id = 2, name = "DC Comics" }, title = "", name = new[] { "Batman #1" }, number = "1",
+                    cover_date = "2025-09-01", store_date = "2025-08-20" });
+            throw new Exception("Exact series matching made a broad or unrelated request.");
         });
-        using (var provider = new ComicVine("key", exact))
+        using (var provider = new Metron("token", exact))
         {
-            var exactHints = hints with { Series = "https://comicvine.gamespot.com/batman/4050-166619/", Volume = 1940 };
+            var exactHints = hints with { Series = "https://metron.cloud/series/166619/", Volume = 1940 };
             var result = await provider.MatchIntakeAsync(exactHints);
             Check(result.Candidates.Single().VolumeId == 166619 && result.Candidates[0].Series == "Batman"
-                && result.Candidates[0].Number == "1" && exact.Calls == 2,
-                "Explicit series URL failed to override an older run hint.");
+                && result.Candidates[0].Number == "1" && exact.Calls == 2, "Exact series URL failed to override an old hint.");
             await provider.MatchIntakeAsync(exactHints);
             var metadata = await provider.MetadataAsync(34, 166619, intake: true);
             await provider.MetadataAsync(34, 166619, intake: true);
             Check(metadata.Fields["Series"] == "Batman" && metadata.Fields["Volume"] == "2025"
-                && metadata.Fields["Publisher"] == "DC Comics" && exact.Calls == 3,
-                "Acceptance lost exact-run metadata or repeated the volume lookup.");
-            foreach (var url in new[] { "http://comicvine.gamespot.com/batman/4050-166619/",
-                "https://evil.example/batman/4050-166619/", "https://comicvine.gamespot.com.evil.example/batman/4050-166619/",
-                "https://user@comicvine.gamespot.com/batman/4050-166619/", "https://comicvine.gamespot.com:444/batman/4050-166619/",
-                "https://comicvine.gamespot.com/batman/4000-34/", "https://comicvine.gamespot.com/batman/4050-0/",
-                "https://comicvine.gamespot.com/batman/4050-99999999999999999/" })
+                && metadata.Fields["Publisher"] == "DC Comics" && metadata.Fields["Month"] == "8" && exact.Calls == 3,
+                "Acceptance lost exact-run metadata or cached details.");
+            await Error(() => provider.MetadataAsync(34, 1940, intake: true), 409);
+            foreach (var url in new[] { "http://metron.cloud/series/166619/", "https://evil.example/series/166619/",
+                "https://metron.cloud.evil.example/series/166619/", "https://user@metron.cloud/series/166619/",
+                "https://metron.cloud:444/series/166619/", "https://metron.cloud/issue/34/", "https://metron.cloud/series/0/",
+                "https://metron.cloud/series/99999999999999999/", "https://metron.cloud/series/166619/?token=private",
+                "https://metron.cloud/series/166619/#fragment", "ftp://metron.cloud/series/166619/" })
                 await Error(() => provider.MatchIntakeAsync(exactHints with { Series = url }), 400);
-            Check(exact.Calls == 3, "Invalid series URLs reached the provider.");
+            Check(exact.Calls == 3, "Invalid exact-series URLs reached Metron.");
         }
-        var volume = new ComicVineVolume(1, "Example", "2020", "Marvel Comics", "https://comicvine.gamespot.com/volume/4050-1/");
-        var issue = new ComicVineIssue(1, "Title", "1", "2025-01-01", "https://comicvine.gamespot.com/issue/4000-1/");
+        var volume = new MetadataVolume(1, "Example", "2020", "Marvel Comics", "https://metron.cloud/series/1/");
+        var issue = new ProviderIssue(1, "Title", "1", "2025-01-01", "https://metron.cloud/issue/1/");
         Check(IntakeMatching.Rank(hints with { Volume = 2020 }, volume, issue).Score == 100
-            && IntakeMatching.Rank(hints, volume, issue).Reason.Contains("cover year 2025 matches"), "Cover-date fallback or year-style volume ranking failed.");
-        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume, issue).Reason.Contains("ordinal unavailable"), "Provider volume ID was mistaken for an ordinal.");
-        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume with { Name = "Example Vol. 2" }, issue).Score == 100,
-            "An explicit matching volume suffix penalized the base series name or failed to rank.");
+            && IntakeMatching.Rank(hints, volume, issue).Reason.Contains("cover year 2025 matches"), "Cover-date fallback or year-style volume failed.");
+        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume, issue).Reason.Contains("ordinal unavailable"), "Series ID was mistaken for ordinal.");
+        Check(IntakeMatching.Rank(hints with { Volume = 2 }, volume with { Ordinal = 2 }, issue).Score == 100, "Native volume ordinal did not rank.");
+        Check(IntakeMatching.Rank(hints with { Year = 2024 }, volume, issue with { StoreDate = "2024-12-01" }).Score == 95, "Release year lost precedence over cover year.");
         foreach (var status in new[] { HttpStatusCode.TooManyRequests, HttpStatusCode.ServiceUnavailable })
         {
             var failing = new Handler(_ => new(status) { Content = new StringContent("check-secret-never-return") });
-            using var provider = new ComicVine("check-secret-never-return", failing);
+            using var provider = new Metron("check-secret-never-return", failing);
             await Error(() => provider.MatchIntakeAsync(hints), status == HttpStatusCode.TooManyRequests ? 429 : 502);
             if (status == HttpStatusCode.TooManyRequests)
             {
                 await Error(() => provider.MatchIntakeAsync(hints), 429);
-                Check(failing.Calls == 1, "Matching bypassed provider rate-limit cooldown.");
+                Check(failing.Calls == 1, "Matching bypassed rate-limit cooldown.");
             }
         }
-        using (var provider = new ComicVine("check-secret-never-return", new Handler(request => request.RequestUri!.AbsolutePath == "/api/search/"
-            ? Json(new { status_code = 1, number_of_total_results = 1, results = new[] { Volume(1, "Example", "Marvel") } })
-            : new(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("check-secret-never-return") })))
-            await Error(() => provider.MatchIntakeAsync(hints), 502);
-        using (var provider = new ComicVine("key", new Handler(_ => Json(new { status_code = 1, number_of_total_results = 0, results = Array.Empty<object>() }))))
+        using (var provider = new Metron("token", new Handler(_ => Json(new { count = 0, next = (string?)null, previous = (string?)null, results = Array.Empty<object>() }))))
         {
-            var result = await provider.MatchIntakeAsync(hints);
-            Check(result.Candidates.Count == 0 && result.Warnings.Any(warning => warning.Contains("No candidates")), "Empty search lacks actionable explanation.");
+            var result = await provider.MatchIntakeAsync(hints with { Number = "" });
+            Check(result.Candidates.Count == 0 && result.Warnings.Any(warning => warning.Contains("No candidates"))
+                && result.Warnings.Any(warning => warning.Contains("No issue hint")), "Empty/broad search lacks explanation.");
         }
-        using (var provider = new ComicVine("key", new Handler(_ => throw new Exception("Cancelled matching reached provider."))))
+        using (var provider = new Metron("token", new Handler(_ => throw new Exception("Cancelled matching reached provider."))))
         {
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
@@ -246,13 +240,13 @@ internal static class IntakeMatchingChecks
         }
     }
 
-    private static object Volume(int id, string name, string publisher) => new { id, name, start_year = "2020", publisher = new { name = publisher },
-        site_detail_url = $"https://comicvine.gamespot.com/volume/4050-{id}/" };
+    private static object Volume(int id, string name, string publisher) => new { id, series = name + " (2020)", year_began = 2020,
+        volume = 2, publisher = new { id = 1, name = publisher } };
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
     private static async Task Error(Func<Task> action, int status)
     {
         try { await action(); }
-        catch (ComicVineException exception)
+        catch (MetadataProviderException exception)
         {
             Check(exception.StatusCode == status && !exception.ToString().Contains("check-secret-never-return") && exception.InnerException is null,
                 "Intake error status or secret sanitization failed.");

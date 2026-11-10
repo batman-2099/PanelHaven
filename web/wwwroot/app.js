@@ -1479,7 +1479,7 @@ function renderDetails(book, metadata = null, schema = []) {
     for (const field of schema) {
       if (!Object.hasOwn(metadata.fields, field.name)) continue;
       const value = textElement("dd", metadata.fields[field.name]);
-      if (field.name === "Web") value.replaceChildren(comicVineLink(metadata.fields[field.name], metadata.fields[field.name]));
+      if (field.name === "Web") value.replaceChildren(metadataProviderLink(metadata.fields[field.name], metadata.fields[field.name]));
       values.append(textElement("dt", field.label), value);
     }
     for (const [name, value] of Object.entries(metadata.custom)) values.append(textElement("dt", `Custom: ${name}`), textElement("dd", value));
@@ -1709,6 +1709,7 @@ function readServerSettings() {
     libraries: lines("settings-libraries"),
     archivePath: $("settings-archive-path").value.trim() || null,
     unsortedPath: $("settings-unsorted-path").value.trim() || null,
+    metadataProvider: $("settings-metadata-provider").value,
     urls: lines("settings-urls"),
     requireHttps: $("settings-require-https").checked,
     allowedHosts: lines("settings-allowed-hosts"),
@@ -1722,7 +1723,8 @@ function readServerSettings() {
 
 function serverSettingsDirty() {
   return !!serverSettings && (JSON.stringify(readServerSettings()) !== serverSettingsBaseline
-    || !!$("settings-comic-vine-key").value || $("settings-clear-comic-vine").checked
+    || !!$("settings-metron-token").value || $("settings-clear-metron").checked
+    || !!$("settings-comicvine-key").value || $("settings-clear-comicvine").checked
     || !!$("settings-certificate-password").value || $("settings-clear-certificate-password").checked);
 }
 
@@ -1740,7 +1742,7 @@ function resetServerSettings() {
   if ($("data-relocation-dialog").open) $("data-relocation-dialog").close();
   for (const id of ["server-settings-running", "server-settings-restart", "server-settings-draft", "server-settings-status",
     "settings-service-status", "settings-backup-status", "settings-data-path", "settings-relocation-status",
-    "data-relocation-source", "data-relocation-status", "settings-comic-vine-state", "settings-certificate-state"]) $(id).replaceChildren();
+    "data-relocation-source", "data-relocation-status", "settings-metron-state", "settings-comicvine-state", "settings-certificate-state"]) $(id).replaceChildren();
   $("settings-reconnect").textContent = "";
 }
 
@@ -1766,7 +1768,8 @@ function updateServerSettingsControls() {
   $("data-relocation-controls").disabled = unavailable;
   $("queue-data-relocation").disabled = unavailable;
   $("data-relocation-dialog").querySelector("[data-close]").disabled = serverSettingsBusy;
-  $("settings-comic-vine-key").disabled = $("settings-clear-comic-vine").checked;
+  $("settings-metron-token").disabled = $("settings-clear-metron").checked;
+  $("settings-comicvine-key").disabled = $("settings-clear-comicvine").checked;
   $("settings-certificate-password").disabled = $("settings-clear-certificate-password").checked;
   $("settings-backup-destination").required = $("settings-backup-enabled").checked;
   $("settings-allowed-hosts").required = $("settings-require-https").checked;
@@ -1787,6 +1790,7 @@ function renderServerSettings(snapshot) {
     ["settings-allowed-hosts", "allowedHosts"], ["settings-known-proxies", "knownProxies"]]) $(id).value = settings[key].join("\n");
   $("settings-archive-path").value = settings.archivePath || "";
   $("settings-unsorted-path").value = settings.unsortedPath || "";
+  $("settings-metadata-provider").value = settings.metadataProvider || "metron";
   $("settings-require-https").checked = settings.requireHttps;
   $("settings-certificate-path").value = settings.certificatePath || "";
   $("settings-certificate-key-path").value = settings.certificateKeyPath || "";
@@ -1795,7 +1799,8 @@ function renderServerSettings(snapshot) {
   $("settings-backup-time").value = settings.backup.time;
   $("settings-backup-keep").value = settings.backup.keep;
   serverSettingsBaseline = JSON.stringify(readServerSettings());
-  $("settings-comic-vine-state").textContent = `Saved API key: ${snapshot.secrets.comicVineApiKey ? "configured" : "not configured"}.`;
+  $("settings-metron-state").textContent = `Saved Metron API token: ${snapshot.secrets.metronApiToken ? "configured" : "not configured"}.`;
+  $("settings-comicvine-state").textContent = `Saved Comic Vine API key: ${snapshot.secrets.comicVineApiKey ? "configured" : "not configured"}.`;
   $("settings-certificate-state").textContent = `Saved certificate password: ${snapshot.secrets.certificatePassword ? "configured" : "not configured"}.`;
   $("server-settings-restart").textContent = snapshot.restartRequired
     ? "Restart required: saved application settings or a queued relocation differ from the running server. Saving alone does not apply them."
@@ -1807,6 +1812,7 @@ function renderServerSettings(snapshot) {
     ["Revision", snapshot.revision]];
   if (active) rows.push(["Running data path", active.dataPath], ["Running library roots", active.libraries.join("\n")],
     ["Running Archived path", active.archivePath || "Not configured"], ["Running Unsorted path", active.unsortedPath || "Not configured"],
+    ["Running metadata provider", metadataProviderName(active.metadataProvider || "metron")],
     ["Running listen URLs", active.urls.join("\n")], ["Running HTTPS requirement", active.requireHttps ? "Required" : "Not required"],
     ["Running allowed hosts", active.allowedHosts.join("\n")], ["Running trusted proxies", active.knownProxies.join("\n") || "None"],
     ["Running certificate file", active.certificatePath || "None"], ["Running certificate key file", active.certificateKeyPath || "None"]);
@@ -1917,13 +1923,14 @@ $("reload-server-settings").addEventListener("click", () => {
   if (!serverSettingsBusy && (!serverSettingsDirty() || confirm("Discard this draft and reload the saved settings?"))) loadServerSettings();
 });
 for (const name of ["input", "change"]) $("server-settings-controls").addEventListener(name, updateServerSettingsControls);
-for (const [clear, secret] of [["settings-clear-comic-vine", "settings-comic-vine-key"], ["settings-clear-certificate-password", "settings-certificate-password"]])
+for (const [clear, secret] of [["settings-clear-metron", "settings-metron-token"], ["settings-clear-comicvine", "settings-comicvine-key"], ["settings-clear-certificate-password", "settings-certificate-password"]])
   $(clear).addEventListener("change", () => { if ($(clear).checked) $(secret).value = ""; updateServerSettingsControls(); });
 $("server-settings-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (!serverSettings || !serverSettingsDirty() || !$("server-settings-form").reportValidity()) return;
-  mutateServerSettings("", { settings: readServerSettings(), comicVineApiKey: $("settings-comic-vine-key").value || null,
-    clearComicVineApiKey: $("settings-clear-comic-vine").checked, certificatePassword: $("settings-certificate-password").value || null,
+  mutateServerSettings("", { settings: readServerSettings(), metronApiToken: $("settings-metron-token").value || null,
+    clearMetronApiToken: $("settings-clear-metron").checked, certificatePassword: $("settings-certificate-password").value || null,
+    comicVineApiKey: $("settings-comicvine-key").value || null, clearComicVineApiKey: $("settings-clear-comicvine").checked,
     clearCertificatePassword: $("settings-clear-certificate-password").checked });
 });
 $("settings-enable-startup").addEventListener("click", () => mutateServerSettings("service", { enabled: true }));
@@ -2542,11 +2549,15 @@ $("download-comics").addEventListener("click", async () => {
   }
 });
 
-function comicVineLink(url, label = "Comic Vine") {
+function metadataProviderName(provider) {
+  return provider === "comicvine" ? "Comic Vine" : provider === "metron" ? "Metron" : "Metadata provider";
+}
+
+function metadataProviderLink(url, label = "Metadata provider") {
   const link = textElement("a", label);
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" || parsed.hostname !== "comicvine.gamespot.com" || parsed.port || parsed.username || parsed.password) throw new Error("Invalid provider link");
+    if (parsed.protocol !== "https:" || !["metron.cloud", "comicvine.gamespot.com"].includes(parsed.hostname) || parsed.port || parsed.username || parsed.password) throw new Error("Invalid provider link");
     link.href = parsed.href;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
@@ -2590,6 +2601,8 @@ function resetIntake() {
   $("intake-form").reset();
   invalidateIntakePreview();
   for (const id of ["intake-source", "intake-outcome", "intake-status", "intake-scope"]) $(id).textContent = "";
+  $("intake-series-label").textContent = "Series name or provider series URL (required)";
+  $("intake-series-help").textContent = "";
   updateIntakeControls();
 }
 
@@ -2627,7 +2640,7 @@ function updateIntakeControls() {
   }
   const processing = row?.processing;
   const blocked = !intake?.metadataOnly && (intake?.historyOnly || !processing || processing.state === "pending" || row.completed || processing.canRecover);
-  $("intake-hints").disabled = $("intake-match").disabled = busy || !row?.hints || blocked;
+  $("intake-hints").disabled = $("intake-match").disabled = busy || !row?.hints || blocked || !intake?.provider?.configured;
   $("intake-cancel").hidden = !busy || !!intake?.saving;
   $("intake-queue").disabled = !!intake?.saving;
   $("intake-root").disabled = busy || !$("intake-root").options.length;
@@ -2643,7 +2656,7 @@ function updateIntakeControls() {
     const item = intake?.rows.find((entry) => entry.id === option.value);
     if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" || item.processing?.state === "completed" && !item.completed ? "needs review" : item.processing?.state || "status unknown"}`;
   }
-  for (const button of $("intake-candidates").querySelectorAll("button")) button.disabled = busy || blocked || !intake?.metadataOnly && !$("intake-root").value;
+  for (const button of $("intake-candidates").querySelectorAll("button")) button.disabled = busy || blocked || !intake?.provider?.configured || !intake?.metadataOnly && !$("intake-root").value;
 }
 
 function setIntakeProcessing(row, result) {
@@ -2767,7 +2780,7 @@ async function acceptMatchedMetadata(candidate) {
   const state = intake, row = state?.row;
   let accepted = false;
   await intakeRequest("Accepting catalog metadata…", async (options, current) => {
-    const proposal = await api(`/api/comic-vine/issues/${candidate.issueId}/metadata?volumeId=${candidate.volumeId}&intake=true`, options);
+    const proposal = await api(`/api/metadata-provider/issues/${candidate.issueId}/metadata?${new URLSearchParams({ volumeId: candidate.volumeId, provider: candidate.provider, intake: true })}`, options);
     if (!current()) return;
     const fields = Object.fromEntries(Object.entries(proposal.fields).filter(([, value]) => typeof value === "string" && value.trim()));
     if (!Object.keys(fields).length) throw new Error("The candidate returned no metadata");
@@ -2819,7 +2832,7 @@ function renderIntakeCandidates() {
       if (accept.disabled) return;
       if (intake.metadataOnly) { acceptMatchedMetadata(candidate); return; }
       intakeRequest("Preparing metadata and destination. Nothing has changed yet…", async (options, current, state, row) => {
-        const payload = { issueId: candidate.issueId, volumeId: candidate.volumeId, rootIndex: Number($("intake-root").value) };
+        const payload = { issueId: candidate.issueId, volumeId: candidate.volumeId, provider: candidate.provider, rootIndex: Number($("intake-root").value) };
         const prepared = await api(`/api/books/${encodeURIComponent(row.id)}/intake/prepare`, { ...options, method: "POST", body: JSON.stringify(payload) });
         if (!current()) return;
         if (!prepared?.revision || !prepared.source || !prepared.destination || !Array.isArray(prepared.warnings))
@@ -2841,7 +2854,7 @@ function renderIntakeCandidates() {
       }, false, true);
     });
     const actions = textElement("div", "", "actions");
-    const view = comicVineLink(candidate.url, "View candidate");
+    const view = metadataProviderLink(candidate.url, "View candidate");
     if (view.tagName === "A") view.className = "button-link";
     actions.append(accept, view);
     details.append(actions);
@@ -2895,6 +2908,20 @@ async function showIntakeRow() {
         $("intake-status").textContent = row.outcome;
         return;
       }
+    }
+    if (!state.historyOnly && !state.provider) {
+      const provider = await api("/api/metadata-provider/status", options);
+      if (!current()) return;
+      if (!["metron", "comicvine"].includes(provider.provider)) throw new Error("The server returned an unknown metadata provider");
+      state.provider = provider;
+      const name = metadataProviderName(provider.provider);
+      $("intake-series-label").textContent = `Series name or ${name} series URL (required)`;
+      $("intake-series-help").textContent = `Active provider: ${name}. Paste ${provider.provider === "comicvine"
+        ? "https://comicvine.gamespot.com/series-name/4050-{id}/" : "https://metron.cloud/series/{id}/"} to match that exact run.`;
+    }
+    if (!state.historyOnly && !state.provider.configured) {
+      $("intake-status").textContent = `${metadataProviderName(state.provider.provider)} is not configured. Save its credentials in Server settings and restart the server before matching.`;
+      return;
     }
     if (!row.hints) {
       const hints = await api(`/api/books/${encodeURIComponent(row.id)}/${state.metadataOnly ? "metadata-matches" : "intake"}`, options);
@@ -3032,7 +3059,7 @@ $("intake-hints").addEventListener("input", () => {
 $("intake-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (!$("intake-form").reportValidity()) return;
-  intakeRequest("Searching and ranking Comic Vine issues…", async (options, current, state, row) => {
+  intakeRequest(`Searching and ranking ${metadataProviderName(intake?.provider?.provider)} issues…`, async (options, current, state, row) => {
     const result = await api(`/api/books/${encodeURIComponent(row.id)}/${state.metadataOnly ? "metadata-matches" : "intake"}/matches`, { ...options, method: "POST", body: JSON.stringify(row.hints) });
     if (!current()) return;
     row.candidates = result.candidates;

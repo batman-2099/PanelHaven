@@ -14,6 +14,7 @@ public sealed record IntakeCandidate(int VolumeId, int IssueId, string Series, s
     string Publisher, string StartYear, string CoverDate, string Url, int Score, string Reason)
 {
     public string CoverUrl { get; init; } = "";
+    public string Provider { get; init; } = "";
 }
 public sealed record IntakeMatches(IntakeHints Hints, IReadOnlyList<IntakeCandidate> Candidates, IReadOnlyList<string> Warnings);
 
@@ -30,7 +31,7 @@ public static class IntakeMatching
             || hints.Number.Length > 40 || hints.Year is < 1 or > 9999 || hints.Volume is < 1 or > 9999
             || hints.Series.Any(char.IsControl) || hints.Publisher.Any(char.IsControl)
             || hints.Number.Any(c => char.IsControl(c) || c is ',' or ':' or '|' or '%' or '&' or '=' or '?' or '#'))
-            throw new ComicVineException(400, "Enter a series (1–200 characters), issue (up to 40 characters, without filter separators), publisher (up to 200 characters), and optional year/volume (1–9999).");
+            throw new MetadataProviderException(400, "Enter a series (1–200 characters), issue (up to 40 characters, without filter separators), publisher (up to 200 characters), and optional year/volume (1–9999).");
         return hints with { Series = hints.Series.Trim(), Number = hints.Number.Trim(), Publisher = hints.Publisher.Trim() };
     }
 
@@ -119,13 +120,13 @@ public static class IntakeMatching
         return 35 * words.Intersect(other).Count() / Math.Max(words.Count, other.Count);
     }
 
-    public static int? VolumeNumber(ComicVineVolume volume, int hint)
+    public static int? VolumeNumber(MetadataVolume volume, int hint)
     {
-        var text = hint >= 1000 ? volume.StartYear : Regex.Match(volume.Name, VolumePattern, Options).Groups[1].Value;
-        return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : null;
+        if (hint < 1000) return volume.Ordinal;
+        return int.TryParse(volume.StartYear, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : null;
     }
 
-    public static IntakeCandidate Rank(IntakeHints hints, ComicVineVolume volume, ComicVineIssue issue)
+    public static IntakeCandidate Rank(IntakeHints hints, MetadataVolume volume, ProviderIssue issue)
     {
         var score = SeriesScore(hints.Series, volume.Name);
         var reasons = new List<string> { score == 40 ? "Exact series" : $"Series similarity {score}/40" };
@@ -173,7 +174,7 @@ public sealed partial class LibraryStore
         using var command = Command(db, "SELECT availability FROM books WHERE id=$id", ("$id", id));
         var availability = command.ExecuteScalar() as string ?? throw new KeyNotFoundException();
         if (availability != "available")
-            throw new ComicVineException(409, "This comicbook is unavailable. Rescan before reviewing it.");
+            throw new MetadataProviderException(409, "This comicbook is unavailable. Rescan before reviewing it.");
         var source = GetSource(id);
         return new(id, FileDisplayPath(source.Path),
             IntakeMatching.Parse(Path.GetRelativePath(source.Root, source.Path), GetMetadata(id).Fields));

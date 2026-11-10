@@ -60,8 +60,8 @@ internal static class BookDeletionChecks
             store.EditMetadata(ids[0], new(new() { ["Title"] = "Written title" }));
             var write = store.PreviewArchiveWrite(ids[0]);
             store.ApplyArchiveWrite(ids[0], new(write.Revision, true));
-            var metadata = new ComicVineMetadata(new() { ["Series"] = "Processed", ["Number"] = "1", ["Title"] = "Accepted" },
-                "https://comicvine.gamespot.com/check/4000-1/");
+            var metadata = new MetadataProposal(new() { ["Series"] = "Processed", ["Number"] = "1", ["Title"] = "Accepted" },
+                "https://metron.cloud/issue/1/");
             var prepared = store.PrepareIntake(ids[4], new(1, 2, 0), metadata);
             Check(store.ProcessIntake(ids[4], new(1, 2, 0, prepared.Revision, true), metadata).State == "completed", "Intake fixture did not complete.");
             paths[4] = (string)Sql("SELECT path FROM books WHERE id=$id", ("$id", ids[4]))!;

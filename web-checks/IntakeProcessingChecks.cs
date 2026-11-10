@@ -10,11 +10,11 @@ using PanelHaven.Web;
 
 internal static class IntakeProcessingChecks
 {
-    private static readonly ComicVineMetadata Metadata = new(new()
+    private static readonly MetadataProposal Metadata = new(new()
     {
         ["Series"] = "Example", ["Publisher"] = "Publisher", ["Number"] = "1", ["Title"] = "Accepted title",
         ["Volume"] = "2020", ["Year"] = "2025", ["Month"] = "5", ["Day"] = "14", ["Writer"] = "Creator"
-    }, "https://comicvine.gamespot.com/example/4000-1/");
+    }, "https://metron.cloud/issue/1/");
 
     public static void Run()
     {
@@ -47,7 +47,7 @@ internal static class IntakeProcessingChecks
                 "Prepare mutated folders or original bytes.");
             Reject<FileOperationConflictException>(() => store.ProcessIntake(id, new(1, 2, 0, "stale", true), Metadata));
             Reject<ArgumentException>(() => store.ProcessIntake(id, new(1, 2, 0, prepared.Revision, false), Metadata));
-            var changed = new ComicVineMetadata(new(Metadata.Fields) { ["Title"] = "Provider changed" }, Metadata.Url);
+            var changed = new MetadataProposal(new(Metadata.Fields) { ["Title"] = "Provider changed" }, Metadata.Url);
             Reject<FileOperationConflictException>(() => store.ProcessIntake(id, new(1, 2, 0, prepared.Revision, true), changed));
             using (var canceled = new CancellationTokenSource())
             {
@@ -91,9 +91,11 @@ internal static class IntakeProcessingChecks
             Check(restarted.GetIntakeProcessing(id).State == "completed" && restarted.GetPageOrder(id).Pages.SequenceEqual([1, 0]), "Restart lost committed journal/page order.");
             if (location == "library" && format == "cbz")
             {
-                var updated = new ComicVineMetadata(new(Metadata.Fields) { ["Title"] = "Accepted again" }, Metadata.Url);
-                var next = restarted.PrepareIntake(id, new(1, 2, 0), updated);
-                var repeated = restarted.ProcessIntake(id, new(1, 2, 0, next.Revision, true), updated);
+                var updated = new MetadataProposal(new(Metadata.Fields) { ["Title"] = "Accepted again" }, Metadata.Url);
+                var next = restarted.PrepareIntake(id, new(1, 2, 0) { Provider = "metron" }, updated);
+                Reject<FileOperationConflictException>(() => restarted.ProcessIntake(id,
+                    new(1, 2, 0, next.Revision, true) { Provider = "comicvine" }, updated));
+                var repeated = restarted.ProcessIntake(id, new(1, 2, 0, next.Revision, true) { Provider = "metron" }, updated);
                 var currentPath = (string)fixture.Sql("SELECT path FROM books WHERE id=$id")!;
                 using var zip = ZipFile.OpenRead(currentPath);
                 Check(repeated.State == "completed" && repeated.Revision != result.Revision && !File.Exists(destination)

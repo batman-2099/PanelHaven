@@ -173,7 +173,7 @@
   <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
     <div class="section-heading"><h1 id="server-settings-title" tabindex="-1">Server settings</h1><a id="settings-catalog-back" href="#library">Back to library</a></div>
     <nav class="settings-jumps actions" aria-label="Settings sections">
-      <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-comic-vine">Comic Vine</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Go to save</button>
+      <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-metadata">Metadata providers</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Go to save</button>
     </nav>
     <p id="server-settings-help">These are saved server settings, not browser preferences. Application, library, network, TLS, and secret changes take effect only after restart. Backup scheduling is applied when saved; check its actual status below.</p>
     <p id="server-settings-restart" class="notice" role="status"></p>
@@ -192,10 +192,15 @@
           <label>Unsorted intake — optional absolute server path<input id="settings-unsorted-path" spellcheck="false" autocomplete="off" aria-describedby="settings-area-paths-help"></label>
           <p id="settings-area-paths-help" class="muted">Leave blank to disable an area. Use separate, non-overlapping folders outside regular library roots. Archived comicbooks appear only with the Archived filter; Unsorted is a separate intake for comicbooks awaiting organization. Save, restart, then scan to discover files. Changing paths never moves files automatically; use Move / rename or Organize selected to review and confirm moves between areas.</p>
         </fieldset>
-        <fieldset id="settings-section-comic-vine" tabindex="-1"><legend>Comic Vine</legend>
-          <p id="settings-comic-vine-state" class="muted"></p>
-          <label>Replacement API key<input id="settings-comic-vine-key" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
-          <label class="checkbox"><input id="settings-clear-comic-vine" type="checkbox">Clear the saved Comic Vine API key</label>
+        <fieldset id="settings-section-metadata" tabindex="-1"><legend>Metadata providers</legend>
+          <label>Server-wide provider<select id="settings-metadata-provider" aria-describedby="settings-provider-help"><option value="metron">Metron</option><option value="comicvine">Comic Vine</option></select></label>
+          <p id="settings-provider-help" class="muted">Used for all metadata matching after restart. Only the selected provider is used; there is no fallback. Switching providers keeps both saved credentials.</p>
+          <p id="settings-metron-state" class="muted"></p>
+          <label>Replacement Metron API token<input id="settings-metron-token" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
+          <label class="checkbox"><input id="settings-clear-metron" type="checkbox">Clear the saved Metron API token</label>
+          <p id="settings-comicvine-state" class="muted"></p>
+          <label>Replacement Comic Vine API key<input id="settings-comicvine-key" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
+          <label class="checkbox"><input id="settings-clear-comicvine" type="checkbox">Clear the saved Comic Vine API key</label>
           <p id="settings-secret-help" class="muted">Leave a secret blank to keep it, enter a replacement to set it, or explicitly select Clear to remove it. Existing secrets are never displayed. Secret changes require restart.</p>
         </fieldset>
         <fieldset id="settings-section-network" tabindex="-1"><legend>Network and TLS</legend>
@@ -396,8 +401,8 @@
       <div class="intake-candidate">
         <div id="intake-current-cover" class="intake-cover"></div>
         <fieldset id="intake-hints" disabled><legend>Editable search hints</legend>
-          <label>Series name or Comic Vine series URL (required)<input id="intake-series" required maxlength="200" aria-describedby="intake-series-help"></label>
-          <p id="intake-series-help" class="muted">Paste a series URL containing /4050-…/ to match that exact run.</p>
+          <label><span id="intake-series-label">Series name or provider series URL (required)</span><input id="intake-series" required maxlength="200" aria-describedby="intake-series-help"></label>
+          <p id="intake-series-help" class="muted"></p>
           <div class="intake-short-fields">
             <label>Issue number<input id="intake-number" maxlength="40"></label>
             <label>Year<input id="intake-year" type="number" min="1" max="9999" step="1"></label>

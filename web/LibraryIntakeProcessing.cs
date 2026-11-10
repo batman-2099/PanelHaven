@@ -13,12 +13,18 @@ namespace PanelHaven.Web;
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record IntakePrepareRequest([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int IssueId,
     [property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int VolumeId,
-    [property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int RootIndex);
+    [property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int RootIndex)
+{
+    public string Provider { get; init; } = "";
+}
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record IntakeProcessRequest([property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int IssueId,
     [property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int VolumeId,
     [property: JsonRequired, JsonNumberHandling(JsonNumberHandling.Strict)] int RootIndex,
-    [property: JsonRequired] string ExpectedRevision, [property: JsonRequired] bool Confirmed);
+    [property: JsonRequired] string ExpectedRevision, [property: JsonRequired] bool Confirmed)
+{
+    public string Provider { get; init; } = "";
+}
 public sealed record IntakeProcessingPreview(string Revision, string Source, string Destination, bool Converted, string[] Warnings);
 public sealed record IntakeProcessingStatus(string BookId, string State, string Source, string Destination, bool Converted,
     string Message, string Revision, bool CanRecover);
@@ -50,7 +56,7 @@ public sealed partial class LibraryStore
         command.ExecuteNonQuery();
     }
 
-    public IntakeProcessingPreview PrepareIntake(string id, IntakePrepareRequest request, ComicVineMetadata metadata,
+    public IntakeProcessingPreview PrepareIntake(string id, IntakePrepareRequest request, MetadataProposal metadata,
         CancellationToken cancellationToken = default)
     {
         scanLock.Wait(cancellationToken);
@@ -102,7 +108,7 @@ public sealed partial class LibraryStore
                 ["Creates a same-folder CBZ with saved metadata. Replaces the source after verified publication and catalog commit. This cannot be undone."]));
     }
 
-    private IntakePlan PlanIntake(SqliteConnection db, string id, IntakePrepareRequest request, ComicVineMetadata metadata,
+    private IntakePlan PlanIntake(SqliteConnection db, string id, IntakePrepareRequest request, MetadataProposal metadata,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -237,7 +243,7 @@ public sealed partial class LibraryStore
         return FileRevision(parts);
     }
 
-    public IntakeProcessingStatus ProcessIntake(string id, IntakeProcessRequest request, ComicVineMetadata metadata,
+    public IntakeProcessingStatus ProcessIntake(string id, IntakeProcessRequest request, MetadataProposal metadata,
         CancellationToken cancellationToken = default)
     {
         if (request is null || !request.Confirmed) throw new ArgumentException("Explicit confirmation is required.");
@@ -245,7 +251,7 @@ public sealed partial class LibraryStore
         try
         {
             using var db = Open();
-            var plan = PlanIntake(db, id, new(request.IssueId, request.VolumeId, request.RootIndex), metadata, cancellationToken);
+            var plan = PlanIntake(db, id, new(request.IssueId, request.VolumeId, request.RootIndex) { Provider = request.Provider }, metadata, cancellationToken);
             return ExecuteIntakePlan(db, id, plan, request.ExpectedRevision, cancellationToken);
         }
         finally { scanLock.Release(); }

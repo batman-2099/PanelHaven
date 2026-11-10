@@ -1,7 +1,7 @@
 // Run on an idle DISPOSABLE server with two selected, unprocessed Unsorted fixtures.
-// A real Comic Vine key is required. Both fixtures will be processed using the same
+// Real credentials for the active metadata provider are required. Both fixtures will be processed using the same
 // known provider issue; use duplicate disposable copies, never live comicbooks.
-// window.panelHavenIntakeQueueCheck = { disposable: true, bookIds: ["first", "second"], issueId: 1109530, volumeId: 164287 };
+// window.panelHavenIntakeQueueCheck = { disposable: true, bookIds: ["first", "second"], issueId: 34, volumeId: 12 }; // Use matching IDs from the active provider.
 (async () => {
   const $ = id => document.getElementById(id);
   const config = window.panelHavenIntakeQueueCheck;
@@ -15,12 +15,19 @@
     }
   };
   const originalFetch = window.fetch;
-  const response = await originalFetch(`/api/comic-vine/issues/${config.issueId}/metadata?volumeId=${config.volumeId}`);
+  const statusResponse = await originalFetch("/api/metadata-provider/status");
+  assert(statusResponse.ok, "Active provider status is required.");
+  const status = await statusResponse.json(), provider = status.provider;
+  assert(status.configured && ["metron", "comicvine"].includes(provider), "Configure the active metadata provider.");
+  const response = await originalFetch(`/api/metadata-provider/issues/${config.issueId}/metadata?volumeId=${config.volumeId}&provider=${provider}`);
   assert(response.ok, "Real provider metadata is required.");
   const metadata = await response.json();
   window.fetch = async (...args) => {
-    if (new URL(args[0], location.href).pathname.endsWith("/intake/matches"))
-      return new Response(JSON.stringify({ candidates: [{ issueId: config.issueId, volumeId: config.volumeId, series: metadata.fields.Series, number: metadata.fields.Number, title: metadata.fields.Title, url: metadata.url, score: 100 }], warnings: [] }), { headers: { "Content-Type": "application/json" } });
+    const path = new URL(args[0], location.href).pathname;
+    if (path.endsWith("/intake/matches"))
+      return new Response(JSON.stringify({ candidates: [{ provider, issueId: config.issueId, volumeId: config.volumeId, series: metadata.fields.Series, number: metadata.fields.Number, title: metadata.fields.Title, url: metadata.url, score: 100 }], warnings: [] }), { headers: { "Content-Type": "application/json" } });
+    if (path.endsWith("/intake/prepare") || path.endsWith("/intake/process"))
+      assert(JSON.parse(args[1].body).provider === provider, "Queued acceptance lost its candidate provider.");
     return originalFetch(...args);
   };
   try {

@@ -31,23 +31,39 @@
     document.querySelector(".skip-link").click();
     await new Promise(resolve => setTimeout(resolve, 50));
     assert(location.hash === "#settings" && !page.hidden && document.activeElement.id === "main", "Skip to content changed the route or failed to focus content.");
-    const key = document.getElementById("settings-comic-vine-key");
+    const token = document.getElementById("settings-metron-token");
+    const comicvine = document.getElementById("settings-comicvine-key");
+    const provider = document.getElementById("settings-metadata-provider");
     const snapshot = await originalFetch("/api/server-settings").then(response => response.json());
     let rejectSave = true, writes = 0;
     window.fetch = async (input, options = {}) => {
       const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
       if (options.method && options.method !== "GET") {
         if (path !== "/api/server-settings" || options.method !== "PUT") throw new Error("Check-only blocked write");
+        const request = JSON.parse(options.body);
+        assert(request.metronApiToken === (token.value || null) && request.clearMetronApiToken === document.getElementById("settings-clear-metron").checked
+          && request.comicVineApiKey === (comicvine.value || null) && request.clearComicVineApiKey === document.getElementById("settings-clear-comicvine").checked
+          && request.settings.metadataProvider === provider.value, "Settings did not send independent provider credentials and selection.");
         writes++;
         return new Response(JSON.stringify(rejectSave ? { error: "Check-only settings rejection" }
-          : { ...snapshot, settings: JSON.parse(options.body).settings }), {
+          : { ...snapshot, settings: request.settings, restartRequired: true,
+            secrets: { ...snapshot.secrets, metronApiToken: true, comicVineApiKey: true } }), {
           status: rejectSave ? 400 : 200, headers: { "Content-Type": "application/json" }
         });
       }
       return originalFetch(input, options);
     };
-    key.value = "check-only-settings-key";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
+    token.value = "check-only-settings-token";
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+    comicvine.value = "check-only-comicvine-key";
+    comicvine.dispatchEvent(new Event("input", { bubbles: true }));
+    for (const choice of ["comicvine", "metron", "comicvine"]) {
+      provider.value = choice;
+      provider.dispatchEvent(new Event("change", { bubbles: true }));
+      assert(token.value === "check-only-settings-token" && comicvine.value === "check-only-comicvine-key"
+        && !document.getElementById("settings-clear-metron").checked && !document.getElementById("settings-clear-comicvine").checked,
+        "Switching providers discarded credential drafts or selected Clear.");
+    }
     for (const rejected of [true, false]) {
       rejectSave = rejected;
       document.getElementById("settings-current-password").value = "check-only-password";
@@ -58,9 +74,25 @@
       const status = document.getElementById("server-settings-status");
       assert(document.activeElement === status && status.textContent.includes(rejected ? "Server settings:" : "Settings saved."),
         "Settings completion must focus the contextual error or fall back from a disabled Save button.");
-      assert(key.value === (rejected ? "check-only-settings-key" : "") && !document.getElementById("settings-current-password").value,
-        "Settings failure must retain the draft; every result must clear the current password.");
+      assert(token.value === (rejected ? "check-only-settings-token" : "")
+        && comicvine.value === (rejected ? "check-only-comicvine-key" : "") && provider.value === "comicvine"
+        && !document.getElementById("settings-current-password").value,
+        "Settings failure must retain both credential drafts and selection; every result must clear the current password.");
     }
+    assert(document.getElementById("server-settings-restart").textContent.includes("Restart required")
+      && document.getElementById("settings-metron-state").textContent.includes(": configured")
+      && document.getElementById("settings-comicvine-state").textContent.includes(": configured"), "Save lost credential states or restart guidance.");
+    provider.value = "metron";
+    provider.dispatchEvent(new Event("change", { bubbles: true }));
+    document.getElementById("settings-current-password").value = "check-only-password";
+    const switchWrites = writes;
+    document.getElementById("server-settings-form").requestSubmit();
+    await waitFor(() => writes > switchWrites && page.getAttribute("aria-busy") === "false");
+    assert(provider.value === "metron" && !token.value && !comicvine.value, "Provider-only save did not keep blank credential inputs.");
+    comicvine.value = "discard-on-clear";
+    document.getElementById("settings-clear-comicvine").click();
+    assert(!comicvine.value && comicvine.disabled && !token.disabled, "Clearing Comic Vine did not isolate its credential input.");
+    document.getElementById("settings-clear-comicvine").click();
     window.fetch = originalFetch;
     document.getElementById("reload-server-settings").focus();
     document.getElementById("reload-server-settings").click();
@@ -73,20 +105,23 @@
     unsorted.value = "/navigation-check/unsorted";
     archived.dispatchEvent(new Event("input", { bubbles: true }));
     assert(!document.getElementById("save-server-settings").disabled, "Area paths did not mark settings dirty.");
-    key.value = "navigation-check-not-a-real-key";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
+    token.value = "navigation-check-not-a-real-token";
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+    comicvine.value = "navigation-check-comicvine-key";
+    comicvine.dispatchEvent(new Event("input", { bubbles: true }));
     window.confirm = () => false;
     document.getElementById("settings-catalog-back").click();
     await waitFor(() => location.hash === "#settings");
-    assert(!page.hidden && key.value === "navigation-check-not-a-real-key" && archived.value === "/navigation-check/archived" && unsorted.value === "/navigation-check/unsorted", "Cancelled navigation discarded the draft.");
+    assert(!page.hidden && token.value === "navigation-check-not-a-real-token" && comicvine.value === "navigation-check-comicvine-key"
+      && archived.value === "/navigation-check/archived" && unsorted.value === "/navigation-check/unsorted", "Cancelled navigation discarded the draft.");
     window.confirm = () => true;
     document.getElementById("settings-catalog-back").click();
     await waitFor(() => !document.getElementById("library-view").hidden && document.getElementById("books").getAttribute("aria-busy") !== "true");
-    assert(page.hidden && key.value === "", "Leaving settings retained secret inputs or the page.");
+    assert(page.hidden && token.value === "" && comicvine.value === "", "Leaving settings retained secret inputs or the page.");
     assert(document.activeElement !== document.body && document.activeElement.checkVisibility(), "Returning to the library lost visible keyboard focus.");
     history.back();
     await waitFor(() => !page.hidden && !document.getElementById("server-settings-controls").disabled);
-    assert(location.hash === "#settings" && key.value === "", "Browser Back failed to reopen clean settings.");
+    assert(location.hash === "#settings" && token.value === "" && comicvine.value === "", "Browser Back failed to reopen clean settings.");
     document.getElementById("settings-catalog-back").click();
     await waitFor(() => !document.getElementById("library-view").hidden);
     console.log("PASS: settings page routing, async save/reload focus, contextual rejection, cancelled/confirmed drafts, secret cleanup, focus return and browser Back.");

@@ -172,13 +172,19 @@
     </section>
   <section id="settings-view" aria-labelledby="server-settings-title" aria-describedby="server-settings-help" hidden>
     <div class="section-heading"><h1 id="server-settings-title" tabindex="-1">Server settings</h1><a id="settings-catalog-back" href="#library">Back to library</a></div>
+    <div class="settings-layout">
     <nav class="settings-jumps actions" aria-label="Settings sections">
       <button type="button" data-settings-section="settings-section-libraries">Libraries</button><button type="button" data-settings-section="settings-section-metadata">Metadata providers</button><button type="button" data-settings-section="settings-section-network">Network &amp; TLS</button><button type="button" data-settings-section="settings-section-backups">Backups</button><button type="button" data-settings-section="settings-section-service">Service</button><button type="button" data-settings-section="settings-section-data">Data location</button><button type="button" data-settings-section="settings-save">Go to save</button>
     </nav>
+    <div class="settings-content">
     <p id="server-settings-help">These are saved server settings, not browser preferences. Application, library, network, TLS, and secret changes take effect only after restart. Backup scheduling is applied when saved; check its actual status below.</p>
+    <div class="settings-status-bar">
+    <div>
     <p id="server-settings-restart" class="notice" role="status"></p>
     <p id="server-settings-draft" class="muted" role="status"></p>
+    </div>
     <button id="reload-server-settings" type="button">Reload saved settings and status</button>
+    </div>
     <details class="settings-running"><summary>Running configuration and recovery paths</summary>
       <p class="muted">Running values below do not change when you save a restart-required setting. Recovery files are private server files; if a network change locks you out, restore the prior settings file on the server and restart.</p>
       <dl id="server-settings-running"></dl>
@@ -194,12 +200,20 @@
         </fieldset>
         <fieldset id="settings-section-metadata" tabindex="-1"><legend>Metadata providers</legend>
           <p id="settings-provider-help" class="muted">Choose Comicvine Match or Metron Match for each search. Each uses only its own credentials; there is no fallback. Credential changes take effect after restart.</p>
+          <div class="settings-columns settings-providers">
+          <div class="form-stack">
+          <h2>Metron</h2>
           <p id="settings-metron-state" class="muted"></p>
           <label>Replacement Metron API token<input id="settings-metron-token" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
           <label class="checkbox"><input id="settings-clear-metron" type="checkbox">Clear the saved Metron API token</label>
+          </div>
+          <div class="form-stack">
+          <h2>Comic Vine</h2>
           <p id="settings-comicvine-state" class="muted"></p>
           <label>Replacement Comic Vine API key<input id="settings-comicvine-key" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
           <label class="checkbox"><input id="settings-clear-comicvine" type="checkbox">Clear the saved Comic Vine API key</label>
+          </div>
+          </div>
           <p id="settings-secret-help" class="muted">Leave a secret blank to keep it, enter a replacement to set it, or explicitly select Clear to remove it. Existing secrets are never displayed. Secret changes require restart.</p>
         </fieldset>
         <fieldset id="settings-section-network" tabindex="-1"><legend>Network and TLS</legend>
@@ -225,6 +239,7 @@
         </fieldset>
       </fieldset>
       <div id="settings-save" class="form-stack" tabindex="-1">
+      <h2>Review and save</h2>
       <label>Current administrator password — required for every save or service action<input id="settings-current-password" type="password" autocomplete="current-password" required maxlength="256"></label>
       <button id="save-server-settings" type="submit" class="success" disabled>Save server settings</button>
     <p id="server-settings-status" role="status" tabindex="-1"></p>
@@ -245,6 +260,8 @@
       <p class="muted">Data relocation is separate from configuration saving. It copies all application state, including the database and keys, on the next startup. Comic libraries stay where they are. The original data is preserved for recovery.</p>
       <button id="open-data-relocation" type="button" disabled>Relocate application data…</button>
     </section>
+    </div>
+    </div>
   </section>
   <section id="metadata-view" aria-labelledby="metadata-title" hidden>
     <div class="section-heading"><h1 id="metadata-title" tabindex="-1">Edit metadata</h1><button id="metadata-back" type="button" class="quiet">Back</button></div>

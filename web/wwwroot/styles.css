@@ -1,9 +1,9 @@
-/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · nav: retained account bar and inline browse controls · signature: comicbook cover stacks and private progress · states: existing loading, empty, error, full · axes: dark/sans/cool · posture: restrained · layout: full-width by user request · v2.0.0 */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3 · weakest: V, retained familiar app shell while separating library tools from cover browsing */
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full · nav: retained account bar and sticky settings section rail · signature: paired provider credentials and explicit save/restart status · states: existing loading, empty, error, full · axes: dark/sans/cool · posture: restrained · layout: full-width app with bounded settings fields · imagery: none · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V3 · weakest: V, retained the app shell while regrouping credentials and separating configuration from service actions */
 /* Hallmark · copy: verbatim · safety guidance and user data retain their original wording */
 /* Hallmark · answered F1 · existing safety and service guidance retains its original punctuation */
 /* Hallmark · answered F24 · modal boundary remains explicit against varied reader and catalog content */
-/* Hallmark · finish-review: subagent · ship after matched-state recapture · gap: production artwork not assessed */
+/* Hallmark · finish-review: subagent · 1 finding · 1 resolved after mobile recapture · gap: none within settings scope */
 /* Hallmark · answered F6 · shared numeric selector rule applies tabular-nums to all reported status and comparison selectors */
 /* Hallmark · dismissed 49 · existing app action wording remains intact; narrow-screen layouts wrap controls into rows, and the finish review found no clipped actions */
 @import url("./tokens.css");
@@ -53,6 +53,7 @@ h2 { font-size: var(--text-section); line-height: 1.3; }
 #account-menu > summary::-webkit-details-marker { display: none; }
 #account-menu > summary:hover, #account-menu[open] > summary { background: var(--surface-control); border-color: var(--accent); }
 .account-menu-panel { position: absolute; z-index: 10; top: calc(100% + var(--space-small)); right: 0; width: min(20rem, calc(100dvi - 2rem)); max-height: 60dvh; overflow: auto; padding: var(--space-small); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); font-size: 1rem; }
+#account-menu:not([open]) .account-menu-panel { display: none; }
 .account-menu-panel button { display: block; width: 100%; text-align: left; white-space: normal; border-color: transparent; background: transparent; box-shadow: none; }
 #admin-actions { margin-top: var(--space-small); padding-top: var(--space-small); border-top: 1px solid var(--divider); }
 #admin-menu-title { margin: var(--space-tiny) var(--space); font-size: .875rem; color: var(--muted); }
@@ -169,27 +170,53 @@ dialog::backdrop { background: var(--backdrop); }
 .dialog-heading > button { flex-shrink: 0; }
 .dialog-heading > h2 { min-width: 0; }
 #settings-view { min-width: 0; overflow-wrap: anywhere; }
-#server-settings-form { margin-top: var(--space-large); }
+#settings-view h1, #settings-view h2 { font-weight: 600; }
+#settings-view > .section-heading { margin-bottom: var(--space-section); }
+#settings-view > .section-heading h1 { margin-bottom: 0; }
+@media (max-width: 650px) {
+  #settings-view > .section-heading h1 { margin-bottom: var(--space); }
+}
+.settings-layout { display: grid; gap: var(--space-section) var(--space-wide); }
+.settings-content { min-width: 0; width: 100%; max-width: 68rem; }
+.settings-content p { max-width: 70ch; margin-bottom: 0; }
+#server-settings-help { margin-bottom: var(--space-section); }
+.settings-status-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space); padding-block: var(--space); border-block: 1px solid var(--divider); }
+.settings-status-bar > div { flex: 1 1 22rem; min-width: 0; }
+.settings-status-bar button { flex: 0 1 auto; }
+#server-settings-form { margin-top: var(--space-wide); }
 #server-settings-controls { padding: 0; border: 0; }
-#server-settings-controls > legend { margin-bottom: var(--space-medium); font-weight: 600; }
+#server-settings-controls > legend { padding: 0; margin-bottom: var(--space-section); font-size: var(--text-small); font-weight: 500; color: var(--muted); }
 #server-settings-controls, #server-settings-controls fieldset, #data-relocation-controls { display: grid; gap: var(--space); min-width: 0; }
-#server-settings-controls fieldset, #data-relocation-controls { padding: var(--space-section) 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0; }
+#server-settings-controls { gap: var(--space-wide); }
+#server-settings-controls fieldset, #data-relocation-controls { padding: var(--space-section) 0 0; border: 0; border-top: 1px solid var(--divider); border-radius: 0; }
+#server-settings-controls fieldset > legend { padding: 0 var(--space-small) 0 0; font-size: var(--text-section); }
 #settings-view label, #data-relocation-dialog label, #kavita-import-form label { min-width: 0; }
-#settings-view .checkbox, #data-relocation-dialog .checkbox { display: flex; align-items: flex-start; gap: var(--space-small); }
+#settings-view .checkbox, #data-relocation-dialog .checkbox { display: flex; align-items: center; gap: var(--space-small); min-height: 44px; }
 #settings-view input[type="checkbox"], #data-relocation-dialog input[type="checkbox"] { flex: none; }
 #settings-view input, #data-relocation-dialog input, #kavita-import-file { min-width: 0; }
 .settings-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: var(--space); }
-.settings-running, .settings-section { margin-top: var(--space-section); }
-.settings-running summary { margin-bottom: var(--space-medium); }
+.settings-running { margin-top: var(--space); }
+.settings-running summary { min-height: 44px; padding-block: var(--space-small); font-size: var(--text-small); }
+.settings-running[open] summary { margin-bottom: var(--space-medium); }
+.settings-section { margin-top: var(--space-wide); padding-top: var(--space-section); border-top: 1px solid var(--divider); display: grid; gap: var(--space); }
+.settings-section h2, .settings-providers h2, #settings-save h2 { margin: 0; }
+.settings-providers { gap: var(--space-section) var(--space-wide); }
+.settings-providers h2 { font-size: 1rem; }
+.settings-providers .form-stack { align-content: start; }
 #server-settings-running { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
 #server-settings-running dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 #settings-view .actions { flex-wrap: wrap; }
 #settings-view button, #data-relocation-dialog button { max-width: 100%; white-space: normal; }
 #server-settings-status, #settings-relocation-status, #data-relocation-status { white-space: pre-wrap; }
 #server-settings-restart:not(.notice), #server-settings-draft:not(.notice) { margin-bottom: var(--space-small); font-size: .875rem; }
-.settings-jumps { flex-wrap: wrap; margin-bottom: var(--space-section); gap: var(--space-small); padding-block: var(--space); border-block: 1px solid var(--divider); }
-#settings-view [tabindex="-1"] { scroll-margin-block: var(--space); }
-#settings-save { border-top: 1px solid var(--divider); padding-top: var(--space); }
+.settings-jumps { flex-wrap: wrap; margin: 0; gap: var(--space-tiny); padding: 0 0 var(--space); border-bottom: 1px solid var(--divider); align-content: start; }
+.settings-jumps button { text-align: left; background: transparent; border-color: transparent; }
+.settings-jumps button:hover:not(:disabled) { background: var(--surface); }
+.settings-jumps button[data-settings-section="settings-save"] { color: var(--accent); }
+#settings-view [tabindex="-1"] { scroll-margin-block: var(--space-section); }
+#settings-save { margin-top: var(--space-section); padding: var(--space-section); background: var(--surface-inset); color: var(--ink); border-radius: var(--radius); }
+#settings-save label { max-width: 38rem; }
+#save-server-settings, .settings-section > button { justify-self: start; }
 #comic-export-progress { width: 100%; accent-color: var(--accent); }
 #comic-export-dialog .actions > button, #kavita-import-dialog button { max-width: 100%; white-space: normal; }
 #details-content { margin: var(--space) 0 var(--space-section); }
@@ -352,12 +379,15 @@ body:has(#reader-view:not([hidden])) > main { flex: 1; min-height: 0; width: 100
 @media (max-width: 600px) { .intake-candidate { grid-template-columns: minmax(0, 1fr); } }
 @media (min-width: 601px) { #intake-form > .intake-candidate { grid-template-columns: 180px minmax(0, 1fr); } }
 @media (min-width: 901px) {
-  #settings-view { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: var(--space-wide); }
-  #settings-view > .section-heading, #server-settings-help { grid-column: 1 / -1; }
-  .settings-jumps { grid-column: 1; grid-row: 3 / span 8; align-self: start; display: grid; border: 0; padding: 0; }
-  .settings-jumps button { text-align: left; background: transparent; border-color: transparent; }
-  .settings-jumps button:hover { background: var(--surface); }
-  #settings-view > :not(.section-heading, .settings-jumps, #server-settings-help) { grid-column: 2; }
+  .settings-layout { grid-template-columns: 12rem minmax(0, 1fr); align-items: start; }
+  .settings-jumps { position: sticky; top: var(--space-section); display: grid; border: 0; padding: 0; }
+  .settings-jumps button { width: 100%; }
+}
+@media (min-width: 1100px) {
+  #settings-section-libraries, #settings-section-network { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-wide); }
+  #settings-section-libraries > :not(label), #settings-section-network > :not(label),
+  #settings-section-libraries > label:first-of-type, #settings-section-network > label:first-of-type,
+  #settings-section-network > .checkbox { grid-column: 1 / -1; }
 }
 @media (min-width: 1200px) {
   .reader-navigation { display: grid; grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--space-small); }

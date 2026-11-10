@@ -92,9 +92,18 @@ public sealed class Metron : IMetadataProvider
         var number = hints.Number.Contains('/') || hints.Number == "½" ? hints.Number : IntakeMatching.NormalizeNumber(hints.Number);
         var root = await IssuePageAsync(filter, number, 0, cancellationToken);
         var items = Items(root);
-        IReadOnlyList<MetadataVolume> series = [];
+        var series = new List<MetadataVolume>();
         if (exactId is null && items.GetArrayLength() != 0)
-            series = (await VolumesAsync(hints.Series, 0, cancellationToken)).Results;
+        {
+            var missing = items.EnumerateArray().Select(item => ReadId(Property(item, "series"))).ToHashSet();
+            for (var offset = 0; offset <= 10000 && missing.Count != 0; offset += PageSize)
+            {
+                var page = await VolumesAsync(hints.Series, offset, cancellationToken);
+                foreach (var volume in page.Results)
+                    if (missing.Remove(volume.Id)) series.Add(volume);
+                if (page.Results.Count == 0 || offset + PageSize >= page.Total) break;
+            }
+        }
         var warnings = new List<string>();
         // ponytail: one 100-issue page bounds discovery; filter issues directly, never shortlist series first.
         if (Integer(root, "count") > items.GetArrayLength())

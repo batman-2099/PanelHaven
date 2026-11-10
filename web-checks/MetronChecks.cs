@@ -99,6 +99,23 @@ internal static class MetronChecks
             await Error(() => provider.MetadataAsync(-1, 12), 400);
             Check(handler.Calls == 3, "Invalid input or mismatched selection reached Metron.");
         }
+        var paged = new Handler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/issue/" => Json(new { count = 2, results = new[] {
+                new { id = 34, series = new { id = 12, name = "Example", volume = 1, year_began = 2025 }, number = "15", cover_date = "2026-11-04" },
+                new { id = 35, series = new { id = 13, name = "Example", volume = 2, year_began = 2026 }, number = "15", cover_date = "2026-11-04" } } }),
+            "/api/series/" => Json(new { count = 101, results = new[] {
+                new { id = request.RequestUri.Query.Contains("page=2") ? 13 : 12, series = "Example",
+                    year_began = 2025, publisher = new { name = "Publisher" } } } }),
+            _ => throw new Exception("Matching fetched per-series details instead of the next series page.")
+        });
+        using (var provider = new Metron(token, paged))
+        {
+            var matches = await provider.MatchIntakeAsync(new("Example", "015", 2026, null, "Publisher"));
+            Check(matches.Candidates.Select(candidate => candidate.IssueId).Order().SequenceEqual(new[] { 34, 35 })
+                && matches.Candidates.All(candidate => candidate.Publisher == "Publisher") && paged.Calls == 3,
+                "Paged series enrichment dropped candidates, publishers, or fanned out into detail requests.");
+        }
         foreach (var image in new[] { "http://static.metron.cloud/media/a.jpg", "https://evil.example/media/a.jpg", "https://static.metron.cloud.evil.example/media/a.jpg",
             "https://user@static.metron.cloud/media/a.jpg", "https://static.metron.cloud:444/media/a.jpg", "https://metron.cloud/api/issue/34/",
             "https://static.metron.cloud/media/a.jpg?token=private", "https://static.metron.cloud/media/a.jpg#fragment", "javascript:alert(1)" })

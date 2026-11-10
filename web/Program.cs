@@ -76,7 +76,12 @@ var accounts = new Accounts(databasePath);
 accounts.Bootstrap(Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_USERNAME"), Environment.GetEnvironmentVariable("PANELHAVEN_ADMIN_PASSWORD"));
 builder.Services.AddSingleton(accounts);
 builder.Services.AddSingleton(library);
-builder.Services.AddSingleton(_ => new ComicVine(builder.Configuration["ComicVine:ApiKey"]));
+builder.Services.AddSingleton<IMetadataProvider>(_ => (builder.Configuration["Metadata:Provider"] ?? "metron") switch
+{
+    "metron" => new Metron(builder.Configuration["Metron:ApiToken"]),
+    "comicvine" => new ComicVine(builder.Configuration["ComicVine:ApiKey"]),
+    _ => throw new InvalidOperationException("Select Metron or Comic Vine as the metadata provider.")
+});
 builder.Services.AddSingleton(provider => new ThumbnailStore(provider.GetRequiredService<LibraryStore>(), Path.Combine(dataPath, "thumbnails")));
 builder.Services.AddSingleton<ScanWorker>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<ScanWorker>());
@@ -149,7 +154,7 @@ app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
-    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://comicvine.gamespot.com/a/uploads/; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://static.metron.cloud/media/ https://metron.cloud/media/ https://comicvine.gamespot.com/a/uploads/; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
     if (context.Request.Path.StartsWithSegments("/api"))
     {
         context.Response.Headers.CacheControl = "no-store";

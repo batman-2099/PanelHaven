@@ -22,7 +22,7 @@ public static class LibraryEndpoints
         api.AddEndpointFilter(async (context, next) =>
         {
             try { return await next(context); }
-            catch (ComicVineException exception) { return Error(exception.StatusCode, exception.Message); }
+            catch (MetadataProviderException exception) { return Error(exception.StatusCode, exception.Message); }
             catch (KeyNotFoundException) { return Error(404, "Book, list, folder, or bookmark not found."); }
             catch (FileNotFoundException) { return Error(404, "Source comicbook not found."); }
             catch (DirectoryNotFoundException) { return Error(404, "Source comicbook not found."); }
@@ -81,14 +81,18 @@ public static class LibraryEndpoints
                 { return Error(422, "The Kavita backup could not be processed safely. No reading status was imported."); }
             }).RequireAuthorization(policy => policy.RequireRole("admin"));
         }
-        var comicVine = api.MapGroup("/comic-vine").RequireAuthorization(policy => policy.RequireRole("admin"));
-        comicVine.MapGet("/status", (ComicVine provider) => Results.Ok(new { configured = provider.Configured }));
-        comicVine.MapGet("/volumes", async (ComicVine provider, string? q, int? offset, CancellationToken cancellationToken) =>
-            Results.Ok(await provider.VolumesAsync(q, offset ?? 0, cancellationToken)));
-        comicVine.MapGet("/issues", async (ComicVine provider, int volumeId, string? number, int? offset, CancellationToken cancellationToken) =>
-            Results.Ok(await provider.IssuesAsync(volumeId, number, offset ?? 0, cancellationToken)));
-        comicVine.MapGet("/issues/{id}/metadata", async (ComicVine provider, int id, int volumeId, bool? intake, CancellationToken cancellationToken) =>
-            Results.Ok(await provider.MetadataAsync(id, volumeId, cancellationToken, intake: intake == true)));
+        var metadataProvider = api.MapGroup("/metadata-provider").RequireAuthorization(policy => policy.RequireRole("admin"));
+        metadataProvider.MapGet("/status", (IMetadataProvider providerClient) =>
+            Results.Ok(new { provider = providerClient.Id, configured = providerClient.Configured }));
+        metadataProvider.MapGet("/volumes", async (IMetadataProvider providerClient, string? q, int? offset, CancellationToken cancellationToken) =>
+            Results.Ok(await providerClient.VolumesAsync(q, offset ?? 0, cancellationToken)));
+        metadataProvider.MapGet("/issues", async (IMetadataProvider providerClient, int volumeId, string? number, int? offset, CancellationToken cancellationToken) =>
+            Results.Ok(await providerClient.IssuesAsync(volumeId, number, offset ?? 0, cancellationToken)));
+        metadataProvider.MapGet("/issues/{id}/metadata", async (IMetadataProvider providerClient, int id, int volumeId, string? provider, bool? intake, CancellationToken cancellationToken) =>
+        {
+            RequireProvider(providerClient, provider);
+            return Results.Ok(await providerClient.MetadataAsync(id, volumeId, cancellationToken, intake: intake == true));
+        });
         api.MapGet("/reader-preferences", (Accounts accounts, ClaimsPrincipal user) =>
             Results.Ok(accounts.GetReaderPreferences(UserId(user))));
         api.MapPut("/reader-preferences", async (Accounts accounts, ClaimsPrincipal user, HttpRequest request) =>
@@ -157,7 +161,7 @@ public static class LibraryEndpoints
         {
             api.MapGet($"/books/{{id}}/{path}", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id)))
                 .RequireAuthorization(policy => policy.RequireRole("admin"));
-            api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, ComicVine provider, string id, HttpRequest request) =>
+            api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, IMetadataProvider provider, string id, HttpRequest request) =>
             {
                 if (!request.HasJsonContentType()) return Error(400, "Matching requires a JSON hints object.");
                 try
@@ -172,17 +176,19 @@ public static class LibraryEndpoints
                 catch (JsonException) { return Error(400, "Matching hints require series, number, publisher and nullable integer year and volume only."); }
             }).RequireAuthorization(policy => policy.RequireRole("admin"));
         }
-        api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, ComicVine provider, string id,
+        api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, IMetadataProvider provider, string id,
             IntakePrepareRequest request, CancellationToken cancellationToken) =>
         {
+            RequireProvider(provider, request.Provider);
             store.GetIntake(id);
             var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
             return Results.Ok(store.PrepareIntake(id, request, metadata, cancellationToken));
         }).RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/intake/process", async (LibraryStore store, ComicVine provider, string id,
+        api.MapPost("/books/{id}/intake/process", async (LibraryStore store, IMetadataProvider provider, string id,
             IntakeProcessRequest request, CancellationToken cancellationToken) =>
         {
             if (!request.Confirmed) return Error(400, "Explicit confirmation is required.");
+            RequireProvider(provider, request.Provider);
             store.GetIntake(id);
             var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
             return Results.Ok(store.ProcessIntake(id, request, metadata, cancellationToken));
@@ -461,6 +467,12 @@ public static class LibraryEndpoints
             .RequireAuthorization(policy => policy.RequireRole("admin"));
         api.MapPost("/scan/cancel", (ScanWorker worker) => Results.Ok(worker.Cancel()))
             .RequireAuthorization(policy => policy.RequireRole("admin"));
+    }
+
+    private static void RequireProvider(IMetadataProvider active, string? requested)
+    {
+        if (requested != active.Id)
+            throw new MetadataProviderException(409, "The metadata provider changed or is missing. Search again before accepting a candidate.");
     }
 
     private static string UserId(ClaimsPrincipal user) => user.FindFirstValue(ClaimTypes.NameIdentifier)

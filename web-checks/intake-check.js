@@ -1,9 +1,9 @@
 // Run in the browser console, signed in as admin on an idle DISPOSABLE server.
-// Configure a writable Library or Archived destination, the tested source location, and a real server-side Comic Vine key.
+// Configure a writable Library or Archived destination, the tested source location, and credentials for the active metadata provider.
 // Scan a disposable CBZ/ZIP or real CBR fixture with no earlier processing operation.
 // Put the fixture on the current flat-books page. Use a fresh fixture for each run.
 // window.panelHavenIntakeCheck = { disposable: true, bookId: "fixture-id", destinationRoot: 0,
-//   issueId: 1109530, volumeId: 164287, converted: false, location: "unsorted" };
+//   issueId: 34, volumeId: 12, converted: false, location: "unsorted" }; // Use matching issue and volume IDs from the active provider.
 // Then paste this file. It saves/embeds real provider metadata, creates directories,
 // renames/moves the fixture and, for CBR, converts and permanently deletes the original.
 // Matching responses alone simulate provider failure/empty/tied results. Preparation,
@@ -36,10 +36,13 @@
   const originalBook = await readJson(base), originalMetadata = await readJson(`${base}/metadata`);
   await readJson(`${base}/intake`);
   assert((await readJson(`${base}/intake-processing`)).state === "none", "Use a fresh, unprocessed fixture.");
-  const proposal = await readJson(`/api/comic-vine/issues/${config.issueId}/metadata?volumeId=${config.volumeId}`);
+  const providerStatus = await readJson("/api/metadata-provider/status");
+  assert(providerStatus.configured && ["metron", "comicvine"].includes(providerStatus.provider), "Configure the active metadata provider.");
+  const provider = providerStatus.provider;
+  const proposal = await readJson(`/api/metadata-provider/issues/${config.issueId}/metadata?volumeId=${config.volumeId}&provider=${provider}`);
   const series = proposal.fields.Series;
   assert(series, "The real provider issue must have series metadata.");
-  const candidate = { issueId: config.issueId, volumeId: config.volumeId, series, number: proposal.fields.Number,
+  const candidate = { provider, issueId: config.issueId, volumeId: config.volumeId, series, number: proposal.fields.Number,
     title: proposal.fields.Title, publisher: proposal.fields.Publisher, startYear: proposal.fields.Volume || "unknown",
     coverDate: "See provider", url: proposal.url, score: 80 };
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -55,6 +58,8 @@
       return json({ candidates: mode === "empty" ? [] : [candidate, { ...candidate, title: "Tied provider suggestion" }], warnings: ["Simulated matching only; processing uses real provider metadata."] });
     }
     if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) mutations.push({ path: url.pathname, body: args[1]?.body });
+    if (url.pathname === `${base}/intake/prepare` || url.pathname === `${base}/intake/process`)
+      assert(JSON.parse(args[1].body).provider === provider, "Candidate provider was lost during preparation or processing.");
     if (url.pathname === `${base}/intake/prepare`) {
       const response = await originalFetch(...args);
       if (holdPrepare) { holdPrepare = false; await new Promise(resolve => { release = resolve; }); }
@@ -101,6 +106,8 @@
     assert(!$("process-selected").hidden && !$("process-selected").disabled, "Selected processing is unavailable.");
     $("process-selected").click();
     await waitFor(() => !$("intake-hints").disabled && $("intake-queue").value === config.bookId);
+    assert($("intake-series-help").textContent.includes(provider === "comicvine" ? "comicvine.gamespot.com" : "metron.cloud"),
+      "Matching help did not use the running provider.");
     assert($("intake-queue").options.length === 1 && $("intake-scope").textContent.includes("selected"), "Selected queue did not isolate the fixture.");
     assert([...$("intake-root").options].every(option => /^Library \d+$/.test(option.textContent) || option.textContent === "Archived"), "An unsupported processing destination was offered.");
     $("intake-root").value = String(config.destinationRoot);

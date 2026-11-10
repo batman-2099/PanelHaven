@@ -29,8 +29,6 @@ internal static class ServerSettingsChecks
             var store = ServerSettings.Load(configuration, directory);
             store.Apply(configuration);
             Check(!store.Persisted && !store.RestartRequired, "Initial settings were persisted or marked stale unexpectedly.");
-            Check(store.Document.Settings.MetadataProvider == "metron" && configuration["Metadata:Provider"] == "metron",
-                "Missing provider selection did not default to Metron.");
             Check(store.Document.Settings.ArchivePath == Path.Combine(directory, "archived")
                 && store.Document.Settings.UnsortedPath == Path.Combine(directory, "unsorted"),
                 "Configured special roots were not normalized relative to the content root.");
@@ -56,8 +54,6 @@ internal static class ServerSettingsChecks
             Reject<InvalidOperationException>(() => restarted.Update(0, reduced, null, false, null, false));
             Reject<ArgumentException>(() => restarted.Update(1, reduced, "secret", true, null, false));
             Reject<ArgumentException>(() => restarted.Update(1, reduced, "\n", false, null, false));
-            foreach (var provider in new[] { "", "Metron", "comic-vine", "comicvine ", null })
-                Reject<ArgumentException>(() => restarted.Update(1, reduced with { MetadataProvider = provider! }, null, false, null, false));
             Reject<ArgumentException>(() => restarted.Update(1, reduced, null, false, null, false, "secret", true));
             Reject<ArgumentException>(() => restarted.Update(1, reduced, null, false, null, false, "\n"));
             Reject<ArgumentException>(() => restarted.Update(1, reduced with { DataPath = Path.Combine(directory, "other") }, null, false, null, false));
@@ -136,37 +132,30 @@ internal static class ServerSettingsChecks
                 Reject<IOException>(() => cleared.Update(7, cleared.Document.Settings with { UnsortedPath = linkedRoot }, null, false, null, false));
             }
             cleared.Update(cleared.Document.Revision, cleared.Document.Settings, "retained-metron", false, null, false);
-            cleared.Apply(clearedConfiguration);
-            cleared.Update(cleared.Document.Revision, cleared.Document.Settings with { MetadataProvider = "comicvine" },
-                null, false, null, false);
-            Check(cleared.RestartRequired && cleared.Active.Settings.MetadataProvider == "metron"
-                && cleared.Document.ComicVineApiKey == "environment-comicvine" && cleared.Document.MetronApiToken == "retained-metron",
-                "Provider switch changed active selection or discarded independent credentials.");
             using var providerConfiguration = Configuration();
-            var switched = ServerSettings.Load(providerConfiguration, directory);
-            switched.Apply(providerConfiguration);
-            Check(providerConfiguration["Metadata:Provider"] == "comicvine" && providerConfiguration["ComicVine:ApiKey"] == "environment-comicvine"
-                && providerConfiguration["Metron:ApiToken"] == "retained-metron" && !switched.RestartRequired,
-                "Restart did not apply the saved provider and both credentials.");
-            switched.Update(switched.Document.Revision, switched.Document.Settings, null, false, null, false, "replacement-comicvine");
-            Check(switched.RestartRequired && switched.Document.ComicVineApiKey == "replacement-comicvine"
-                && switched.Document.MetronApiToken == "retained-metron", "Comic Vine replacement affected the other credential or skipped restart.");
-            switched.Update(switched.Document.Revision, switched.Document.Settings with { MetadataProvider = "metron" }, null, false, null, false);
-            Check(switched.Document.ComicVineApiKey == "replacement-comicvine", "Switching back discarded the Comic Vine credential.");
-            switched.Update(switched.Document.Revision, switched.Document.Settings, null, false, null, false, clearComicVineApiKey: true);
-            switched.Apply(providerConfiguration);
+            var reloaded = ServerSettings.Load(providerConfiguration, directory);
+            reloaded.Apply(providerConfiguration);
+            Check(providerConfiguration["ComicVine:ApiKey"] == "environment-comicvine"
+                && providerConfiguration["Metron:ApiToken"] == "retained-metron" && !reloaded.RestartRequired,
+                "Restart did not apply both independent credentials.");
+            reloaded.Update(reloaded.Document.Revision, reloaded.Document.Settings, null, false, null, false, "replacement-comicvine");
+            Check(reloaded.RestartRequired && reloaded.Document.ComicVineApiKey == "replacement-comicvine"
+                && reloaded.Active.ComicVineApiKey == "environment-comicvine"
+                && reloaded.Document.MetronApiToken == "retained-metron", "Comic Vine replacement affected the other credential or skipped restart.");
+            reloaded.Update(reloaded.Document.Revision, reloaded.Document.Settings, null, false, null, false, clearComicVineApiKey: true);
+            reloaded.Apply(providerConfiguration);
             Check(providerConfiguration["ComicVine:ApiKey"] is null && providerConfiguration["Metron:ApiToken"] == "retained-metron",
                 "Clearing Comic Vine reused the environment key or cleared Metron.");
             var metronOnly = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(store.Path))!;
-            metronOnly["settings"]!.AsObject().Remove("metadataProvider");
             metronOnly.AsObject().Remove("comicVineApiKey");
             File.WriteAllText(store.Path, metronOnly.ToJsonString());
             using var metronOnlyConfiguration = Configuration();
             var metronOnlyStore = ServerSettings.Load(metronOnlyConfiguration, directory);
             metronOnlyStore.Apply(metronOnlyConfiguration);
-            Check(metronOnlyStore.Document.Settings.MetadataProvider == "metron" && metronOnlyStore.Document.MetronApiToken == "retained-metron"
-                && metronOnlyConfiguration["ComicVine:ApiKey"] is null, "Metron-only saved settings did not retain their default and credential.");
+            Check(metronOnlyStore.Document.MetronApiToken == "retained-metron"
+                && metronOnlyConfiguration["ComicVine:ApiKey"] is null, "Metron-only saved settings lost their credential or reused the environment key.");
             var legacy = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(store.Path))!;
+            legacy["settings"]!["metadataProvider"] = "obsolete-provider";
             legacy["settings"]!.AsObject().Remove("archivePath");
             legacy["settings"]!.AsObject().Remove("unsortedPath");
             legacy.AsObject().Remove("metronApiToken");
@@ -178,16 +167,17 @@ internal static class ServerSettingsChecks
             Check(legacyStore.Document.Settings.ArchivePath is null && legacyStore.Document.Settings.UnsortedPath is null
                 && legacyConfiguration["ArchivePath"] is null && legacyConfiguration["UnsortedPath"] is null && !legacyStore.RestartRequired,
                 "Legacy settings without special-root fields did not load as unconfigured.");
-            Check(legacyStore.Document.Settings.MetadataProvider == "metron" && legacyStore.Document.MetronApiToken is null
+            Check(legacyStore.Document.MetronApiToken is null
                 && legacyConfiguration["Metron:ApiToken"] is null && legacyStore.Document.ComicVineApiKey == "legacy-comicvine-secret"
                 && legacyConfiguration["ComicVine:ApiKey"] == "legacy-comicvine-secret",
-                "Legacy settings did not preserve their independent Comic Vine key with the Metron default.");
+                "Legacy settings did not ignore the obsolete provider selection and preserve their independent Comic Vine key.");
             legacyStore.Update(legacyStore.Document.Revision, legacyStore.Document.Settings, null, false, null, false);
             foreach (var path in new[] { legacyStore.Path, legacyStore.RecoveryPath })
             {
                 var migrated = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
-                Check(migrated["comicVineApiKey"]?.GetValue<string>() == "legacy-comicvine-secret" && migrated["metronApiToken"] is null,
-                    "Saving migrated settings discarded the legacy Comic Vine credential.");
+                Check(migrated["comicVineApiKey"]?.GetValue<string>() == "legacy-comicvine-secret" && migrated["metronApiToken"] is null
+                    && !migrated["settings"]!.AsObject().ContainsKey("metadataProvider"),
+                    "Saving migrated settings discarded the legacy credential or retained the obsolete provider selector.");
             }
             var savedBytes = File.ReadAllBytes(legacyStore.Path);
             var recoveryBytes = File.ReadAllBytes(legacyStore.RecoveryPath);

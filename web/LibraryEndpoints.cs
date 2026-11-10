@@ -82,17 +82,18 @@ public static class LibraryEndpoints
             }).RequireAuthorization(policy => policy.RequireRole("admin"));
         }
         var metadataProvider = api.MapGroup("/metadata-provider").RequireAuthorization(policy => policy.RequireRole("admin"));
-        metadataProvider.MapGet("/status", (IMetadataProvider providerClient) =>
-            Results.Ok(new { provider = providerClient.Id, configured = providerClient.Configured }));
-        metadataProvider.MapGet("/volumes", async (IMetadataProvider providerClient, string? q, int? offset, CancellationToken cancellationToken) =>
-            Results.Ok(await providerClient.VolumesAsync(q, offset ?? 0, cancellationToken)));
-        metadataProvider.MapGet("/issues", async (IMetadataProvider providerClient, int volumeId, string? number, int? offset, CancellationToken cancellationToken) =>
-            Results.Ok(await providerClient.IssuesAsync(volumeId, number, offset ?? 0, cancellationToken)));
-        metadataProvider.MapGet("/issues/{id}/metadata", async (IMetadataProvider providerClient, int id, int volumeId, string? provider, bool? intake, CancellationToken cancellationToken) =>
-        {
-            RequireProvider(providerClient, provider);
-            return Results.Ok(await providerClient.MetadataAsync(id, volumeId, cancellationToken, intake: intake == true));
-        });
+        metadataProvider.MapGet("/status", ([FromKeyedServices("comicvine")] IMetadataProvider comicvine,
+            [FromKeyedServices("metron")] IMetadataProvider metron) =>
+            Results.Ok(new { providers = new[] {
+                new { provider = comicvine.Id, configured = comicvine.Configured },
+                new { provider = metron.Id, configured = metron.Configured }
+            } }));
+        metadataProvider.MapGet("/volumes", async (IServiceProvider services, string? provider, string? q, int? offset, CancellationToken cancellationToken) =>
+            Results.Ok(await RequireProvider(services, provider).VolumesAsync(q, offset ?? 0, cancellationToken)));
+        metadataProvider.MapGet("/issues", async (IServiceProvider services, string? provider, int volumeId, string? number, int? offset, CancellationToken cancellationToken) =>
+            Results.Ok(await RequireProvider(services, provider).IssuesAsync(volumeId, number, offset ?? 0, cancellationToken)));
+        metadataProvider.MapGet("/issues/{id}/metadata", async (IServiceProvider services, int id, int volumeId, string? provider, bool? intake, CancellationToken cancellationToken) =>
+            Results.Ok(await RequireProvider(services, provider).MetadataAsync(id, volumeId, cancellationToken, intake: intake == true)));
         api.MapGet("/reader-preferences", (Accounts accounts, ClaimsPrincipal user) =>
             Results.Ok(accounts.GetReaderPreferences(UserId(user))));
         api.MapPut("/reader-preferences", async (Accounts accounts, ClaimsPrincipal user, HttpRequest request) =>
@@ -161,14 +162,15 @@ public static class LibraryEndpoints
         {
             api.MapGet($"/books/{{id}}/{path}", (LibraryStore store, string id) => Results.Ok(store.GetIntake(id)))
                 .RequireAuthorization(policy => policy.RequireRole("admin"));
-            api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, IMetadataProvider provider, string id, HttpRequest request) =>
+            api.MapPost($"/books/{{id}}/{path}/matches", async (LibraryStore store, IServiceProvider services, string? provider, string id, HttpRequest request) =>
             {
                 if (!request.HasJsonContentType()) return Error(400, "Matching requires a JSON hints object.");
+                var providerClient = RequireProvider(services, provider);
                 try
                 {
                     var hints = await request.ReadFromJsonAsync<IntakeHints>(request.HttpContext.RequestAborted);
                     var source = store.GetIntake(id);
-                    var matches = await provider.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
+                    var matches = await providerClient.MatchIntakeAsync(hints, request.HttpContext.RequestAborted);
                     if (store.GetIntake(id).Source != source.Source)
                         return Error(409, "The comicbook moved during matching. Refresh the search.");
                     return Results.Ok(matches);
@@ -176,19 +178,19 @@ public static class LibraryEndpoints
                 catch (JsonException) { return Error(400, "Matching hints require series, number, publisher and nullable integer year and volume only."); }
             }).RequireAuthorization(policy => policy.RequireRole("admin"));
         }
-        api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, IMetadataProvider provider, string id,
+        api.MapPost("/books/{id}/intake/prepare", async (LibraryStore store, IServiceProvider services, string id,
             IntakePrepareRequest request, CancellationToken cancellationToken) =>
         {
-            RequireProvider(provider, request.Provider);
+            var provider = RequireProvider(services, request.Provider);
             store.GetIntake(id);
             var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
             return Results.Ok(store.PrepareIntake(id, request, metadata, cancellationToken));
         }).RequireAuthorization(policy => policy.RequireRole("admin"));
-        api.MapPost("/books/{id}/intake/process", async (LibraryStore store, IMetadataProvider provider, string id,
+        api.MapPost("/books/{id}/intake/process", async (LibraryStore store, IServiceProvider services, string id,
             IntakeProcessRequest request, CancellationToken cancellationToken) =>
         {
             if (!request.Confirmed) return Error(400, "Explicit confirmation is required.");
-            RequireProvider(provider, request.Provider);
+            var provider = RequireProvider(services, request.Provider);
             store.GetIntake(id);
             var metadata = await provider.MetadataAsync(request.IssueId, request.VolumeId, cancellationToken, intake: true);
             return Results.Ok(store.ProcessIntake(id, request, metadata, cancellationToken));
@@ -469,10 +471,11 @@ public static class LibraryEndpoints
             .RequireAuthorization(policy => policy.RequireRole("admin"));
     }
 
-    private static void RequireProvider(IMetadataProvider active, string? requested)
+    private static IMetadataProvider RequireProvider(IServiceProvider services, string? requested)
     {
-        if (requested != active.Id)
-            throw new MetadataProviderException(409, "The metadata provider changed or is missing. Search again before accepting a candidate.");
+        if (requested is not ("comicvine" or "metron"))
+            throw new MetadataProviderException(400, "Choose Comic Vine or Metron for this request.");
+        return services.GetRequiredKeyedService<IMetadataProvider>(requested);
     }
 
     private static string UserId(ClaimsPrincipal user) => user.FindFirstValue(ClaimTypes.NameIdentifier)

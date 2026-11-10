@@ -193,8 +193,7 @@
           <p id="settings-area-paths-help" class="muted">Leave blank to disable an area. Use separate, non-overlapping folders outside regular library roots. Archived comicbooks appear only with the Archived filter; Unsorted is a separate intake for comicbooks awaiting organization. Save, restart, then scan to discover files. Changing paths never moves files automatically; use Move / rename or Organize selected to review and confirm moves between areas.</p>
         </fieldset>
         <fieldset id="settings-section-metadata" tabindex="-1"><legend>Metadata providers</legend>
-          <label>Server-wide provider<select id="settings-metadata-provider" aria-describedby="settings-provider-help"><option value="metron">Metron</option><option value="comicvine">Comic Vine</option></select></label>
-          <p id="settings-provider-help" class="muted">Used for all metadata matching after restart. Only the selected provider is used; there is no fallback. Switching providers keeps both saved credentials.</p>
+          <p id="settings-provider-help" class="muted">Choose Comicvine Match or Metron Match for each search. Each uses only its own credentials; there is no fallback. Credential changes take effect after restart.</p>
           <p id="settings-metron-state" class="muted"></p>
           <label>Replacement Metron API token<input id="settings-metron-token" type="password" autocomplete="new-password" aria-describedby="settings-secret-help"></label>
           <label class="checkbox"><input id="settings-clear-metron" type="checkbox">Clear the saved Metron API token</label>
@@ -411,7 +410,7 @@
           <label>Publisher<input id="intake-publisher" maxlength="200"></label>
         </fieldset>
       </div>
-      <div class="actions"><button id="intake-match" type="submit" disabled>Match / search</button><button id="intake-cancel" type="button" class="quiet" hidden>Cancel request</button></div>
+      <div class="actions"><button id="intake-match-comicvine" type="submit" name="provider" value="comicvine" disabled>Comicvine Match</button><button id="intake-match-metron" type="submit" name="provider" value="metron" disabled>Metron Match</button><button id="intake-cancel" type="button" class="quiet" hidden>Cancel request</button></div>
     </form>
     <div id="intake-feedback">
       <div id="intake-progress" hidden>

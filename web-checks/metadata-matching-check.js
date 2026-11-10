@@ -26,18 +26,25 @@
   await edit({ Writer: "Preserved writer" });
   const beforeBook = await read(base), before = await read(`${base}/metadata`);
   const proposal = { fields: { Series: "Matched series", Number: "37", Title: "Matched issue", Volume: "2025", Year: "2026", Writer: "" } };
-  const candidate = { provider: "comicvine", issueId: 34, volumeId: 12, series: "Matched series", number: "37", title: "Matched issue", startYear: "2025", score: 90,
+  let candidate = { provider: "comicvine", issueId: 34, volumeId: 12, series: "Matched series", number: "37", title: "Matched issue", startYear: "2025", score: 90,
     url: "https://comicvine.gamespot.com/matched-issue/4000-34/", coverUrl: `${base}/thumbnail` };
-  let activeProvider = "metron";
+  let configuredProvider = null;
+  const searches = [], acceptedProviders = [];
   let searchMode = "error", release, conflict = true, holdSave = false, saves = 0, fileOperation = false;
   window.fetch = async (...args) => {
     const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
     const method = args[1]?.method || "GET";
     if (method === "POST" && /\/(intake\/(prepare|process)|cbz-replacement|archive-write|file-operations)/.test(url.pathname)) fileOperation = true;
-    if (url.pathname === "/api/metadata-provider/status") return json({ provider: activeProvider, configured: true });
+    if (url.pathname === "/api/metadata-provider/status") return json({ providers: ["comicvine", "metron"].map(provider =>
+      ({ provider, configured: configuredProvider === null || configuredProvider === provider })) });
     if (url.pathname === `${base}/metadata-matches/matches`) {
+      const provider = url.searchParams.get("provider");
+      assert(method === "POST" && ["comicvine", "metron"].includes(provider), "Search omitted its explicit provider.");
+      searches.push(provider);
       if (searchMode === "error") return json({ error: "Simulated provider failure" }, 503);
       if (searchMode === "hold") await new Promise(resolve => { release = resolve; });
+      candidate = { ...candidate, provider, url: provider === "comicvine"
+        ? "https://comicvine.gamespot.com/matched-issue/4000-34/" : "https://metron.cloud/issue/34/" };
       return json({ candidates: [candidate, ...["https://metron.cloud/issue/34/", "http://metron.cloud/issue/34/",
         "https://metron.cloud.evil.test/issue/34/", "https://user:secret@comicvine.gamespot.com/issue/4000-34/",
         "javascript:alert(1)"].map(url => ({ ...candidate, url }))], warnings: [] });
@@ -45,6 +52,7 @@
     if (url.pathname === "/api/metadata-provider/issues/34/metadata") {
       assert(url.searchParams.get("provider") === candidate.provider && url.searchParams.get("volumeId") === "12"
         && url.searchParams.get("intake") === "true", "Metadata acceptance lost candidate provenance.");
+      acceptedProviders.push(url.searchParams.get("provider"));
       return json(proposal);
     }
     if (url.pathname === "/api/books/metadata" && method === "POST") {
@@ -55,41 +63,48 @@
     return originalFetch(...args);
   };
   try {
+    for (const provider of ["comicvine", "metron"]) {
+      configuredProvider = provider;
+      $("find-metadata").click();
+      const match = $(`intake-match-${provider}`), unavailable = $(`intake-match-${provider === "comicvine" ? "metron" : "comicvine"}`);
+      await waitFor(() => $("intake-dialog").open && !match.disabled);
+      assert(unavailable.disabled, "An unconfigured provider remained available.");
+      const count = searches.length;
+      unavailable.click();
+      assert(searches.length === count, "Disabled provider started a search.");
+      match.click();
+      await waitFor(() => searches.length === count + 1 && !match.disabled);
+      assert(searches.at(-1) === provider && saves === 0, "Named button queried another provider or automatically saved.");
+      const closed = new Promise(resolve => $("intake-dialog").addEventListener("close", resolve, { once: true }));
+      $("intake-dialog").querySelector("[data-close]").click();
+      await closed;
+    }
+    configuredProvider = null;
     $("find-metadata").click();
-    await waitFor(() => $("intake-dialog").open && !$("intake-match").disabled);
-    assert($("intake-series-label").textContent.includes("Metron") && $("intake-series-help").textContent.includes("https://metron.cloud/series/{id}/"),
-      "Matching did not load the active Metron provider help.");
-    const closed = new Promise(resolve => $("intake-dialog").addEventListener("close", resolve, { once: true }));
-    $("intake-dialog").querySelector("[data-close]").click();
-    await closed;
-    activeProvider = "comicvine";
-    $("find-metadata").click();
-    await waitFor(() => $("intake-dialog").open && !$("intake-match").disabled);
-    assert($("intake-series-label").textContent.includes("Comic Vine")
-      && $("intake-series-help").textContent.includes("https://comicvine.gamespot.com/series-name/4050-{id}/"),
-      "Reopening matching did not refresh the running provider and exact-series URL help.");
+    await waitFor(() => $("intake-dialog").open && !$("intake-match-comicvine").disabled && !$("intake-match-metron").disabled);
     assert($("intake-root").hidden && $("intake-queue").hidden, "Catalog matching must not offer destination processing.");
-    $("intake-match").click();
-    await waitFor(() => !$("intake-match").disabled && $("intake-status").textContent.includes("Simulated provider failure"));
     searchMode = "hold";
-    $("intake-match").click();
+    $("intake-match-metron").click();
     await waitFor(() => !!release);
     $("intake-cancel").click(); release(); release = null;
     await new Promise(resolve => setTimeout(resolve, 50));
     assert(!$("intake-candidates").children.length && saves === 0, "Cancelled search published candidates or saved metadata.");
     searchMode = "matches";
-    $("intake-match").click();
-    await waitFor(() => !$("intake-match").disabled && $("intake-candidates").querySelector("button"));
+    $("intake-match-metron").click();
+    await waitFor(() => !$("intake-match-metron").disabled && $("intake-candidates").querySelector("button"));
     assert(saves === 0, "Search automatically accepted metadata.");
+    $("intake-candidates").querySelector("button").click();
+    await waitFor(() => saves === 1 && !$("intake-match-metron").disabled);
+    assert($("intake-dialog").open && (await read(`${base}/metadata`)).fields.Title === "Concurrent edit", "Stale acceptance overwrote another edit.");
+    $("intake-match-comicvine").click();
+    await waitFor(() => !$("intake-match-comicvine").disabled && $("intake-candidates").querySelector("button"));
+    assert(searches.at(-1) === "comicvine" && candidate.provider === "comicvine", "Comicvine Match reused the preceding Metron search.");
     const providerLink = $("intake-candidates").querySelector("a");
     assert(providerLink?.href === candidate.url && providerLink.rel === "noopener noreferrer" && providerLink.target === "_blank",
       "Comic Vine candidate links lost their provider URL or safe external-link attributes.");
     const links = $("intake-candidates").querySelectorAll("a");
     assert(links.length === 2 && links[1].href === "https://metron.cloud/issue/34/" && links[1].rel === "noopener noreferrer",
       "Metron links were rejected or an untrusted provider URL became clickable.");
-    $("intake-candidates").querySelector("button").click();
-    await waitFor(() => saves === 1 && !$("intake-match").disabled);
-    assert($("intake-dialog").open && (await read(`${base}/metadata`)).fields.Title === "Concurrent edit", "Stale acceptance overwrote another edit.");
     holdSave = true;
     $("intake-candidates").querySelector("button").click();
     await waitFor(() => !!release);
@@ -105,7 +120,8 @@
       && after.fields.Volume === "2025" && after.fields.Year === "2026" && after.fields.Writer === "Preserved writer", "Acceptance lost suggested or existing metadata.");
     assert(JSON.stringify(before.custom) === JSON.stringify(after.custom) && beforeBook.location === afterBook.location
       && beforeBook.currentPage === afterBook.currentPage && !fileOperation && saves === 2, "Catalog acceptance changed source location, private state, custom metadata, or retried a save.");
-    console.log("PASS: ranked catalog matching, search failure/cancellation, stale-write refusal, guarded one-click acceptance, missing-field preservation and catalog-only behavior. Provider responses simulated.");
+    assert(acceptedProviders.join(",") === "metron,comicvine", "Acceptance lost either candidate's provider identity.");
+    console.log("PASS: explicit Comicvine/Metron button requests, independent credential availability, provider-bound acceptance, search failure/cancellation, stale-write refusal, guarded one-click acceptance and catalog-only behavior. Provider responses simulated.");
   } finally {
     release?.();
     window.fetch = originalFetch;

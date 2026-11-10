@@ -1,9 +1,9 @@
 // Run in the browser console, signed in as admin on an idle DISPOSABLE server.
-// Configure a writable Library or Archived destination, the tested source location, and credentials for the active metadata provider.
+// Configure a writable Library or Archived destination, the tested source location, and credentials for config.provider.
 // Scan a disposable CBZ/ZIP or real CBR fixture with no earlier processing operation.
 // Put the fixture on the current flat-books page. Use a fresh fixture for each run.
 // window.panelHavenIntakeCheck = { disposable: true, bookId: "fixture-id", destinationRoot: 0,
-//   issueId: 34, volumeId: 12, converted: false, location: "unsorted" }; // Use matching issue and volume IDs from the active provider.
+//   provider: "metron", issueId: 34, volumeId: 12, converted: false, location: "unsorted" }; // IDs must belong to config.provider.
 // Then paste this file. It saves/embeds real provider metadata, creates directories,
 // renames/moves the fixture and, for CBR, converts and permanently deletes the original.
 // Matching responses alone simulate provider failure/empty/tied results. Preparation,
@@ -37,8 +37,10 @@
   await readJson(`${base}/intake`);
   assert((await readJson(`${base}/intake-processing`)).state === "none", "Use a fresh, unprocessed fixture.");
   const providerStatus = await readJson("/api/metadata-provider/status");
-  assert(providerStatus.configured && ["metron", "comicvine"].includes(providerStatus.provider), "Configure the active metadata provider.");
-  const provider = providerStatus.provider;
+  const provider = config.provider;
+  assert(["metron", "comicvine"].includes(provider) && providerStatus.providers.some(item => item.provider === provider && item.configured),
+    "Choose and configure the fixture's metadata provider.");
+  const match = $(`intake-match-${provider}`);
   const proposal = await readJson(`/api/metadata-provider/issues/${config.issueId}/metadata?volumeId=${config.volumeId}&provider=${provider}`);
   const series = proposal.fields.Series;
   assert(series, "The real provider issue must have series metadata.");
@@ -52,6 +54,7 @@
     const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
     const method = args[1]?.method || (args[0] instanceof Request ? args[0].method : "GET");
     if (url.pathname.endsWith("/intake/matches")) {
+      assert(method === "POST" && url.searchParams.get("provider") === provider, "Match button requested the wrong provider.");
       matchRequests++;
       if (mode === "failure") return json({ error: "Disposable provider failure" }, 503);
       if (mode === "hold") await new Promise(resolve => { release = resolve; });
@@ -106,8 +109,6 @@
     assert(!$("process-selected").hidden && !$("process-selected").disabled, "Selected processing is unavailable.");
     $("process-selected").click();
     await waitFor(() => !$("intake-hints").disabled && $("intake-queue").value === config.bookId);
-    assert($("intake-series-help").textContent.includes(provider === "comicvine" ? "comicvine.gamespot.com" : "metron.cloud"),
-      "Matching help did not use the running provider.");
     assert($("intake-queue").options.length === 1 && $("intake-scope").textContent.includes("selected"), "Selected queue did not isolate the fixture.");
     assert([...$("intake-root").options].every(option => /^Library \d+$/.test(option.textContent) || option.textContent === "Archived"), "An unsupported processing destination was offered.");
     $("intake-root").value = String(config.destinationRoot);
@@ -116,23 +117,23 @@
     const destinationLabel = $("intake-root").selectedOptions[0].textContent;
     const destinationLocation = destinationLabel === "Archived" ? "archived" : "library";
     input("intake-series", series);
-    $("intake-match").click();
-    await waitFor(() => !$("intake-match").disabled && $("intake-status").textContent.includes("Disposable provider failure"));
+    match.click();
+    await waitFor(() => !match.disabled && $("intake-status").textContent.includes("Disposable provider failure"));
     assert(!mutations.length, "Provider failure mutated a comicbook.");
     mode = "empty";
-    $("intake-match").click();
+    match.click();
     await waitFor(() => $("intake-status").textContent.includes("No candidates"));
     assert(!mutations.length, "Empty provider response mutated a comicbook.");
     mode = "hold";
-    $("intake-match").click();
+    match.click();
     await waitFor(() => !!release);
     $("intake-cancel").click();
     release(); release = null;
     await new Promise(resolve => setTimeout(resolve, 50));
     assert(!$("intake-candidates").children.length && !mutations.length, "Cancelled search populated candidates or mutated data.");
     mode = "success";
-    $("intake-match").click();
-    await waitFor(() => $("intake-candidates").querySelectorAll("button").length === 2 && !$("intake-match").disabled);
+    match.click();
+    await waitFor(() => $("intake-candidates").querySelectorAll("button").length === 2 && !match.disabled);
     assert($("intake-candidates").textContent.includes("Rank score 80/100") && !mutations.length, "Tied ranking automatically processed a candidate.");
     const accept = $("intake-candidates").querySelector("button");
     holdPrepare = true;
@@ -203,8 +204,8 @@
     await waitFor(() => $("intake-dialog").open && !$("intake-hints").disabled);
     assert($("intake-outcome").textContent.startsWith("Previous operation:") && $("selection-count").textContent.startsWith("1 "),
       "Earlier processing blocked a new queue or cleared its selection.");
-    $("intake-match").click();
-    await waitFor(() => !$("intake-match").disabled && $("intake-candidates").querySelector("button"));
+    match.click();
+    await waitFor(() => !match.disabled && $("intake-candidates").querySelector("button"));
     $("intake-root").add(new Option("Invalid test destination", "999"));
     $("intake-root").value = "999";
     change("intake-root");

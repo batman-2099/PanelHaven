@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace PanelHaven.Web;
@@ -17,8 +18,7 @@ public sealed record ServerSettingsValues(
     [property: JsonRequired] string[] Urls, [property: JsonRequired] bool RequireHttps,
     [property: JsonRequired] string[] AllowedHosts, [property: JsonRequired] string[] KnownProxies,
     [property: JsonRequired] string? CertificatePath, [property: JsonRequired] string? CertificateKeyPath,
-    [property: JsonRequired] BackupSettings Backup, string? ArchivePath = null, string? UnsortedPath = null,
-    string MetadataProvider = "metron");
+    [property: JsonRequired] BackupSettings Backup, string? ArchivePath = null, string? UnsortedPath = null);
 public sealed record ServerSettingsDocument(
     [property: JsonRequired] long Revision, [property: JsonRequired] ServerSettingsValues Settings,
     string? MetronApiToken, [property: JsonRequired] string? CertificatePassword,
@@ -45,7 +45,7 @@ public sealed class ServerSettings
             return Document.PendingDataPath is not null || saved.DataPath != active.DataPath || saved.RequireHttps != active.RequireHttps
                 || saved.CertificatePath != active.CertificatePath || saved.CertificateKeyPath != active.CertificateKeyPath
                 || saved.ArchivePath != active.ArchivePath || saved.UnsortedPath != active.UnsortedPath
-                || saved.MetadataProvider != active.MetadataProvider || Document.ComicVineApiKey != Active.ComicVineApiKey
+                || Document.ComicVineApiKey != Active.ComicVineApiKey
                 || !saved.Libraries.AsSpan().SequenceEqual(active.Libraries) || !saved.Urls.AsSpan().SequenceEqual(active.Urls)
                 || !saved.AllowedHosts.AsSpan().SequenceEqual(active.AllowedHosts) || !saved.KnownProxies.AsSpan().SequenceEqual(active.KnownProxies)
                 || Document.MetronApiToken != Active.MetronApiToken || Document.CertificatePassword != Active.CertificatePassword;
@@ -77,8 +77,10 @@ public sealed class ServerSettings
             try
             {
                 if (new FileInfo(path).Length > MaxSettingsBytes) throw new InvalidDataException("Server settings file is too large.");
-                document = JsonSerializer.Deserialize<ServerSettingsDocument>(File.ReadAllText(path), Json)
-                    ?? throw new JsonException("Empty settings document.");
+                var saved = JsonNode.Parse(File.ReadAllText(path), new JsonNodeOptions { PropertyNameCaseInsensitive = true });
+                // Retire the old selector only in persisted documents; API settings remain strict.
+                if (saved is JsonObject root && root["settings"] is JsonObject settings) settings.Remove("metadataProvider");
+                document = saved.Deserialize<ServerSettingsDocument>(Json) ?? throw new JsonException("Empty settings document.");
             }
             catch (JsonException exception)
             {
@@ -95,7 +97,7 @@ public sealed class ServerSettings
                 (configuration["urls"] ?? "http://localhost:5000").Split(';', StringSplitOptions.RemoveEmptyEntries),
                 configuration.GetValue<bool>("Deployment:RequireHttps"), List("Deployment:AllowedHosts"), List("Deployment:KnownProxies"),
                 Absolute(configuration["Kestrel:Certificates:Default:Path"]), Absolute(configuration["Kestrel:Certificates:Default:KeyPath"]), backup,
-                Absolute(configuration["ArchivePath"]), Absolute(configuration["UnsortedPath"]), configuration["Metadata:Provider"] ?? "metron"),
+                Absolute(configuration["ArchivePath"]), Absolute(configuration["UnsortedPath"])),
                 configuration["Metron:ApiToken"], configuration["Kestrel:Certificates:Default:Password"], ComicVineApiKey: configuration["ComicVine:ApiKey"]);
             string? Absolute(string? value) => string.IsNullOrEmpty(value) ? null : System.IO.Path.GetFullPath(value, contentRoot);
         }
@@ -124,7 +126,7 @@ public sealed class ServerSettings
             ["DataPath"] = settings.DataPath, ["urls"] = string.Join(';', settings.Urls),
             ["ArchivePath"] = settings.ArchivePath, ["UnsortedPath"] = settings.UnsortedPath,
             ["Deployment:RequireHttps"] = settings.RequireHttps.ToString(), ["Metron:ApiToken"] = document.MetronApiToken,
-            ["Metadata:Provider"] = settings.MetadataProvider, ["ComicVine:ApiKey"] = document.ComicVineApiKey,
+            ["ComicVine:ApiKey"] = document.ComicVineApiKey,
             ["Kestrel:Certificates:Default:Path"] = settings.CertificatePath,
             ["Kestrel:Certificates:Default:KeyPath"] = settings.CertificateKeyPath,
             ["Kestrel:Certificates:Default:Password"] = document.CertificatePassword,
@@ -177,8 +179,6 @@ public sealed class ServerSettings
     {
         var settings = document.Settings ?? throw new ArgumentException("Settings are required.");
         if (document.Revision < 0) throw new ArgumentException("Invalid settings revision.");
-        if (settings.MetadataProvider is not ("metron" or "comicvine"))
-            throw new ArgumentException("Metadata provider must be metron or comicvine.");
         Absolute(settings.DataPath, "Data path");
         if (DataRelocation.Overlaps(settings.DataPath, Path)) throw new ArgumentException("ServerSettingsPath must be outside the movable data directory.");
         if (settings.Libraries is null || settings.Urls is null || settings.AllowedHosts is null || settings.KnownProxies is null

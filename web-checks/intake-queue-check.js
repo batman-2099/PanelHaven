@@ -1,7 +1,7 @@
 // Run on an idle DISPOSABLE server with two selected, unprocessed Unsorted fixtures.
-// Real credentials for the active metadata provider are required. Both fixtures will be processed using the same
+// Real credentials for config.provider are required. Both fixtures will be processed using the same
 // known provider issue; use duplicate disposable copies, never live comicbooks.
-// window.panelHavenIntakeQueueCheck = { disposable: true, bookIds: ["first", "second"], issueId: 34, volumeId: 12 }; // Use matching IDs from the active provider.
+// window.panelHavenIntakeQueueCheck = { disposable: true, bookIds: ["first", "second"], provider: "metron", issueId: 34, volumeId: 12 }; // IDs must belong to config.provider.
 (async () => {
   const $ = id => document.getElementById(id);
   const config = window.panelHavenIntakeQueueCheck;
@@ -16,16 +16,19 @@
   };
   const originalFetch = window.fetch;
   const statusResponse = await originalFetch("/api/metadata-provider/status");
-  assert(statusResponse.ok, "Active provider status is required.");
-  const status = await statusResponse.json(), provider = status.provider;
-  assert(status.configured && ["metron", "comicvine"].includes(provider), "Configure the active metadata provider.");
+  assert(statusResponse.ok, "Provider status is required.");
+  const status = await statusResponse.json(), provider = config.provider;
+  assert(["metron", "comicvine"].includes(provider) && status.providers.some(item => item.provider === provider && item.configured),
+    "Choose and configure the fixtures' metadata provider.");
   const response = await originalFetch(`/api/metadata-provider/issues/${config.issueId}/metadata?volumeId=${config.volumeId}&provider=${provider}`);
   assert(response.ok, "Real provider metadata is required.");
   const metadata = await response.json();
   window.fetch = async (...args) => {
-    const path = new URL(args[0], location.href).pathname;
-    if (path.endsWith("/intake/matches"))
+    const url = new URL(args[0], location.href), path = url.pathname;
+    if (path.endsWith("/intake/matches")) {
+      assert(args[1]?.method === "POST" && url.searchParams.get("provider") === provider, "Queued search requested the wrong provider.");
       return new Response(JSON.stringify({ candidates: [{ provider, issueId: config.issueId, volumeId: config.volumeId, series: metadata.fields.Series, number: metadata.fields.Number, title: metadata.fields.Title, url: metadata.url, score: 100 }], warnings: [] }), { headers: { "Content-Type": "application/json" } });
+    }
     if (path.endsWith("/intake/prepare") || path.endsWith("/intake/process"))
       assert(JSON.parse(args[1].body).provider === provider, "Queued acceptance lost its candidate provider.");
     return originalFetch(...args);
@@ -50,7 +53,7 @@
       previousCover = currentCover;
       $("intake-series").value = metadata.fields.Series;
       $("intake-series").dispatchEvent(new Event("input", { bubbles: true }));
-      $("intake-match").click();
+      $(`intake-match-${provider}`).click();
       await waitFor(() => $("intake-candidates").querySelector("button:not(:disabled)"));
       $("intake-candidates").querySelector("button").click();
       await waitFor(() => index === 0 ? $("intake-queue").value === config.bookIds[1] && !$("intake-hints").disabled : !$("intake-dialog").open);

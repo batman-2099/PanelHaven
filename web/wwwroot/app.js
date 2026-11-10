@@ -1709,7 +1709,6 @@ function readServerSettings() {
     libraries: lines("settings-libraries"),
     archivePath: $("settings-archive-path").value.trim() || null,
     unsortedPath: $("settings-unsorted-path").value.trim() || null,
-    metadataProvider: $("settings-metadata-provider").value,
     urls: lines("settings-urls"),
     requireHttps: $("settings-require-https").checked,
     allowedHosts: lines("settings-allowed-hosts"),
@@ -1790,7 +1789,6 @@ function renderServerSettings(snapshot) {
     ["settings-allowed-hosts", "allowedHosts"], ["settings-known-proxies", "knownProxies"]]) $(id).value = settings[key].join("\n");
   $("settings-archive-path").value = settings.archivePath || "";
   $("settings-unsorted-path").value = settings.unsortedPath || "";
-  $("settings-metadata-provider").value = settings.metadataProvider || "metron";
   $("settings-require-https").checked = settings.requireHttps;
   $("settings-certificate-path").value = settings.certificatePath || "";
   $("settings-certificate-key-path").value = settings.certificateKeyPath || "";
@@ -1812,7 +1810,6 @@ function renderServerSettings(snapshot) {
     ["Revision", snapshot.revision]];
   if (active) rows.push(["Running data path", active.dataPath], ["Running library roots", active.libraries.join("\n")],
     ["Running Archived path", active.archivePath || "Not configured"], ["Running Unsorted path", active.unsortedPath || "Not configured"],
-    ["Running metadata provider", metadataProviderName(active.metadataProvider || "metron")],
     ["Running listen URLs", active.urls.join("\n")], ["Running HTTPS requirement", active.requireHttps ? "Required" : "Not required"],
     ["Running allowed hosts", active.allowedHosts.join("\n")], ["Running trusted proxies", active.knownProxies.join("\n") || "None"],
     ["Running certificate file", active.certificatePath || "None"], ["Running certificate key file", active.certificateKeyPath || "None"]);
@@ -2640,7 +2637,10 @@ function updateIntakeControls() {
   }
   const processing = row?.processing;
   const blocked = !intake?.metadataOnly && (intake?.historyOnly || !processing || processing.state === "pending" || row.completed || processing.canRecover);
-  $("intake-hints").disabled = $("intake-match").disabled = busy || !row?.hints || blocked || !intake?.provider?.configured;
+  $("intake-hints").disabled = busy || !row?.hints || blocked;
+  for (const provider of ["comicvine", "metron"])
+    $(`intake-match-${provider}`).disabled = $("intake-hints").disabled
+      || !intake?.providers?.some((entry) => entry.provider === provider && entry.configured);
   $("intake-cancel").hidden = !busy || !!intake?.saving;
   $("intake-queue").disabled = !!intake?.saving;
   $("intake-root").disabled = busy || !$("intake-root").options.length;
@@ -2656,7 +2656,9 @@ function updateIntakeControls() {
     const item = intake?.rows.find((entry) => entry.id === option.value);
     if (item) option.textContent = `${item.source || item.title} — ${item.processing?.state === "none" || item.processing?.state === "completed" && !item.completed ? "needs review" : item.processing?.state || "status unknown"}`;
   }
-  for (const button of $("intake-candidates").querySelectorAll("button")) button.disabled = busy || blocked || !intake?.provider?.configured || !intake?.metadataOnly && !$("intake-root").value;
+  for (const button of $("intake-candidates").querySelectorAll("button"))
+    button.disabled = busy || blocked || !intake?.providers?.some((entry) => entry.provider === button.dataset.provider && entry.configured)
+      || !intake?.metadataOnly && !$("intake-root").value;
 }
 
 function setIntakeProcessing(row, result) {
@@ -2827,6 +2829,7 @@ function renderIntakeCandidates() {
       textElement("p", `Rank score ${candidate.score}/100`));
     const accept = textElement("button", "Accept", "success");
     accept.type = "button";
+    accept.dataset.provider = candidate.provider;
     accept.setAttribute("aria-label", `${accept.textContent}: ${candidate.series} #${candidate.number}, run ${candidate.startYear || "unknown"}`);
     accept.addEventListener("click", () => {
       if (accept.disabled) return;
@@ -2909,19 +2912,14 @@ async function showIntakeRow() {
         return;
       }
     }
-    if (!state.historyOnly && !state.provider) {
-      const provider = await api("/api/metadata-provider/status", options);
+    if (!state.historyOnly && !state.providers) {
+      const status = await api("/api/metadata-provider/status", options);
       if (!current()) return;
-      if (!["metron", "comicvine"].includes(provider.provider)) throw new Error("The server returned an unknown metadata provider");
-      state.provider = provider;
-      const name = metadataProviderName(provider.provider);
-      $("intake-series-label").textContent = `Series name or ${name} series URL (required)`;
-      $("intake-series-help").textContent = `Active provider: ${name}. Paste ${provider.provider === "comicvine"
-        ? "https://comicvine.gamespot.com/series-name/4050-{id}/" : "https://metron.cloud/series/{id}/"} to match that exact run.`;
-    }
-    if (!state.historyOnly && !state.provider.configured) {
-      $("intake-status").textContent = `${metadataProviderName(state.provider.provider)} is not configured. Save its credentials in Server settings and restart the server before matching.`;
-      return;
+      if (!Array.isArray(status.providers) || !["comicvine", "metron"].every((id) =>
+        status.providers.some((entry) => entry.provider === id && typeof entry.configured === "boolean")))
+        throw new Error("The server returned invalid metadata provider status");
+      state.providers = status.providers;
+      $("intake-series-help").textContent = "Choose a provider below. For an exact run, paste https://comicvine.gamespot.com/series-name/4050-{id}/ or https://metron.cloud/series/{id}/ and use its matching button.";
     }
     if (!row.hints) {
       const hints = await api(`/api/books/${encodeURIComponent(row.id)}/${state.metadataOnly ? "metadata-matches" : "intake"}`, options);
@@ -2935,6 +2933,8 @@ async function showIntakeRow() {
       : $("intake-root").options.length
       ? "Check the hints and destination, then match. Scores rank suggestions; they are not approval."
       : "No destination is configured. Configure a writable Library or Archived path in Server settings before accepting.";
+    const unavailable = state.providers.filter((provider) => !provider.configured).map((provider) => metadataProviderName(provider.provider));
+    if (unavailable.length) $("intake-status").textContent += ` ${unavailable.join(" and ")} not configured. Save the missing credentials in Server settings and restart to enable matching.`;
   });
 }
 
@@ -3000,7 +3000,8 @@ $("intake-discard").addEventListener("click", () => {
   if (intake?.saving) return;
   cancelIntakeRequest();
   $("intake-status").textContent = "Review cancelled. Nothing was saved.";
-  ($("intake-form").hidden ? $("apply-cbz-replacement") : $("intake-match")).focus();
+  ($("intake-form").hidden ? $("apply-cbz-replacement")
+    : $("intake-form").querySelector('button[type="submit"]:not(:disabled)') || $("intake-refresh")).focus();
 });
 
 for (const trigger of ["process-unsorted", "process-selected"]) $(trigger).addEventListener("click", () => {
@@ -3042,7 +3043,7 @@ $("intake-recover").addEventListener("click", () => {
 $("intake-cancel").addEventListener("click", () => {
   cancelIntakeRequest();
   $("intake-status").textContent = "Request cancelled. Nothing saved. Match again to retry.";
-  ($("intake-match").disabled ? $("intake-refresh") : $("intake-match")).focus();
+  ($("intake-form").querySelector('button[type="submit"]:not(:disabled)') || $("intake-refresh")).focus();
 });
 $("intake-hints").addEventListener("input", () => {
   const row = intake?.row;
@@ -3058,13 +3059,17 @@ $("intake-hints").addEventListener("input", () => {
 });
 $("intake-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!$("intake-form").reportValidity()) return;
-  intakeRequest(`Searching and ranking ${metadataProviderName(intake?.provider?.provider)} issues…`, async (options, current, state, row) => {
-    const result = await api(`/api/books/${encodeURIComponent(row.id)}/${state.metadataOnly ? "metadata-matches" : "intake"}/matches`, { ...options, method: "POST", body: JSON.stringify(row.hints) });
+  const provider = event.submitter?.value || intake?.providers?.find((entry) => entry.configured)?.provider;
+  if (intake?.busy || !intake?.providers?.some((entry) => entry.provider === provider && entry.configured)
+    || !$("intake-form").reportValidity()) return;
+  intake.row.candidates = [];
+  renderIntakeCandidates();
+  intakeRequest(`Searching and ranking ${metadataProviderName(provider)} issues…`, async (options, current, state, row) => {
+    const result = await api(`/api/books/${encodeURIComponent(row.id)}/${state.metadataOnly ? "metadata-matches" : "intake"}/matches?${new URLSearchParams({ provider })}`, { ...options, method: "POST", body: JSON.stringify(row.hints) });
     if (!current()) return;
     row.candidates = result.candidates;
     renderIntakeCandidates();
-    $("intake-status").textContent = [result.candidates.length ? `${result.candidates.length} candidate(s). Compare the run and issue; nothing is selected automatically.`
+    $("intake-status").textContent = [result.candidates.length ? `${result.candidates.length} ${metadataProviderName(provider)} candidate(s). Compare the run and issue; nothing is selected automatically.`
       : "No candidates. Edit the hints and retry.", ...(result.warnings || [])].join("\n");
   });
 });

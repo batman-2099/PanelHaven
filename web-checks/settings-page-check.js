@@ -33,7 +33,6 @@
     assert(location.hash === "#settings" && !page.hidden && document.activeElement.id === "main", "Skip to content changed the route or failed to focus content.");
     const token = document.getElementById("settings-metron-token");
     const comicvine = document.getElementById("settings-comicvine-key");
-    const provider = document.getElementById("settings-metadata-provider");
     const snapshot = await originalFetch("/api/server-settings").then(response => response.json());
     let rejectSave = true, writes = 0;
     window.fetch = async (input, options = {}) => {
@@ -42,8 +41,8 @@
         if (path !== "/api/server-settings" || options.method !== "PUT") throw new Error("Check-only blocked write");
         const request = JSON.parse(options.body);
         assert(request.metronApiToken === (token.value || null) && request.clearMetronApiToken === document.getElementById("settings-clear-metron").checked
-          && request.comicVineApiKey === (comicvine.value || null) && request.clearComicVineApiKey === document.getElementById("settings-clear-comicvine").checked
-          && request.settings.metadataProvider === provider.value, "Settings did not send independent provider credentials and selection.");
+          && request.comicVineApiKey === (comicvine.value || null) && request.clearComicVineApiKey === document.getElementById("settings-clear-comicvine").checked,
+          "Settings did not send independent provider credentials.");
         writes++;
         return new Response(JSON.stringify(rejectSave ? { error: "Check-only settings rejection" }
           : { ...snapshot, settings: request.settings, restartRequired: true,
@@ -57,13 +56,6 @@
     token.dispatchEvent(new Event("input", { bubbles: true }));
     comicvine.value = "check-only-comicvine-key";
     comicvine.dispatchEvent(new Event("input", { bubbles: true }));
-    for (const choice of ["comicvine", "metron", "comicvine"]) {
-      provider.value = choice;
-      provider.dispatchEvent(new Event("change", { bubbles: true }));
-      assert(token.value === "check-only-settings-token" && comicvine.value === "check-only-comicvine-key"
-        && !document.getElementById("settings-clear-metron").checked && !document.getElementById("settings-clear-comicvine").checked,
-        "Switching providers discarded credential drafts or selected Clear.");
-    }
     for (const rejected of [true, false]) {
       rejectSave = rejected;
       document.getElementById("settings-current-password").value = "check-only-password";
@@ -75,20 +67,13 @@
       assert(document.activeElement === status && status.textContent.includes(rejected ? "Server settings:" : "Settings saved."),
         "Settings completion must focus the contextual error or fall back from a disabled Save button.");
       assert(token.value === (rejected ? "check-only-settings-token" : "")
-        && comicvine.value === (rejected ? "check-only-comicvine-key" : "") && provider.value === "comicvine"
+        && comicvine.value === (rejected ? "check-only-comicvine-key" : "")
         && !document.getElementById("settings-current-password").value,
-        "Settings failure must retain both credential drafts and selection; every result must clear the current password.");
+        "Settings failure must retain both credential drafts; every result must clear the current password.");
     }
     assert(document.getElementById("server-settings-restart").textContent.includes("Restart required")
       && document.getElementById("settings-metron-state").textContent.includes(": configured")
       && document.getElementById("settings-comicvine-state").textContent.includes(": configured"), "Save lost credential states or restart guidance.");
-    provider.value = "metron";
-    provider.dispatchEvent(new Event("change", { bubbles: true }));
-    document.getElementById("settings-current-password").value = "check-only-password";
-    const switchWrites = writes;
-    document.getElementById("server-settings-form").requestSubmit();
-    await waitFor(() => writes > switchWrites && page.getAttribute("aria-busy") === "false");
-    assert(provider.value === "metron" && !token.value && !comicvine.value, "Provider-only save did not keep blank credential inputs.");
     comicvine.value = "discard-on-clear";
     document.getElementById("settings-clear-comicvine").click();
     assert(!comicvine.value && comicvine.disabled && !token.disabled, "Clearing Comic Vine did not isolate its credential input.");

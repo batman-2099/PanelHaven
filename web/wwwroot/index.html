@@ -121,7 +121,7 @@
           <button id="bulk-metadata" type="button" hidden disabled>Edit selected metadata</button>
           <button id="organize-selected" type="button" hidden disabled>Organize selected</button>
           <button id="archive-selected" type="button" title="Move selected comicbooks to Archived using the default templates" hidden disabled>Archive</button>
-          <button id="export-selected-comics" type="button" disabled>Download Selected</button>
+          <button id="export-selected-comics" type="button" disabled>Download selected</button>
           <label><span class="sr-only">Add to manual list</span><select id="add-to-list"><option value="">Choose a list</option></select></label><button id="add-list-books" type="button" disabled>Add selected</button><button id="remove-list-books" type="button" class="danger" hidden disabled>Remove selected from this list</button>
           <button id="delete-selected" type="button" class="danger" hidden disabled title="Review selected files before permanently deleting them and their catalog records for all users. No undo.">Delete selected permanently…</button>
         </div></details>
@@ -190,7 +190,7 @@
       <dl id="server-settings-running"></dl>
     </details>
     <form id="server-settings-form" class="form-stack">
-      <fieldset id="server-settings-controls" disabled><legend>Saved configuration</legend>
+      <fieldset id="server-settings-controls" disabled><legend class="sr-only">Saved configuration</legend>
         <fieldset id="settings-section-libraries" tabindex="-1"><legend>Libraries</legend>
           <label>Library roots — one absolute server path per line<textarea id="settings-libraries" rows="3" spellcheck="false" aria-describedby="settings-libraries-help"></textarea></label>
           <p id="settings-libraries-help" class="muted">Removing a root does not delete comicbooks or catalog entries. Access to those files may be lost after restart until the root is added again. Scan libraries after restarting to discover newly added files.</p>

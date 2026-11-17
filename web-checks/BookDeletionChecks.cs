@@ -233,7 +233,19 @@ internal static class BookDeletionChecks
             Sql("DROP TRIGGER fail_selected_delete");
             store.ScanAsync(default).GetAwaiter().GetResult();
             Check(store.GetBook("owner", ids[1]).Availability == "missing", "Failed catalog cleanup did not reconcile to missing.");
-            store.RemoveMissingBook(ids[1]);
+            var missingPath = Path.Combine(root, "removed-folder", "missing.cbz");
+            Sql("UPDATE books SET path=$path WHERE id=$id", ("$path", missingPath), ("$id", ids[1]));
+            var missingPreview = Preview(ids[1]);
+            Check(missingPreview.CanDelete, "Missing parent folder blocked catalog deletion.");
+            Directory.CreateDirectory(Path.GetDirectoryName(missingPath)!);
+            File.WriteAllBytes(missingPath, original);
+            Reject<FileOperationConflictException>(() => Apply(missingPreview));
+            Check(File.Exists(missingPath), "Stale missing preview deleted a restored file.");
+            Directory.Delete(Path.GetDirectoryName(missingPath)!, true);
+            missingPreview = Preview(ids[1]);
+            var missingResult = Apply(missingPreview);
+            Check(missingResult.DeletedIds.SequenceEqual([ids[1]]) && missingResult.Failures.Count == 0,
+                "Confirmed missing source was not removed from the catalog.");
             Check((long)Sql("SELECT COUNT(*) FROM books")! == 1 && (long)Sql("SELECT COUNT(*) FROM progress")! == 2,
                 "Missing-entry recovery removed unrelated state or retained failed deletion state.");
         }

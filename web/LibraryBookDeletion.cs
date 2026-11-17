@@ -61,6 +61,15 @@ public sealed partial class LibraryStore
                 source = FileDisplayPath(catalog.Path);
                 var state = DeletionCatalogState(db, transaction, catalog);
                 if (!OperatingSystem.IsLinux()) throw new NotSupportedException();
+                if (SourceAvailability(catalog.Path) == "missing")
+                {
+                    if (!Path.IsPathFullyQualified(catalog.Path) || Path.GetFullPath(catalog.Path) != catalog.Path
+                        || catalog.Path.Any(char.IsControl) || IsContained(stateDirectory, catalog.Path) || !IsArchive(catalog.Path))
+                        throw new UnauthorizedAccessException();
+                    plans[index] = new BookDeletePlan(catalog, state, "", "", null!, "", 0, 0, 0, 0, "");
+                    items[index] = new(catalog.Id, title, source, true, null);
+                    continue;
+                }
                 var root = FileOperationRootFor(catalog.Path);
                 if (!IsArchive(catalog.Path)) throw new UnauthorizedAccessException();
                 using var directory = OpenDeletionDirectory(catalog.Path);
@@ -188,6 +197,18 @@ public sealed partial class LibraryStore
                     if (ReadArchiveCatalog(db, transaction, plan.Catalog.Id) != plan.Catalog
                         || DeletionCatalogState(db, transaction, plan.Catalog) != plan.CatalogState)
                         throw new FileOperationConflictException("Catalog changed after preflight; this comicbook was not deleted.");
+                    if (plan.Root == "")
+                    {
+                        if (SourceAvailability(plan.Catalog.Path) != "missing")
+                            throw new FileOperationConflictException("Source is present or unavailable; preview deletion again.");
+                        using var removeMissing = Command(db, "DELETE FROM books WHERE id=$id", ("$id", plan.Catalog.Id));
+                        removeMissing.Transaction = transaction;
+                        if (removeMissing.ExecuteNonQuery() != 1 || SourceAvailability(plan.Catalog.Path) != "missing")
+                            throw new FileOperationConflictException("Source availability changed; the catalog entry was not removed.");
+                        transaction.Commit();
+                        deleted.Add(plan.Catalog.Id);
+                        continue;
+                    }
                     using var directory = OpenDeletionDirectory(plan.Catalog.Path);
                     using var file = OpenDeletionSource(directory, plan.Catalog.Path);
                     if (ArchiveHash(file, CancellationToken.None) != plan.Hash)
